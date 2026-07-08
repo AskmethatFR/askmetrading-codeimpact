@@ -32,7 +32,7 @@ hexagon → rien
 ### DDD Tactical
 
 - **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation
-- **Domain Services:** ProactiveAnalyzer (statique), ReactiveAnalyzer (dynamique)
+- **Domain Services:** ProactiveAnalyzer (statique), ReactiveAnalyzer (dynamique), EconomicImpactEstimator
 - **Pas d'Entity / Aggregate** dans le MVP (pas de persistence, pas de cycle de vie)
 
 ### Ports & Adapters
@@ -40,7 +40,7 @@ hexagon → rien
 | Port (hexagon) | Adapter P0 (secondaries) | Adapter futur |
 |---|---|---|
 | CodeReaderPort | FileSystemCodeReader | — |
-| ProfilerPort | *heuristiques* | ClrMdProfiler, V8Profiler, JvmtiProfiler |
+| ProfilerPort | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | CargoTestRunner | — |
 | ReportWriterPort | ConsoleReportWriter | JsonReportWriter |
 
@@ -55,6 +55,34 @@ hexagon → rien
 | VO | `{Noun}` | `CodeMetrics` |
 | Projet test | `{Context}.{Level}Test` | `hexagon.unit_test` |
 
+## Economic Impact Estimation
+
+`EconomicImpactEstimator` (domain service) derives CPU cost and memory from static complexity metrics. See [[economic-impact-estimator]] for full technical rationale.
+
+### Formulas (summary)
+
+| Measure | Formula | Unit |
+|---|---|---|
+| CPU cost | `direct × 0.5 + transitive × 0.3 + max_call_depth × 1.0 + warnings × 2.0` | μ$ |
+| Memory | `direct × 100 + hidden × 200 + loops × 1024` | bytes |
+| Total cost | `cpu_cost + memory_bytes × 0.0001` | μ$ |
+
+### Levels
+
+| Range (μ$) | Level |
+|---|---|
+| 0–10 | low |
+| 10.01–20 | moderate |
+| 20.01–40 | high |
+| 40.01+ | critical |
+
+### Key Design Decisions
+
+1. **Heuristics P0 → profiling P2** ([[ADR-0004]]). Real profiling deferred; heuristics are the first ProfilerPort adapter.
+2. **Coefficients are provisional.** Recalibrate when real profiler data exists (MAPE > 50% triggers update).
+3. **Memory scaled by 0.0001** in total cost. Memory is cheap relative to CPU; this factor bridges the magnitude gap.
+4. **Levels mirror complexity thresholds.** Same 0–10/11–20/21–40/41+ scheme as `CodeMetrics::complexity_level()` for user consistency.
+
 ## Module structure (actuelle)
 
 ```
@@ -64,11 +92,16 @@ codeimpact/
 │   └── src/
 │       ├── lib.rs
 │       ├── domain_model/
-│       │   ├── code_metrics.rs         # VO — complexité + niveau
+│       │   ├── code_metrics.rs         # VO — complexité + niveau + impact économique
 │       │   ├── analysis_target.rs      # VO — fichier/projet cible
 │       │   ├── analysis_rule.rs        # enum — règles d'analyse
-│       │   ├── proactive_analyzer.rs   # domain service — calcul complexité
+│       │   ├── proactive_analyzer.rs   # domain service — calcul complexité + impact éco
 │       │   └── errors.rs               # AnalysisError
+│       ├── analysis/
+│       │   ├── economic_impact.rs      # EconomicImpact VO + EconomicImpactEstimator
+│       │   ├── call_graph.rs           # CallGraph + analyse transitive
+│       │   ├── code_parser.rs          # ParsedFunction, analyse AST
+│       │   └── complexity_detector.rs  # ComplexityWarning, patterns
 │       ├── gateways-secondary_ports/
 │       │   ├── code_reader_port.rs     # trait
 │       │   └── report_writer_port.rs   # trait
@@ -88,7 +121,7 @@ codeimpact/
 │   └── src/main.rs                     # clap CLI
 └── tests/
     ├── fixtures/sample.rs
-    ├── hexagon.unit_test/              # 26 tests (VOs, analyzer, use case)
+    ├── hexagon.unit_test/              # 26 tests (VOs, analyzer, use case, economic impact)
     ├── secondaries.integration_test/   # 4 tests (reader, writer)
     └── primaries.e2e_test/             # 3 tests (CLI)
 ```
@@ -103,7 +136,9 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 |---|---|
 | AnalysisTarget | Fichier ou projet soumis à l'analyse |
 | CodeMetrics | Mesures extraites du code source (complexité, patterns I/O, etc.) |
-| EconomicImpact | Coût CPU/mem/network estimé |
+| EconomicImpact | Coût CPU/mem estimé (μ$, bytes) |
+| MicroDollars | Unité de coût CPU: 1 μ$ = 10⁻⁶ $. Base: ~0.10 $/CPU-heure cloud |
+| EconomicImpactEstimator | Domain service qui calcule EconomicImpact à partir de métriques statiques |
 | EcologicalImpact | CO2/énergie dérivé de l'impact économique |
 | StressTestRun | Exécution d'un test existant avec instrumentation |
 | ProactiveAnalysis | Analyse statique (linter) |
@@ -114,7 +149,7 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | ID | Priorité | Titre | Statut |
 |---|---|---|---|
 | US1 | P0 | Analyse complexité cyclomatique | ✅ Livré |
-| US2 | P0 | Estimation impact économique (CPU/mem) | 📋 En attente |
+| US2 | P0 | Estimation impact économique (CPU/mem) | ✅ Livré |
 | US3 | P0 | Estimation impact écologique (CO2) | 📋 En attente |
 | US4 | P0 | Rapport JSON | 📋 En attente |
 | US5 | P1 | Détection I/O dans boucles | 📋 En attente |
