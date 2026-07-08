@@ -1,5 +1,7 @@
 use codeimpact_hexagon::analysis::CodeMetrics;
+use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
+use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 
@@ -41,6 +43,30 @@ fn write_console_with_memory_mb() {
     let writer = ConsoleReportWriter::new();
     let impact = EconomicImpact::new(50.0, 2_000_000, 50.2, "high");
     let metrics = CodeMetrics::new(30).with_economic_impact(impact);
+    let result = writer.write_console(&metrics);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn write_console_with_ecological_impact() {
+    let writer = ConsoleReportWriter::new();
+    let economic = EconomicImpact::new(6000.0, 0, 6000.0, "low");
+    let ecological = EcologicalImpact::new(2.4, 21600.0, EfficiencyClass::B);
+    let metrics = CodeMetrics::new(27)
+        .with_economic_impact(economic)
+        .with_ecological_impact(ecological);
+    let result = writer.write_console(&metrics);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn write_console_ecological_zero_co2() {
+    let writer = ConsoleReportWriter::new();
+    let economic = EconomicImpact::new(0.0, 0, 0.0, "low");
+    let ecological = EcologicalImpact::new(0.0, 0.0, EfficiencyClass::A);
+    let metrics = CodeMetrics::new(1)
+        .with_economic_impact(economic)
+        .with_ecological_impact(ecological);
     let result = writer.write_console(&metrics);
     assert!(result.is_ok());
 }

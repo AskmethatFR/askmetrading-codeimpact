@@ -262,3 +262,20 @@ fn economic_impact_near_zero_for_trivial_code() {
         "trivial code should have near-zero cost"
     );
 }
+
+#[test]
+fn analysis_includes_ecological_impact() {
+    let parser = make_parser(3);
+    let metrics = proactive_analyzer::analyze(
+        "fn test() { if x > 0 { } else if y > 0 { } }",
+        &[AnalysisRule::CyclomaticComplexity],
+        &parser,
+    )
+    .expect("analysis should succeed");
+    let impact = metrics.ecological_impact();
+    assert!(impact.is_some(), "ecological impact should be computed");
+    let impact = impact.unwrap();
+    assert!(impact.co2_grams() > 0.0);
+    assert!(impact.energy_joules() > 0.0);
+    assert_eq!(impact.efficiency_class().label(), "A");
+}
