@@ -40,6 +40,19 @@ impl ReportWriter for ConsoleReportWriter {
             println!("Niveau: {}", economic.level());
         }
 
+        if let Some(ecological) = metrics.ecological_impact() {
+            println!();
+            println!("=== Impact écologique estimé ===");
+            println!("CO₂: {:.1} g", ecological.co2_grams());
+            let energy_joules = ecological.energy_joules();
+            if energy_joules >= 1000.0 {
+                println!("Énergie: {:.1} kJ", energy_joules / 1000.0);
+            } else {
+                println!("Énergie: {:.1} J", energy_joules);
+            }
+            println!("Classe: {}", ecological.efficiency_class().label());
+        }
+
         let warnings = metrics.warnings();
         if !warnings.is_empty() {
             println!();
