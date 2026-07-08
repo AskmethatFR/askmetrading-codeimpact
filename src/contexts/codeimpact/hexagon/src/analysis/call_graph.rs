@@ -247,6 +247,7 @@ mod tests {
             has_nested_loop: false,
             decision_points: 5,
             depth: 0,
+            match_arms: 0,
         }];
         let graph = CallGraph::build(&fns);
         assert_eq!(graph.direct_of("foo"), 5);
@@ -263,6 +264,7 @@ mod tests {
                 has_nested_loop: false,
                 decision_points: 1,
                 depth: 0,
+                match_arms: 0,
             },
             ParsedFunction {
                 name: "a".into(),
@@ -272,6 +274,7 @@ mod tests {
                 has_nested_loop: false,
                 decision_points: 1,
                 depth: 0,
+                match_arms: 0,
             },
         ];
         let graph = CallGraph::build(&fns);

@@ -1,3 +1,5 @@
+use super::complexity_detector::ComplexityWarning;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDetail {
     pub name: String,
@@ -14,6 +16,7 @@ pub struct CodeMetrics {
     max_call_depth: usize,
     functions_with_cycles: Vec<String>,
     function_details: Vec<FunctionDetail>,
+    warnings: Vec<ComplexityWarning>,
 }
 
 impl CodeMetrics {
@@ -24,6 +27,7 @@ impl CodeMetrics {
             max_call_depth: 0,
             functions_with_cycles: Vec::new(),
             function_details: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -40,6 +44,7 @@ impl CodeMetrics {
             max_call_depth,
             functions_with_cycles,
             function_details,
+            warnings: Vec::new(),
         }
     }
 
@@ -76,5 +81,14 @@ impl CodeMetrics {
             21..=40 => "high",
             _ => "critical",
         }
+    }
+
+    pub fn warnings(&self) -> &[ComplexityWarning] {
+        &self.warnings
+    }
+
+    pub fn with_warnings(mut self, warnings: Vec<ComplexityWarning>) -> Self {
+        self.warnings = warnings;
+        self
     }
 }

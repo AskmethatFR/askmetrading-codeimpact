@@ -12,6 +12,7 @@ fn make_parser(decision_points: u32) -> CodeParserStub {
         has_nested_loop: false,
         decision_points,
         depth: 0,
+        match_arms: 0,
     }])
 }
 
@@ -27,6 +28,7 @@ fn make_multi_parser(points: &[u32]) -> CodeParserStub {
             has_nested_loop: false,
             decision_points: dp,
             depth: 0,
+            match_arms: 0,
         })
         .collect();
     CodeParserStub::with_functions(functions)

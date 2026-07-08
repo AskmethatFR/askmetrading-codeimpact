@@ -9,6 +9,7 @@ pub struct ParsedFunction {
     pub has_nested_loop: bool,
     pub decision_points: u32,
     pub depth: u32,
+    pub match_arms: u32,
 }
 
 pub trait CodeParser: Send + Sync {
