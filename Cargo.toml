@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "codeimpact/hexagon",
+    "codeimpact/secondaries",
+    "codeimpact/primaries",
+    "codeimpact/tests/hexagon.unit_test",
+    "codeimpact/tests/secondaries.integration_test",
+    "codeimpact/tests/primaries.e2e_test",
+]
