@@ -1,0 +1,12 @@
+[package]
+name = "codeimpact_hexagon_unit_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codeimpact_hexagon = { path = "../../hexagon" }
+codeimpact_secondaries = { path = "../../secondaries" }
+
+[lib]
+test = false
+doctest = false
