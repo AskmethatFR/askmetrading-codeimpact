@@ -26,6 +26,20 @@ impl ReportWriter for ConsoleReportWriter {
         println!("Fonctions avec cycle: {}", cycle_count);
         println!("Niveau: {}", metrics.complexity_level());
 
+        if let Some(economic) = metrics.economic_impact() {
+            println!();
+            println!("=== Impact économique estimé ===");
+            println!("Coût CPU: {:.1} μ$", economic.cpu_cost_microdollars());
+            let memory_kb = economic.memory_bytes() as f64 / 1024.0;
+            if memory_kb >= 1024.0 {
+                println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
+            } else {
+                println!("Mémoire: {:.1} KB", memory_kb);
+            }
+            println!("Coût total: {:.1} μ$", economic.total_cost_microdollars());
+            println!("Niveau: {}", economic.level());
+        }
+
         let warnings = metrics.warnings();
         if !warnings.is_empty() {
             println!();
