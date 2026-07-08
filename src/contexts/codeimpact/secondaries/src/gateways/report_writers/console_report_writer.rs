@@ -14,7 +14,15 @@ impl ConsoleReportWriter {
 impl ReportWriter for ConsoleReportWriter {
     fn write_console(&self, metrics: &CodeMetrics) -> Result<(), AnalysisError> {
         println!("=== Rapport d'analyse ===");
-        println!("Complexité: {}", metrics.cyclomatic_complexity());
+        println!("Complexité directe: {}", metrics.cyclomatic_complexity());
+        println!(
+            "Complexité transitive: {} (dont {} cachée dans les appels)",
+            metrics.transitive_complexity(),
+            metrics.hidden_complexity(),
+        );
+        println!("Profondeur d'appels max: {}", metrics.max_call_depth());
+        let cycle_count = metrics.functions_with_cycles().len();
+        println!("Fonctions avec cycle: {}", cycle_count);
         println!("Niveau: {}", metrics.complexity_level());
         println!("========================");
         Ok(())

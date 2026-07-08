@@ -1,5 +1,6 @@
 mod analysis_rule;
 mod analysis_target;
+pub mod call_graph;
 mod code_metrics;
 pub mod code_parser;
 mod code_reader;
@@ -10,7 +11,8 @@ mod run_analysis;
 
 pub use analysis_rule::AnalysisRule;
 pub use analysis_target::{AnalysisTarget, TargetType};
-pub use code_metrics::CodeMetrics;
+pub use call_graph::CallGraph;
+pub use code_metrics::{CodeMetrics, FunctionDetail};
 pub use code_parser::{CodeParser, ParsedFunction};
 pub use code_reader::CodeReader;
 pub use errors::AnalysisError;
