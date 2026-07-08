@@ -1,0 +1,10 @@
+[package]
+name = "codeimpact_secondaries"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codeimpact_hexagon = { path = "../hexagon" }
+
+[dev-dependencies]
+tempfile = "3"

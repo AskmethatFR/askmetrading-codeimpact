@@ -1,0 +1,13 @@
+[package]
+name = "codeimpact_primaries"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "codeimpact"
+path = "src/main.rs"
+
+[dependencies]
+codeimpact_hexagon = { path = "../hexagon" }
+codeimpact_secondaries = { path = "../secondaries" }
+clap = { version = "4", features = ["derive"] }
