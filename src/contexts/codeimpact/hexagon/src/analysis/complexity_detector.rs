@@ -72,9 +72,7 @@ impl ComplexityDetector {
         warnings
     }
 
-    fn detect_quadratic_loops(
-        functions: &[ParsedFunction],
-    ) -> Vec<ComplexityWarning> {
+    fn detect_quadratic_loops(functions: &[ParsedFunction]) -> Vec<ComplexityWarning> {
         let loop_fns: std::collections::HashSet<&str> = functions
             .iter()
             .filter(|f| f.has_loop)
