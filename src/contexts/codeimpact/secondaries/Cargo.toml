@@ -5,6 +5,11 @@ edition = "2021"
 
 [dependencies]
 codeimpact_hexagon = { path = "../hexagon" }
+syn = { version = "2", features = ["full"], optional = true }
+
+[features]
+default = ["syn-parser"]
+syn-parser = ["syn"]
 
 [dev-dependencies]
 tempfile = "3"
