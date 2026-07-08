@@ -230,3 +230,35 @@ fn complex(x: i32) {
             .expect("analysis should succeed");
     assert_eq!(metrics.cyclomatic_complexity(), 8);
 }
+
+#[test]
+fn analysis_includes_economic_impact() {
+    let parser = make_parser(3);
+    let metrics = proactive_analyzer::analyze(
+        "fn test() { if x > 0 { } else if y > 0 { } }",
+        &[AnalysisRule::CyclomaticComplexity],
+        &parser,
+    )
+    .expect("analysis should succeed");
+    let impact = metrics.economic_impact();
+    assert!(impact.is_some(), "economic impact should be computed");
+    let impact = impact.unwrap();
+    assert!(impact.cpu_cost_microdollars() > 0.0);
+    assert!(impact.memory_bytes() > 0);
+    assert!(impact.total_cost_microdollars() > 0.0);
+    assert_eq!(impact.level(), "low");
+}
+
+#[test]
+fn economic_impact_near_zero_for_trivial_code() {
+    let parser = CodeParserStub::with_functions(vec![]);
+    let metrics = proactive_analyzer::analyze("", &[AnalysisRule::CyclomaticComplexity], &parser)
+        .expect("analysis should succeed");
+    let impact = metrics.economic_impact();
+    assert!(impact.is_some(), "economic impact should be computed");
+    let impact = impact.unwrap();
+    assert!(
+        impact.total_cost_microdollars() < 1.0,
+        "trivial code should have near-zero cost"
+    );
+}
