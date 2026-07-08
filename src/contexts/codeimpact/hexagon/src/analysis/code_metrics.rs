@@ -1,4 +1,5 @@
 use super::complexity_detector::ComplexityWarning;
+use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +20,7 @@ pub struct CodeMetrics {
     function_details: Vec<FunctionDetail>,
     warnings: Vec<ComplexityWarning>,
     economic_impact: Option<EconomicImpact>,
+    ecological_impact: Option<EcologicalImpact>,
 }
 
 impl CodeMetrics {
@@ -31,6 +33,7 @@ impl CodeMetrics {
             function_details: Vec::new(),
             warnings: Vec::new(),
             economic_impact: None,
+            ecological_impact: None,
         }
     }
 
@@ -49,6 +52,7 @@ impl CodeMetrics {
             function_details,
             warnings: Vec::new(),
             economic_impact: None,
+            ecological_impact: None,
         }
     }
 
@@ -102,6 +106,15 @@ impl CodeMetrics {
 
     pub fn with_economic_impact(mut self, impact: EconomicImpact) -> Self {
         self.economic_impact = Some(impact);
+        self
+    }
+
+    pub fn ecological_impact(&self) -> Option<&EcologicalImpact> {
+        self.ecological_impact.as_ref()
+    }
+
+    pub fn with_ecological_impact(mut self, impact: EcologicalImpact) -> Self {
+        self.ecological_impact = Some(impact);
         self
     }
 }

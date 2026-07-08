@@ -3,6 +3,7 @@ use super::call_graph::CallGraph;
 use super::code_metrics::{CodeMetrics, FunctionDetail};
 use super::code_parser::CodeParser;
 use super::complexity_detector::{ComplexityDetector, DetectionConfig};
+use super::ecological_impact::EcologicalImpactEstimator;
 use super::economic_impact::EconomicImpactEstimator;
 use super::errors::AnalysisError;
 
@@ -59,6 +60,14 @@ pub fn analyze(
 
     let economic = EconomicImpactEstimator::estimate(&metrics, &functions, &call_graph);
     metrics = metrics.with_economic_impact(economic);
+
+    if let Some(economic) = metrics.economic_impact() {
+        let ecological = EcologicalImpactEstimator::estimate(
+            economic,
+            EcologicalImpactEstimator::DEFAULT_CO2_G_PER_KWH,
+        );
+        metrics = metrics.with_ecological_impact(ecological);
+    }
 
     Ok(metrics)
 }

@@ -49,16 +49,33 @@ impl EconomicImpact {
 /// Domain service that estimates economic impact from complexity metrics.
 ///
 /// Heuristics:
-/// - CPU cost: (direct_complexity × 0.5 + transitive_complexity × 0.3
-///   + max_call_depth × 1.0 + warnings × 2.0) μ$
-/// - Memory: (direct_complexity × 100 + hidden_complexity × 200
-///   + functions_with_loops × 1024) bytes
-/// - Total: cpu_cost + memory_bytes × 0.0001 (memory is cheap)
+/// - CPU cost: (direct_complexity × CPU_COST_DIRECT_WEIGHT + transitive_complexity × CPU_COST_TRANSITIVE_WEIGHT
+///   + max_call_depth × CPU_COST_DEPTH_WEIGHT + warnings × CPU_COST_WARNING_WEIGHT) μ$
+/// - Memory: (direct_complexity × MEMORY_DIRECT_COST + hidden_complexity × MEMORY_HIDDEN_COST
+///   + functions_with_loops × MEMORY_LOOP_COST) bytes
+/// - Total: cpu_cost + memory_bytes × MEMORY_TO_TOTAL_RATIO (memory is cheap)
 /// - Level: same thresholds as complexity (0–10=low, 11–20=moderate,
 ///   21–40=high, 41+=critical)
 pub struct EconomicImpactEstimator;
 
 impl EconomicImpactEstimator {
+    /// Weight per unit of direct complexity for CPU cost (μ$).
+    pub const CPU_COST_DIRECT_WEIGHT: f64 = 0.5;
+    /// Weight per unit of transitive complexity for CPU cost (μ$).
+    pub const CPU_COST_TRANSITIVE_WEIGHT: f64 = 0.3;
+    /// Weight per level of call depth for CPU cost (μ$).
+    pub const CPU_COST_DEPTH_WEIGHT: f64 = 1.0;
+    /// Weight per warning for CPU cost (μ$).
+    pub const CPU_COST_WARNING_WEIGHT: f64 = 2.0;
+    /// Bytes per unit of direct complexity.
+    pub const MEMORY_DIRECT_COST: u64 = 100;
+    /// Bytes per unit of hidden (transitive - direct) complexity.
+    pub const MEMORY_HIDDEN_COST: u64 = 200;
+    /// Additional bytes per function containing a loop.
+    pub const MEMORY_LOOP_COST: u64 = 1024;
+    /// Ratio of memory cost to include in total cost (μ$ per byte).
+    pub const MEMORY_TO_TOTAL_RATIO: f64 = 0.0001;
+
     pub fn estimate(
         metrics: &CodeMetrics,
         functions: &[ParsedFunction],
@@ -69,15 +86,19 @@ impl EconomicImpactEstimator {
         let max_depth = metrics.max_call_depth() as f64;
         let warnings_count = metrics.warnings().len() as f64;
 
-        let cpu_cost = direct * 0.5 + transitive * 0.3 + max_depth * 1.0 + warnings_count * 2.0;
+        let cpu_cost = direct * Self::CPU_COST_DIRECT_WEIGHT
+            + transitive * Self::CPU_COST_TRANSITIVE_WEIGHT
+            + max_depth * Self::CPU_COST_DEPTH_WEIGHT
+            + warnings_count * Self::CPU_COST_WARNING_WEIGHT;
 
         let hidden = metrics.hidden_complexity() as u64;
         let loops_count = functions.iter().filter(|f| f.has_loop).count() as u64;
 
-        let memory =
-            (metrics.cyclomatic_complexity() as u64) * 100 + hidden * 200 + loops_count * 1024;
+        let memory = (metrics.cyclomatic_complexity() as u64) * Self::MEMORY_DIRECT_COST
+            + hidden * Self::MEMORY_HIDDEN_COST
+            + loops_count * Self::MEMORY_LOOP_COST;
 
-        let total = cpu_cost + memory as f64 * 0.0001;
+        let total = cpu_cost + memory as f64 * Self::MEMORY_TO_TOTAL_RATIO;
 
         let level = Self::compute_level(total);
 
