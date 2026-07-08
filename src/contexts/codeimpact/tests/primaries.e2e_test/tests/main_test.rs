@@ -50,7 +50,7 @@ fn e2e_analyze_valid_file_exits_0() {
         stdout
     );
     assert!(
-        stdout.contains("Complexité"),
+        stdout.contains("Complexité directe"),
         "missing complexity: {}",
         stdout
     );
@@ -97,7 +97,7 @@ fn e2e_analyze_empty_file_returns_complexity_1() {
 
     assert!(output.status.success(), "exit 0 expected");
     assert!(
-        stdout.contains("Complexité: 1"),
+        stdout.contains("Complexité directe: 1"),
         "expected complexity 1: {}",
         stdout
     );
