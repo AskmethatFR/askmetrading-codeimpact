@@ -35,3 +35,12 @@ fn write_console_with_economic_impact() {
     let result = writer.write_console(&metrics);
     assert!(result.is_ok());
 }
+
+#[test]
+fn write_console_with_memory_mb() {
+    let writer = ConsoleReportWriter::new();
+    let impact = EconomicImpact::new(50.0, 2_000_000, 50.2, "high");
+    let metrics = CodeMetrics::new(30).with_economic_impact(impact);
+    let result = writer.write_console(&metrics);
+    assert!(result.is_ok());
+}
