@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "hexagon",
+    "secondaries",
+    "primaries",
+    "tests/hexagon.unit_test",
+    "tests/secondaries.integration_test",
+    "tests/primaries.e2e_test",
+]

@@ -1,0 +1,7 @@
+[package]
+name = "codeimpact-hexagon"
+version = "0.1.0"
+edition = "2021"
+
+# Hexagon: zero external dependencies. Only std.
+[dependencies]
