@@ -30,6 +30,7 @@ fn analyze_valid_file_writes_metrics() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
+        match_arms: 0,
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
