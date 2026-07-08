@@ -1,6 +1,7 @@
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::WarningSeverity;
 
 #[derive(Default)]
 pub struct ConsoleReportWriter;
@@ -24,7 +25,22 @@ impl ReportWriter for ConsoleReportWriter {
         let cycle_count = metrics.functions_with_cycles().len();
         println!("Fonctions avec cycle: {}", cycle_count);
         println!("Niveau: {}", metrics.complexity_level());
-        println!("========================");
+
+        let warnings = metrics.warnings();
+        if !warnings.is_empty() {
+            println!();
+            println!("=== Avertissements ===");
+            for w in warnings {
+                let label = match w.severity {
+                    WarningSeverity::Warning => "WARNING",
+                    WarningSeverity::Critical => "CRITICAL",
+                };
+                println!("[{}] {} → {}", label, w.function, w.message);
+            }
+            println!("========================");
+        } else {
+            println!("========================");
+        }
         Ok(())
     }
 }

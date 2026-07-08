@@ -31,6 +31,7 @@ impl CodeParser for SynCodeParser {
                     has_nested_loop: visitor.has_nested_loop,
                     decision_points: visitor.decision_points,
                     depth: visitor.max_depth,
+                    match_arms: visitor.match_arms,
                 });
             }
         }
@@ -48,6 +49,7 @@ struct FunctionVisitor {
     max_depth: u32,
     current_depth: u32,
     loop_depth: u32,
+    match_arms: u32,
 }
 
 impl FunctionVisitor {
@@ -153,6 +155,7 @@ impl FunctionVisitor {
             }
             syn::Expr::Match(expr_match) => {
                 let arm_count = expr_match.arms.len() as u32;
+                self.match_arms = self.match_arms.max(arm_count);
                 if arm_count > 0 {
                     self.decision_points += arm_count;
                 }
