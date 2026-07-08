@@ -5,6 +5,7 @@ pub mod code_metrics;
 pub mod code_parser;
 mod code_reader;
 pub mod complexity_detector;
+pub mod economic_impact;
 mod errors;
 pub mod proactive_analyzer;
 mod report_writer;
@@ -19,6 +20,7 @@ pub use code_reader::CodeReader;
 pub use complexity_detector::{
     ComplexityDetector, ComplexityWarning, DetectionConfig, WarningPattern, WarningSeverity,
 };
+pub use economic_impact::{EconomicImpact, EconomicImpactEstimator};
 pub use errors::AnalysisError;
 pub use proactive_analyzer::analyze;
 pub use report_writer::ReportWriter;

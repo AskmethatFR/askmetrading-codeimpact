@@ -1,4 +1,5 @@
 use super::complexity_detector::ComplexityWarning;
+use super::economic_impact::EconomicImpact;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDetail {
@@ -17,6 +18,7 @@ pub struct CodeMetrics {
     functions_with_cycles: Vec<String>,
     function_details: Vec<FunctionDetail>,
     warnings: Vec<ComplexityWarning>,
+    economic_impact: Option<EconomicImpact>,
 }
 
 impl CodeMetrics {
@@ -28,6 +30,7 @@ impl CodeMetrics {
             functions_with_cycles: Vec::new(),
             function_details: Vec::new(),
             warnings: Vec::new(),
+            economic_impact: None,
         }
     }
 
@@ -45,6 +48,7 @@ impl CodeMetrics {
             functions_with_cycles,
             function_details,
             warnings: Vec::new(),
+            economic_impact: None,
         }
     }
 
@@ -89,6 +93,15 @@ impl CodeMetrics {
 
     pub fn with_warnings(mut self, warnings: Vec<ComplexityWarning>) -> Self {
         self.warnings = warnings;
+        self
+    }
+
+    pub fn economic_impact(&self) -> Option<&EconomicImpact> {
+        self.economic_impact.as_ref()
+    }
+
+    pub fn with_economic_impact(mut self, impact: EconomicImpact) -> Self {
+        self.economic_impact = Some(impact);
         self
     }
 }

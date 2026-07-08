@@ -3,6 +3,7 @@ use super::call_graph::CallGraph;
 use super::code_metrics::{CodeMetrics, FunctionDetail};
 use super::code_parser::CodeParser;
 use super::complexity_detector::{ComplexityDetector, DetectionConfig};
+use super::economic_impact::EconomicImpactEstimator;
 use super::errors::AnalysisError;
 
 pub fn analyze(
@@ -47,12 +48,17 @@ pub fn analyze(
     let config = DetectionConfig::default();
     let warnings = ComplexityDetector::detect(&functions, &call_graph, &config);
 
-    Ok(CodeMetrics::with_call_graph(
+    let mut metrics = CodeMetrics::with_call_graph(
         complexity,
         transitive_complexity,
         max_call_depth,
         functions_with_cycles,
         function_details,
     )
-    .with_warnings(warnings))
+    .with_warnings(warnings);
+
+    let economic = EconomicImpactEstimator::estimate(&metrics, &functions, &call_graph);
+    metrics = metrics.with_economic_impact(economic);
+
+    Ok(metrics)
 }
