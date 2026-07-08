@@ -84,20 +84,24 @@ impl EcologicalImpact {
 /// Domain service that estimates ecological impact from economic impact.
 ///
 /// Heuristics:
-/// - kWh ≈ cpu_cost_microdollars × 0.000001 (1 μ$ ≈ 0.000001 kWh)
+/// - kWh ≈ cpu_cost_microdollars × MICRODOLLARS_TO_KWH (1 μ$ ≈ 0.000001 kWh)
 /// - CO2 = kWh × co2_g_per_kwh
-/// - Energy = kWh × 3_600_000 (1 kWh = 3.6 MJ)
+/// - Energy = kWh × KWH_TO_JOULES (1 kWh = 3.6 MJ)
 /// - Efficiency class from CO2 grams
 pub struct EcologicalImpactEstimator;
 
 impl EcologicalImpactEstimator {
+    /// 1 μ$ ≈ 0.000001 kWh (rough data-center CPU cost heuristic).
+    pub const MICRODOLLARS_TO_KWH: f64 = 0.000001;
+    /// 1 kWh = 3.6 MJ = 3 600 000 J.
+    pub const KWH_TO_JOULES: f64 = 3_600_000.0;
     /// Default CO2 factor: 400 gCO2/kWh (EU average).
     pub const DEFAULT_CO2_G_PER_KWH: f64 = 400.0;
 
     pub fn estimate(economic: &EconomicImpact, co2_g_per_kwh: f64) -> EcologicalImpact {
-        let kwh = economic.cpu_cost_microdollars() * 0.000001;
+        let kwh = economic.cpu_cost_microdollars() * Self::MICRODOLLARS_TO_KWH;
         let co2_grams = kwh * co2_g_per_kwh;
-        let energy_joules = kwh * 3_600_000.0;
+        let energy_joules = kwh * Self::KWH_TO_JOULES;
         let efficiency_class = EfficiencyClass::from_co2(co2_grams);
 
         EcologicalImpact::new(co2_grams, energy_joules, efficiency_class)
