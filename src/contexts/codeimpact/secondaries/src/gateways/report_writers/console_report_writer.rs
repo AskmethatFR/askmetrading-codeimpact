@@ -7,6 +7,19 @@ use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
+const MICRODOLLARS_TO_DOLLARS: f64 = 1_000_000.0;
+
+fn format_dollars(microdollars: f64) -> String {
+    let dollars = microdollars / MICRODOLLARS_TO_DOLLARS;
+    if dollars < 0.0001 {
+        format!("${:.6}", dollars)
+    } else if dollars < 1.0 {
+        format!("${:.4}", dollars)
+    } else {
+        format!("${:.2}", dollars)
+    }
+}
+
 #[derive(Default)]
 pub struct ConsoleReportWriter;
 
@@ -33,14 +46,14 @@ impl ReportWriter for ConsoleReportWriter {
         if let Some(economic) = metrics.economic_impact() {
             println!();
             println!("=== Impact économique estimé ===");
-            println!("Coût CPU: {:.1} μ$", economic.cpu_cost_microdollars());
+            println!("Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars()));
             let memory_kb = economic.memory_bytes() as f64 / 1024.0;
             if memory_kb >= 1024.0 {
                 println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
             } else {
                 println!("Mémoire: {:.1} KB", memory_kb);
             }
-            println!("Coût total: {:.1} μ$", economic.total_cost_microdollars());
+            println!("Coût total: {}", format_dollars(economic.total_cost_microdollars()));
             println!("Niveau: {}", economic.level());
         }
 
@@ -141,14 +154,14 @@ impl ReportWriter for ConsoleReportWriter {
         if let Some(economic) = &aggregated.total_economic_impact {
             println!();
             println!("=== Impact économique total ===");
-            println!("Coût CPU: {:.1} μ$", economic.cpu_cost_microdollars());
+            println!("Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars()));
             let memory_kb = economic.memory_bytes() as f64 / 1024.0;
             if memory_kb >= 1024.0 {
                 println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
             } else {
                 println!("Mémoire: {:.1} KB", memory_kb);
             }
-            println!("Coût total: {:.1} μ$", economic.total_cost_microdollars());
+            println!("Coût total: {}", format_dollars(economic.total_cost_microdollars()));
             println!("Niveau: {}", economic.level());
         }
 
