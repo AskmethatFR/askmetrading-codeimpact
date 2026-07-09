@@ -2,8 +2,11 @@ use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::EfficiencyClass;
+use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::FileDependency;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
+use std::path::PathBuf;
 
 #[test]
 fn write_console_does_not_panic() {
@@ -68,5 +71,51 @@ fn write_console_ecological_zero_co2() {
         .with_economic_impact(economic)
         .with_ecological_impact(ecological);
     let result = writer.write_console(&metrics);
+    assert!(result.is_ok());
+}
+
+fn path(s: &str) -> PathBuf {
+    PathBuf::from(s)
+}
+
+#[test]
+fn write_project_report_with_impacts() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (
+            path("a.rs"),
+            CodeMetrics::new(5)
+                .with_economic_impact(EconomicImpact::new(10.0, 100, 10.5, "low"))
+                .with_ecological_impact(EcologicalImpact::new(1.0, 9000.0, EfficiencyClass::B)),
+        ),
+        (
+            path("b.rs"),
+            CodeMetrics::new(3)
+                .with_economic_impact(EconomicImpact::new(20.0, 200, 21.0, "high"))
+                .with_ecological_impact(EcologicalImpact::new(2.0, 18000.0, EfficiencyClass::D)),
+        ),
+    ];
+    let deps = vec![FileDependency {
+        from: path("a.rs"),
+        to: path("b.rs"),
+    }];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let result = writer.write_project_report(&graph);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn write_project_report_without_impacts() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.rs"), CodeMetrics::new(5)),
+        (path("b.rs"), CodeMetrics::new(3)),
+    ];
+    let deps = vec![FileDependency {
+        from: path("a.rs"),
+        to: path("b.rs"),
+    }];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let result = writer.write_project_report(&graph);
     assert!(result.is_ok());
 }

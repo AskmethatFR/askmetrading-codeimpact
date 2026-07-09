@@ -8,6 +8,7 @@ pub mod complexity_detector;
 pub mod ecological_impact;
 pub mod economic_impact;
 mod errors;
+pub mod file_consumption_graph;
 pub mod proactive_analyzer;
 mod report_writer;
 mod run_analysis;
@@ -24,6 +25,9 @@ pub use complexity_detector::{
 pub use ecological_impact::{EcologicalImpact, EcologicalImpactEstimator, EfficiencyClass};
 pub use economic_impact::{EconomicImpact, EconomicImpactEstimator};
 pub use errors::AnalysisError;
+pub use file_consumption_graph::{
+    resolve_file_dependency, FileConsumptionGraph, FileDependency, ProjectMetrics,
+};
 pub use proactive_analyzer::analyze;
 pub use report_writer::ReportWriter;
 pub use run_analysis::RunAnalysis;

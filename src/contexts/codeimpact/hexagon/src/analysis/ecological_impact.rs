@@ -81,6 +81,16 @@ impl EcologicalImpact {
     }
 }
 
+impl std::ops::Add for EcologicalImpact {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        let co2 = self.co2_grams + other.co2_grams;
+        let energy = self.energy_joules + other.energy_joules;
+        Self::new(co2, energy, EfficiencyClass::from_co2(co2))
+    }
+}
+
 /// Domain service that estimates ecological impact from economic impact.
 ///
 /// Heuristics:

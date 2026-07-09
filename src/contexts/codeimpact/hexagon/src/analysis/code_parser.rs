@@ -14,4 +14,16 @@ pub struct ParsedFunction {
 
 pub trait CodeParser: Send + Sync {
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError>;
+
+    /// Parse raw file dependencies (mod/use declarations) from source code.
+    ///
+    /// Returns strings in format:
+    /// - `"mod:<name>"` for `mod foo;` declarations
+    /// - `"use:<path>"` for `use foo::bar;` declarations
+    ///
+    /// External crates (`std::`, `core::`, `alloc::`) are filtered out.
+    fn parse_file_dependencies(
+        &self,
+        source: &str,
+    ) -> Result<Vec<String>, AnalysisError>;
 }

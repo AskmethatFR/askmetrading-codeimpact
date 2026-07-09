@@ -46,6 +46,32 @@ impl EconomicImpact {
     }
 }
 
+/// Compute the level string from a total cost value.
+///
+/// Thresholds: 0–10 = low, 11–20 = moderate, 21–40 = high, 41+ = critical.
+pub(crate) fn compute_level(total_cost: f64) -> &'static str {
+    if total_cost <= 10.0 {
+        "low"
+    } else if total_cost <= 20.0 {
+        "moderate"
+    } else if total_cost <= 40.0 {
+        "high"
+    } else {
+        "critical"
+    }
+}
+
+impl std::ops::Add for EconomicImpact {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        let cpu = self.cpu_cost_microdollars + other.cpu_cost_microdollars;
+        let mem = self.memory_bytes + other.memory_bytes;
+        let total = self.total_cost_microdollars + other.total_cost_microdollars;
+        Self::new(cpu, mem, total, compute_level(total))
+    }
+}
+
 /// Domain service that estimates economic impact from complexity metrics.
 ///
 /// Heuristics:
@@ -100,21 +126,9 @@ impl EconomicImpactEstimator {
 
         let total = cpu_cost + memory as f64 * Self::MEMORY_TO_TOTAL_RATIO;
 
-        let level = Self::compute_level(total);
+        let level = compute_level(total);
 
         EconomicImpact::new(cpu_cost, memory, total, level)
-    }
-
-    fn compute_level(total_cost: f64) -> &'static str {
-        if total_cost <= 10.0 {
-            "low"
-        } else if total_cost <= 20.0 {
-            "moderate"
-        } else if total_cost <= 40.0 {
-            "high"
-        } else {
-            "critical"
-        }
     }
 }
 
@@ -209,30 +223,30 @@ mod tests {
 
     #[test]
     fn estimate_level_low() {
-        assert_eq!(EconomicImpactEstimator::compute_level(0.0), "low");
-        assert_eq!(EconomicImpactEstimator::compute_level(5.0), "low");
-        assert_eq!(EconomicImpactEstimator::compute_level(10.0), "low");
+        assert_eq!(compute_level(0.0), "low");
+        assert_eq!(compute_level(5.0), "low");
+        assert_eq!(compute_level(10.0), "low");
     }
 
     #[test]
     fn estimate_level_moderate() {
-        assert_eq!(EconomicImpactEstimator::compute_level(10.1), "moderate");
-        assert_eq!(EconomicImpactEstimator::compute_level(15.0), "moderate");
-        assert_eq!(EconomicImpactEstimator::compute_level(20.0), "moderate");
+        assert_eq!(compute_level(10.1), "moderate");
+        assert_eq!(compute_level(15.0), "moderate");
+        assert_eq!(compute_level(20.0), "moderate");
     }
 
     #[test]
     fn estimate_level_high() {
-        assert_eq!(EconomicImpactEstimator::compute_level(20.1), "high");
-        assert_eq!(EconomicImpactEstimator::compute_level(30.0), "high");
-        assert_eq!(EconomicImpactEstimator::compute_level(40.0), "high");
+        assert_eq!(compute_level(20.1), "high");
+        assert_eq!(compute_level(30.0), "high");
+        assert_eq!(compute_level(40.0), "high");
     }
 
     #[test]
     fn estimate_level_critical() {
-        assert_eq!(EconomicImpactEstimator::compute_level(40.1), "critical");
-        assert_eq!(EconomicImpactEstimator::compute_level(50.0), "critical");
-        assert_eq!(EconomicImpactEstimator::compute_level(100.0), "critical");
+        assert_eq!(compute_level(40.1), "critical");
+        assert_eq!(compute_level(50.0), "critical");
+        assert_eq!(compute_level(100.0), "critical");
     }
 
     #[test]
