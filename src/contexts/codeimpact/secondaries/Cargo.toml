@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 codeimpact_hexagon = { path = "../hexagon" }
 syn = { version = "2", features = ["full"], optional = true }
+walkdir = "2"
 
 [features]
 default = ["syn-parser"]

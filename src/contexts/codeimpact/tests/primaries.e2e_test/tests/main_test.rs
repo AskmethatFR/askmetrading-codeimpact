@@ -82,6 +82,45 @@ fn e2e_analyze_nonexistent_file_exits_1() {
 }
 
 #[test]
+fn e2e_analyze_directory_exits_0() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args(["analyze", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected for directory. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn e2e_analyze_with_path_option_exits_0() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", "--path", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected with --path. stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Complexité directe"),
+        "missing complexity: {}",
+        stdout
+    );
+}
+
+#[test]
 fn e2e_analyze_empty_file_returns_complexity_1() {
     let binary = binary_path();
     let empty = fixtures_dir().join("empty.rs");

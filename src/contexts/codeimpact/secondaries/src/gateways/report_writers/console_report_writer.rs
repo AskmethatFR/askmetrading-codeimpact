@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
+use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
@@ -69,6 +72,101 @@ impl ReportWriter for ConsoleReportWriter {
         } else {
             println!("========================");
         }
+        Ok(())
+    }
+
+    fn write_project_report(
+        &self,
+        graph: &FileConsumptionGraph,
+    ) -> Result<(), AnalysisError> {
+        let aggregated = graph.aggregated_metrics();
+
+        println!("=== Métriques par fichier ===");
+        let per_file = graph.per_file_metrics();
+        if per_file.is_empty() {
+            println!("(aucun fichier analysé)");
+            return Ok(());
+        }
+
+        // Sort files for deterministic output
+        let mut sorted_files: Vec<&PathBuf> = per_file.keys().collect();
+        sorted_files.sort();
+
+        for path in &sorted_files {
+            if let Some(metrics) = per_file.get(*path) {
+                println!(
+                    "{} — complexité directe: {}, complexité transitive: {}, niveau: {}",
+                    path.display(),
+                    metrics.cyclomatic_complexity(),
+                    metrics.transitive_complexity(),
+                    metrics.complexity_level(),
+                );
+            }
+        }
+        println!();
+
+        println!("=== Chaînes de consommation ===");
+        for path in &sorted_files {
+            let chain = graph.consumption_chain(path);
+            if chain.len() > 1 {
+                let chain_str: Vec<String> = chain
+                    .iter()
+                    .map(|p| p.file_stem().unwrap().to_str().unwrap().to_string())
+                    .collect();
+                println!("  {} → {}", path.display(), chain_str.join(" → "));
+            }
+        }
+        println!();
+
+        println!("=== Cycles ===");
+        let cycles = graph.files_with_cycles();
+        if cycles.is_empty() {
+            println!("  (aucun cycle détecté)");
+        } else {
+            for path in &cycles {
+                println!("  {} fait partie d'un cycle de dépendances", path.display());
+            }
+        }
+        println!();
+
+        println!("=== Résumé du projet ===");
+        println!("Fichiers analysés: {}", aggregated.total_files);
+        println!("Dépendances totales: {}", graph.total_dependencies());
+        println!("Complexité directe totale: {}", aggregated.total_cyclomatic_complexity);
+        println!("Complexité transitive totale: {}", aggregated.total_transitive_complexity);
+        println!("Profondeur max de chaîne: {}", aggregated.max_call_depth);
+        println!("Fichiers en cycle: {}", aggregated.files_with_cycles.len());
+
+        if let Some(economic) = &aggregated.total_economic_impact {
+            println!();
+            println!("=== Impact économique total ===");
+            println!("Coût CPU: {:.1} μ$", economic.cpu_cost_microdollars());
+            let memory_kb = economic.memory_bytes() as f64 / 1024.0;
+            if memory_kb >= 1024.0 {
+                println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
+            } else {
+                println!("Mémoire: {:.1} KB", memory_kb);
+            }
+            println!("Coût total: {:.1} μ$", economic.total_cost_microdollars());
+            println!("Niveau: {}", economic.level());
+        }
+
+        if let Some(ecological) = &aggregated.total_ecological_impact {
+            println!();
+            println!("=== Impact écologique total ===");
+            println!("CO₂: {:.1} g", ecological.co2_grams());
+            let energy_joules = ecological.energy_joules();
+            let energy_kwh = energy_joules / 3_600_000.0;
+            if energy_joules >= 1000.0 {
+                println!("Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh);
+            } else {
+                println!("Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh);
+            }
+            println!("Classe: {}", ecological.efficiency_class().label());
+        }
+
+        println!("==============================");
+
         Ok(())
     }
 }

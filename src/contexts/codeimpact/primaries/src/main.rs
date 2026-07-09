@@ -18,15 +18,37 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Analyze { file: PathBuf },
+    Analyze {
+        file: Option<PathBuf>,
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Analyze { file } => {
-            let target = AnalysisTarget::new(file.clone(), TargetType::File);
+        Commands::Analyze { file, path } => {
+            let file_path = match (file, path) {
+                (Some(f), None) | (None, Some(f)) => f.clone(),
+                (Some(_), Some(_)) => {
+                    eprintln!("erreur: spécifiez soit un fichier en argument, soit --path, pas les deux");
+                    std::process::exit(1);
+                }
+                (None, None) => {
+                    eprintln!("erreur: spécifiez un fichier ou dossier à analyser");
+                    std::process::exit(1);
+                }
+            };
+
+            let target_type = if file_path.is_dir() {
+                TargetType::Project
+            } else {
+                TargetType::File
+            };
+
+            let target = AnalysisTarget::new(file_path, target_type);
             let reader = FileSystemCodeReader::new();
             let writer = ConsoleReportWriter::new();
             let parser = SynCodeParser::new();

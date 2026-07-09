@@ -1,0 +1,610 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use super::code_metrics::CodeMetrics;
+use super::ecological_impact::EcologicalImpact;
+use super::economic_impact::EconomicImpact;
+use super::errors::AnalysisError;
+
+/// A dependency between two files: `from` depends on `to`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileDependency {
+    pub from: PathBuf,
+    pub to: PathBuf,
+}
+
+/// Immutable value object representing the consumption graph of a project.
+///
+/// Nodes are the analyzed files, edges are dependencies between them.
+/// Detects cycles and computes consumption chains.
+#[derive(Clone, Debug)]
+pub struct FileConsumptionGraph {
+    files: Vec<PathBuf>,
+    dependencies: Vec<FileDependency>,
+    adjacency: HashMap<PathBuf, Vec<PathBuf>>,
+    per_file_metrics: HashMap<PathBuf, CodeMetrics>,
+    cycle_nodes: HashSet<PathBuf>,
+    max_depth: usize,
+}
+
+impl FileConsumptionGraph {
+    /// Build a new graph from a list of files and their dependencies.
+    ///
+    /// Validates that every dependency's `from` and `to` exist in the file list.
+    pub fn build(
+        files: &[(PathBuf, CodeMetrics)],
+        dependencies: Vec<FileDependency>,
+    ) -> Result<Self, AnalysisError> {
+        let file_set: HashSet<&PathBuf> = files.iter().map(|(p, _)| p).collect();
+
+        // Validate that all dependency endpoints exist in the file list
+        for dep in &dependencies {
+            if !file_set.contains(&dep.from) {
+                return Err(AnalysisError::AnalysisFailed(format!(
+                    "fichier source '{}' introuvable dans la liste des fichiers",
+                    dep.from.display()
+                )));
+            }
+            if !file_set.contains(&dep.to) {
+                return Err(AnalysisError::AnalysisFailed(format!(
+                    "fichier destination '{}' introuvable dans la liste des fichiers",
+                    dep.to.display()
+                )));
+            }
+        }
+
+        let file_list: Vec<PathBuf> = files.iter().map(|(p, _)| p.clone()).collect();
+        let per_file_metrics: HashMap<PathBuf, CodeMetrics> =
+            files.iter().cloned().collect();
+
+        // Build adjacency map: what each file depends on (owned)
+        let mut adjacency: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for (path, _) in files {
+            adjacency.entry(path.clone()).or_default();
+        }
+        for dep in &dependencies {
+            adjacency
+                .entry(dep.from.clone())
+                .or_default()
+                .push(dep.to.clone());
+        }
+
+        let cycle_nodes = Self::detect_cycles(&adjacency);
+
+        let max_depth = if file_list.is_empty() {
+            0
+        } else {
+            let mut max = 0usize;
+            for path in &file_list {
+                let depth =
+                    Self::compute_depth(path, &adjacency, &cycle_nodes);
+                max = max.max(depth);
+            }
+            max
+        };
+
+        Ok(Self {
+            files: file_list,
+            dependencies,
+            adjacency,
+            per_file_metrics,
+            cycle_nodes,
+            max_depth,
+        })
+    }
+
+    /// Returns the files in the graph.
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+
+    /// Returns the consumption chain starting from `file` (includes `file` itself).
+    ///
+    /// The chain follows the dependency direction: if A depends on B,
+    /// the chain includes A → B → (B's dependencies) → ...
+    pub fn consumption_chain(&self, file: &Path) -> Vec<PathBuf> {
+        if !self.per_file_metrics.contains_key(file) {
+            return Vec::new();
+        }
+
+        let mut chain = Vec::new();
+        let mut visited = HashSet::new();
+        let mut in_path = HashSet::new();
+        Self::dfs_chain(file, &self.adjacency, &mut visited, &mut in_path, &mut chain);
+        chain
+    }
+
+    /// Files that are part of at least one dependency cycle, sorted.
+    pub fn files_with_cycles(&self) -> Vec<&PathBuf> {
+        let mut result: Vec<&PathBuf> = self.cycle_nodes.iter().collect();
+        result.sort_by(|a, b| a.cmp(b));
+        result
+    }
+
+    /// Per-file metrics map.
+    pub fn per_file_metrics(&self) -> &HashMap<PathBuf, CodeMetrics> {
+        &self.per_file_metrics
+    }
+
+    /// Aggregated project metrics (sum of all files).
+    pub fn aggregated_metrics(&self) -> ProjectMetrics {
+        let mut total_cc = 0u32;
+        let mut total_tc = 0u32;
+        let mut max_call_depth = 0usize;
+
+        for metrics in self.per_file_metrics.values() {
+            total_cc = total_cc.saturating_add(metrics.cyclomatic_complexity());
+            total_tc = total_tc.saturating_add(metrics.transitive_complexity());
+            max_call_depth = max_call_depth.max(metrics.max_call_depth());
+        }
+
+        let total_economic_impact = self
+            .per_file_metrics
+            .values()
+            .filter_map(|m| m.economic_impact().cloned())
+            .reduce(|a, b| a + b);
+
+        let total_ecological_impact = self
+            .per_file_metrics
+            .values()
+            .filter_map(|m| m.ecological_impact().cloned())
+            .reduce(|a, b| a + b);
+
+        let mut files_with_cycles: Vec<PathBuf> =
+            self.cycle_nodes.iter().cloned().collect();
+        files_with_cycles.sort();
+
+        ProjectMetrics {
+            total_files: self.files.len(),
+            total_cyclomatic_complexity: total_cc,
+            total_transitive_complexity: total_tc,
+            max_call_depth,
+            files_with_cycles,
+            total_economic_impact,
+            total_ecological_impact,
+        }
+    }
+
+    /// Total number of dependency edges.
+    pub fn total_dependencies(&self) -> usize {
+        self.dependencies.len()
+    }
+
+    /// Deepest consumption chain in the graph.
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
+
+    // ── Private helpers ──
+
+    /// DFS 3-colors cycle detection.
+    fn detect_cycles(adjacency: &HashMap<PathBuf, Vec<PathBuf>>) -> HashSet<PathBuf> {
+        // 0 = white (unvisited), 1 = grey (in current path), 2 = black (done)
+        let mut color: HashMap<&Path, u8> = HashMap::new();
+        let mut in_cycle: HashSet<PathBuf> = HashSet::new();
+
+        for path in adjacency.keys() {
+            color.entry(path.as_path()).or_insert(0);
+        }
+
+        for path in adjacency.keys() {
+            if color.get(path.as_path()) == Some(&0) {
+                let mut path_stack: Vec<&Path> = Vec::new();
+                Self::dfs_cycle(
+                    path.as_path(),
+                    adjacency,
+                    &mut color,
+                    &mut path_stack,
+                    &mut in_cycle,
+                );
+            }
+        }
+
+        in_cycle
+    }
+
+    fn dfs_cycle<'a>(
+        node: &'a Path,
+        adjacency: &'a HashMap<PathBuf, Vec<PathBuf>>,
+        color: &mut HashMap<&'a Path, u8>,
+        path_stack: &mut Vec<&'a Path>,
+        in_cycle: &mut HashSet<PathBuf>,
+    ) {
+        color.insert(node, 1); // grey
+        path_stack.push(node);
+
+        if let Some(callees) = adjacency.get(node) {
+            for callee in callees {
+                let callee_path: &Path = callee.as_path();
+                match color.get(callee_path).copied().unwrap_or(0) {
+                    0 => {
+                        Self::dfs_cycle(
+                            callee_path,
+                            adjacency,
+                            color,
+                            path_stack,
+                            in_cycle,
+                        );
+                    }
+                    1 => {
+                        // Back-edge: mark all nodes from callee to node as cycle
+                        let mut in_cycle_range = false;
+                        for &n in path_stack.iter() {
+                            if n == callee_path {
+                                in_cycle_range = true;
+                            }
+                            if in_cycle_range {
+                                in_cycle.insert(n.to_path_buf());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        path_stack.pop();
+        color.insert(node, 2); // black
+    }
+
+    /// DFS to compute the consumption chain.
+    ///
+    /// Uses `visited` for globally-completed nodes and `in_path` for
+    /// current-path cycle detection. When a cycle is found, appends the
+    /// cycle-closing node so the caller sees the full cycle path.
+    fn dfs_chain(
+        node: &Path,
+        adjacency: &HashMap<PathBuf, Vec<PathBuf>>,
+        visited: &mut HashSet<PathBuf>,
+        in_path: &mut HashSet<PathBuf>,
+        chain: &mut Vec<PathBuf>,
+    ) {
+        if visited.contains(node) {
+            return;
+        }
+
+        if in_path.contains(node) {
+            // Cycle detected: close the cycle by re-appending this node
+            chain.push(node.to_path_buf());
+            return;
+        }
+
+        in_path.insert(node.to_path_buf());
+
+        if adjacency.contains_key(node) {
+            chain.push(node.to_path_buf());
+        }
+
+        // Recurse into dependencies
+        if let Some(callees) = adjacency.get(node) {
+            for callee in callees {
+                Self::dfs_chain(
+                    callee.as_path(),
+                    adjacency,
+                    visited,
+                    in_path,
+                    chain,
+                );
+            }
+        }
+
+        in_path.remove(node);
+        visited.insert(node.to_path_buf());
+    }
+
+    /// Compute the depth of the longest chain starting from this node.
+    fn compute_depth(
+        node: &Path,
+        adjacency: &HashMap<PathBuf, Vec<PathBuf>>,
+        cycle_nodes: &HashSet<PathBuf>,
+    ) -> usize {
+        // If in cycle, depth stops at this node
+        if cycle_nodes.contains(node) {
+            return 1;
+        }
+
+        let max_child = adjacency
+            .get(node)
+            .map(|callees| {
+                callees
+                    .iter()
+                    .map(|c| Self::compute_depth(c.as_path(), adjacency, cycle_nodes))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+
+        1 + max_child
+    }
+}
+
+/// Aggregated metrics for an entire project.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectMetrics {
+    pub total_files: usize,
+    pub total_cyclomatic_complexity: u32,
+    pub total_transitive_complexity: u32,
+    pub max_call_depth: usize,
+    pub files_with_cycles: Vec<PathBuf>,
+    pub total_economic_impact: Option<EconomicImpact>,
+    pub total_ecological_impact: Option<EcologicalImpact>,
+}
+
+/// Resolve a raw dependency string (from `parse_file_dependencies`) to a file path.
+///
+/// Format: `"mod:<name>"` for `mod foo;` declarations,
+/// `"use:<path>"` for `use foo::bar;` declarations.
+///
+/// Returns `None` if the dependency cannot be resolved to any file in `available_files`.
+pub fn resolve_file_dependency(
+    raw: &str,
+    current_file: &Path,
+    crate_root: &Path,
+    available_files: &[PathBuf],
+) -> Option<PathBuf> {
+    if let Some(name) = raw.strip_prefix("mod:") {
+        let parent = current_file.parent().unwrap_or(Path::new(""));
+        let candidates = vec![
+            parent.join(format!("{}.rs", name)),
+            parent.join(name).join("mod.rs"),
+        ];
+        return candidates.into_iter().find(|c| available_files.contains(c));
+    }
+
+    if let Some(path) = raw.strip_prefix("use:") {
+        // External crate prefixes are already filtered by the parser
+        if path.starts_with("crate::") {
+            let rel = path.strip_prefix("crate::").unwrap();
+            let candidates = module_path_candidates(rel, crate_root);
+            return candidates.into_iter().find(|c| available_files.contains(c));
+        }
+        if path.starts_with("super::") {
+            let rel = path.strip_prefix("super::").unwrap();
+            let parent = current_file.parent().unwrap_or(Path::new(""));
+            let grandparent = parent.parent().unwrap_or(Path::new(""));
+            let candidates = module_path_candidates(rel, grandparent);
+            return candidates.into_iter().find(|c| available_files.contains(c));
+        }
+        // Relative use: resolve relative to current file's directory
+        let parent = current_file.parent().unwrap_or(Path::new(""));
+        let candidates = module_path_candidates(path, parent);
+        return candidates.into_iter().find(|c| available_files.contains(c));
+    }
+
+    None
+}
+
+/// Generate candidate file paths for a module path (e.g., `"foo::bar::Baz"`).
+///
+/// Tries both `base/foo/bar/Baz.rs` / `base/foo/bar/Baz/mod.rs` (full path)
+/// and `base/foo/bar.rs` / `base/foo/bar/mod.rs` (last segment is a type).
+fn module_path_candidates(module_path: &str, base: &Path) -> Vec<PathBuf> {
+    let path = module_path.replace("::", "/");
+    let mut candidates = Vec::new();
+
+    // Full path: module could be a file or a directory with mod.rs
+    candidates.push(base.join(format!("{}.rs", path)));
+    candidates.push(base.join(&path).join("mod.rs"));
+
+    // Try without last segment (the last segment might be a type, not a module)
+    if let Some(last_slash) = path.rfind('/') {
+        let module_part = &path[..last_slash];
+        candidates.push(base.join(format!("{}.rs", module_part)));
+        candidates.push(base.join(module_part).join("mod.rs"));
+    }
+
+    candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_metrics(cc: u32, tc: u32) -> CodeMetrics {
+        CodeMetrics::with_call_graph(cc, tc, 0, vec![], vec![])
+    }
+
+    fn path(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
+
+    #[test]
+    fn build_empty() {
+        let graph = FileConsumptionGraph::build(&[], vec![]).unwrap();
+        assert_eq!(graph.total_dependencies(), 0);
+        assert_eq!(graph.max_depth(), 0);
+    }
+
+    #[test]
+    fn build_single_file() {
+        let files = vec![(path("a.rs"), make_metrics(5, 5))];
+        let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+        assert_eq!(graph.total_dependencies(), 0);
+        assert_eq!(graph.max_depth(), 1);
+    }
+
+    #[test]
+    fn chain_detected() {
+        let files = vec![
+            (path("a.rs"), make_metrics(1, 1)),
+            (path("b.rs"), make_metrics(2, 2)),
+            (path("c.rs"), make_metrics(3, 3)),
+        ];
+        let deps = vec![
+            FileDependency { from: path("a.rs"), to: path("b.rs") },
+            FileDependency { from: path("b.rs"), to: path("c.rs") },
+        ];
+        let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+        assert_eq!(graph.total_dependencies(), 2);
+        assert_eq!(graph.max_depth(), 3);
+    }
+
+    #[test]
+    fn cycle_detected() {
+        let files = vec![
+            (path("a.rs"), make_metrics(1, 1)),
+            (path("b.rs"), make_metrics(2, 2)),
+        ];
+        let deps = vec![
+            FileDependency { from: path("a.rs"), to: path("b.rs") },
+            FileDependency { from: path("b.rs"), to: path("a.rs") },
+        ];
+        let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+        assert_eq!(graph.files_with_cycles().len(), 2);
+    }
+
+    #[test]
+    fn missing_node_errors() {
+        let files = vec![(path("a.rs"), make_metrics(1, 1))];
+        let deps = vec![FileDependency { from: path("x.rs"), to: path("a.rs") }];
+        assert!(FileConsumptionGraph::build(&files, deps).is_err());
+    }
+
+    #[test]
+    fn consumption_chain_cycle_shows_full_path() {
+        let files = vec![
+            (path("a.rs"), make_metrics(1, 1)),
+            (path("b.rs"), make_metrics(2, 2)),
+            (path("c.rs"), make_metrics(3, 3)),
+        ];
+        // A → B → C → A (3-node cycle)
+        let deps = vec![
+            FileDependency { from: path("a.rs"), to: path("b.rs") },
+            FileDependency { from: path("b.rs"), to: path("c.rs") },
+            FileDependency { from: path("c.rs"), to: path("a.rs") },
+        ];
+        let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+        let chain = graph.consumption_chain(&path("a.rs"));
+        assert_eq!(chain, vec![path("a.rs"), path("b.rs"), path("c.rs"), path("a.rs")]);
+    }
+
+    #[test]
+    fn consumption_chain_2node_cycle_shows_full_path() {
+        let files = vec![
+            (path("a.rs"), make_metrics(1, 1)),
+            (path("b.rs"), make_metrics(2, 2)),
+        ];
+        // A → B → A (2-node cycle)
+        let deps = vec![
+            FileDependency { from: path("a.rs"), to: path("b.rs") },
+            FileDependency { from: path("b.rs"), to: path("a.rs") },
+        ];
+        let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+        let chain = graph.consumption_chain(&path("a.rs"));
+        assert_eq!(chain, vec![path("a.rs"), path("b.rs"), path("a.rs")]);
+    }
+
+    #[test]
+    fn resolve_mod_foo_to_foo_rs() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/foo.rs")];
+        let result = resolve_file_dependency("mod:foo", &current, &root, &available);
+        assert_eq!(result, Some(path("src/foo.rs")));
+    }
+
+    #[test]
+    fn resolve_mod_foo_to_foo_mod_rs() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/foo/mod.rs")];
+        let result = resolve_file_dependency("mod:foo", &current, &root, &available);
+        assert_eq!(result, Some(path("src/foo/mod.rs")));
+    }
+
+    #[test]
+    fn resolve_mod_foo_not_found() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/bar.rs")];
+        let result = resolve_file_dependency("mod:foo", &current, &root, &available);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_use_crate_x_to_x_rs() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/x.rs")];
+        let result = resolve_file_dependency("use:crate::x", &current, &root, &available);
+        assert_eq!(result, Some(path("src/x.rs")));
+    }
+
+    #[test]
+    fn resolve_use_crate_x_to_x_mod_rs() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/x/mod.rs")];
+        let result = resolve_file_dependency("use:crate::x", &current, &root, &available);
+        assert_eq!(result, Some(path("src/x/mod.rs")));
+    }
+
+    #[test]
+    fn resolve_use_super_x_finds_parent_x() {
+        let current = path("src/sub/mod.rs");
+        let root = path("src");
+        let available = vec![path("src/x.rs")];
+        let result = resolve_file_dependency("use:super::x", &current, &root, &available);
+        assert_eq!(result, Some(path("src/x.rs")));
+    }
+
+    #[test]
+    fn resolve_use_std_external_returns_none() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/main.rs")];
+        let result = resolve_file_dependency(
+            "use:std::collections::HashMap",
+            &current,
+            &root,
+            &available,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_use_core_external_returns_none() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/main.rs")];
+        let result = resolve_file_dependency("use:core::mem", &current, &root, &available);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_relative_use_finds_file() {
+        let current = path("src/sub/mod.rs");
+        let root = path("src");
+        let available = vec![path("src/sub/foo/bar/Baz.rs")];
+        let result = resolve_file_dependency(
+            "use:foo::bar::Baz",
+            &current,
+            &root,
+            &available,
+        );
+        // Resolves relative to current file's parent: src/sub/foo/bar/Baz.rs
+        assert_eq!(result, Some(path("src/sub/foo/bar/Baz.rs")));
+    }
+
+    #[test]
+    fn resolve_unknown_dependency_returns_none() {
+        let current = path("src/main.rs");
+        let root = path("src");
+        let available = vec![path("src/main.rs")];
+        let result = resolve_file_dependency("unknown:format", &current, &root, &available);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn aggregated_metrics_sum() {
+        let files = vec![
+            (path("a.rs"), make_metrics(5, 10)),
+            (path("b.rs"), make_metrics(3, 7)),
+        ];
+        let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+        let pm = graph.aggregated_metrics();
+        assert_eq!(pm.total_files, 2);
+        assert_eq!(pm.total_cyclomatic_complexity, 8);
+        assert_eq!(pm.total_transitive_complexity, 17);
+    }
+}
