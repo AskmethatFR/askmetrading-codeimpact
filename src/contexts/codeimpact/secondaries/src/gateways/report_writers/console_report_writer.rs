@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
+use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::WarningSeverity;
@@ -48,7 +49,7 @@ impl ReportWriter for ConsoleReportWriter {
             println!("=== Impact écologique estimé ===");
             println!("CO₂: {:.1} g", ecological.co2_grams());
             let energy_joules = ecological.energy_joules();
-            let energy_kwh = energy_joules / 3_600_000.0;
+            let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
             if energy_joules >= 1000.0 {
                 println!("Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh);
             } else {
@@ -156,7 +157,7 @@ impl ReportWriter for ConsoleReportWriter {
             println!("=== Impact écologique total ===");
             println!("CO₂: {:.1} g", ecological.co2_grams());
             let energy_joules = ecological.energy_joules();
-            let energy_kwh = energy_joules / 3_600_000.0;
+            let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
             if energy_joules >= 1000.0 {
                 println!("Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh);
             } else {

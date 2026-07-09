@@ -178,17 +178,20 @@ impl FileConsumptionGraph {
     // ── Private helpers ──
 
     /// DFS 3-colors cycle detection.
+    const COLOR_WHITE: u8 = 0; // unvisited
+    const COLOR_GREY: u8 = 1;  // in current path
+    const COLOR_BLACK: u8 = 2; // done
+
     fn detect_cycles(adjacency: &HashMap<PathBuf, Vec<PathBuf>>) -> HashSet<PathBuf> {
-        // 0 = white (unvisited), 1 = grey (in current path), 2 = black (done)
         let mut color: HashMap<&Path, u8> = HashMap::new();
         let mut in_cycle: HashSet<PathBuf> = HashSet::new();
 
         for path in adjacency.keys() {
-            color.entry(path.as_path()).or_insert(0);
+            color.entry(path.as_path()).or_insert(Self::COLOR_WHITE);
         }
 
         for path in adjacency.keys() {
-            if color.get(path.as_path()) == Some(&0) {
+            if color.get(path.as_path()) == Some(&Self::COLOR_WHITE) {
                 let mut path_stack: Vec<&Path> = Vec::new();
                 Self::dfs_cycle(
                     path.as_path(),
@@ -210,14 +213,14 @@ impl FileConsumptionGraph {
         path_stack: &mut Vec<&'a Path>,
         in_cycle: &mut HashSet<PathBuf>,
     ) {
-        color.insert(node, 1); // grey
+        color.insert(node, Self::COLOR_GREY);
         path_stack.push(node);
 
         if let Some(callees) = adjacency.get(node) {
             for callee in callees {
                 let callee_path: &Path = callee.as_path();
-                match color.get(callee_path).copied().unwrap_or(0) {
-                    0 => {
+                match color.get(callee_path).copied().unwrap_or(Self::COLOR_WHITE) {
+                    Self::COLOR_WHITE => {
                         Self::dfs_cycle(
                             callee_path,
                             adjacency,
@@ -226,7 +229,7 @@ impl FileConsumptionGraph {
                             in_cycle,
                         );
                     }
-                    1 => {
+                    Self::COLOR_GREY => {
                         // Back-edge: mark all nodes from callee to node as cycle
                         let mut in_cycle_range = false;
                         for &n in path_stack.iter() {
@@ -244,7 +247,7 @@ impl FileConsumptionGraph {
         }
 
         path_stack.pop();
-        color.insert(node, 2); // black
+        color.insert(node, Self::COLOR_BLACK);
     }
 
     /// DFS to compute the consumption chain.
