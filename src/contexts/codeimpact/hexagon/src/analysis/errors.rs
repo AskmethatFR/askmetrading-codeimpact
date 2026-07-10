@@ -1,10 +1,11 @@
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AnalysisError {
     IoError(String),
     AnalysisFailed(String),
     UnsupportedTarget(String),
+    TestRunnerError(String),
 }
 
 impl fmt::Display for AnalysisError {
@@ -13,6 +14,7 @@ impl fmt::Display for AnalysisError {
             Self::IoError(msg) => write!(f, "{}", msg),
             Self::AnalysisFailed(msg) => write!(f, "analyse échouée: {}", msg),
             Self::UnsupportedTarget(msg) => write!(f, "cible non supportée: {}", msg),
+            Self::TestRunnerError(msg) => write!(f, "test runner: {}", msg),
         }
     }
 }

@@ -13,8 +13,11 @@ pub mod file_consumption_graph;
 pub mod io_in_loop_warning;
 pub mod io_in_loops_detector;
 pub mod proactive_analyzer;
+pub mod reactive_analyzer;
 mod report_writer;
 mod run_analysis;
+mod run_stress_test;
+pub mod stress_test_run;
 
 pub use analysis_rule::AnalysisRule;
 pub use analysis_target::{AnalysisTarget, TargetType};
@@ -35,5 +38,8 @@ pub use file_consumption_graph::{
 pub use io_in_loop_warning::IoInLoopWarning;
 pub use io_in_loops_detector::IoInLoopsDetector;
 pub use proactive_analyzer::analyze;
+pub use reactive_analyzer::ReactiveAnalyzer;
 pub use report_writer::ReportWriter;
 pub use run_analysis::RunAnalysis;
+pub use run_stress_test::RunStressTest;
+pub use stress_test_run::{StressTestRun, TestRunnerPort};

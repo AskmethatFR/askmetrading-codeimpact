@@ -144,6 +144,40 @@ fn e2e_analyze_empty_file_returns_complexity_1() {
 }
 
 #[test]
+fn e2e_help_shows_stress_test_subcommand() {
+    let binary = binary_path();
+    let output = Command::new(binary)
+        .args(["--help"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    assert!(
+        stdout.contains("stress-test"),
+        "help should list stress-test: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_stress_test_help_shows_filter_option() {
+    let binary = binary_path();
+    let output = Command::new(binary)
+        .args(["stress-test", "--help"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    assert!(
+        stdout.contains("--filter"),
+        "stress-test help should show --filter: {}",
+        stdout
+    );
+}
+
+#[test]
 fn e2e_analyze_sample_contains_io_in_loop() {
     let binary = binary_path();
     let fixture = fixtures_dir().join("sample.rs");
