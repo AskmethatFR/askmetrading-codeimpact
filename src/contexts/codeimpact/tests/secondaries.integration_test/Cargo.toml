@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 codeimpact_hexagon = { path = "../../hexagon" }
 codeimpact_secondaries = { path = "../../secondaries" }
+tempfile = "3"
 
 [lib]
 test = false
