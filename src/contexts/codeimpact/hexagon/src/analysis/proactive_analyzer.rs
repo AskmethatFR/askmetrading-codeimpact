@@ -6,6 +6,7 @@ use super::complexity_detector::{ComplexityDetector, DetectionConfig};
 use super::ecological_impact::EcologicalImpactEstimator;
 use super::economic_impact::EconomicImpactEstimator;
 use super::errors::AnalysisError;
+use super::io_in_loops_detector::IoInLoopsDetector;
 
 pub fn analyze(
     source: &str,
@@ -19,6 +20,10 @@ pub fn analyze(
         match rule {
             AnalysisRule::CyclomaticComplexity => {
                 complexity += functions.iter().map(|f| f.decision_points).sum::<u32>();
+            }
+            AnalysisRule::IoInLoops => {
+                // IoInLoops does not contribute to cyclomatic complexity;
+                // it is handled below via IoInLoopsDetector.
             }
         }
     }
@@ -57,6 +62,11 @@ pub fn analyze(
         function_details,
     )
     .with_warnings(warnings);
+
+    if rules.contains(&AnalysisRule::IoInLoops) {
+        let io_warnings = IoInLoopsDetector::detect(&functions);
+        metrics = metrics.with_io_in_loops(io_warnings);
+    }
 
     let economic = EconomicImpactEstimator::estimate(&metrics, &functions, &call_graph);
     metrics = metrics.with_economic_impact(economic);

@@ -1,6 +1,7 @@
 use super::complexity_detector::ComplexityWarning;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
+use super::io_in_loop_warning::IoInLoopWarning;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDetail {
@@ -21,6 +22,7 @@ pub struct CodeMetrics {
     warnings: Vec<ComplexityWarning>,
     economic_impact: Option<EconomicImpact>,
     ecological_impact: Option<EcologicalImpact>,
+    io_in_loops: Vec<IoInLoopWarning>,
 }
 
 impl CodeMetrics {
@@ -34,6 +36,7 @@ impl CodeMetrics {
             warnings: Vec::new(),
             economic_impact: None,
             ecological_impact: None,
+            io_in_loops: Vec::new(),
         }
     }
 
@@ -53,6 +56,7 @@ impl CodeMetrics {
             warnings: Vec::new(),
             economic_impact: None,
             ecological_impact: None,
+            io_in_loops: Vec::new(),
         }
     }
 
@@ -115,6 +119,15 @@ impl CodeMetrics {
 
     pub fn with_ecological_impact(mut self, impact: EcologicalImpact) -> Self {
         self.ecological_impact = Some(impact);
+        self
+    }
+
+    pub fn io_in_loops(&self) -> &[IoInLoopWarning] {
+        &self.io_in_loops
+    }
+
+    pub fn with_io_in_loops(mut self, io_in_loops: Vec<IoInLoopWarning>) -> Self {
+        self.io_in_loops = io_in_loops;
         self
     }
 }

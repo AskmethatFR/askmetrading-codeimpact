@@ -56,6 +56,7 @@ fn analyze_valid_file_writes_metrics() {
         decision_points: 1,
         depth: 0,
         match_arms: 0,
+        calls_in_loops: vec![],
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
@@ -128,6 +129,7 @@ fn analyze_project_target_writes_per_file_report() {
         decision_points: 1,
         depth: 0,
         match_arms: 0,
+        calls_in_loops: vec![],
     }]);
     let use_case =
         RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
@@ -184,6 +186,7 @@ fn handle_project_continues_on_read_error() {
         decision_points: 1,
         depth: 0,
         match_arms: 0,
+        calls_in_loops: vec![],
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
@@ -245,6 +248,7 @@ fn handle_project_continues_on_deps_parse_error() {
         decision_points: 1,
         depth: 0,
         match_arms: 0,
+        calls_in_loops: vec![],
     }])
     .with_deps(Err(AnalysisError::AnalysisFailed("deps error".to_string())));
 

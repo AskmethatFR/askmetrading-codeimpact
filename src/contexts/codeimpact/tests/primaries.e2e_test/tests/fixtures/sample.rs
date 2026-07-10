@@ -14,3 +14,10 @@ fn main() {
         }
     }
 }
+
+fn read_files() {
+    let files = vec!["a.txt", "b.txt"];
+    for f in &files {
+        let _ = std::fs::read_to_string(f);
+    }
+}

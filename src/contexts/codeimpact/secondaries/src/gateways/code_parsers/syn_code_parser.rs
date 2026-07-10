@@ -1,6 +1,7 @@
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::ParsedFunction;
+use syn::spanned::Spanned;
 
 #[derive(Default)]
 pub struct SynCodeParser;
@@ -32,6 +33,7 @@ impl CodeParser for SynCodeParser {
                     decision_points: visitor.decision_points,
                     depth: visitor.max_depth,
                     match_arms: visitor.match_arms,
+                    calls_in_loops: visitor.calls_in_loops,
                 });
             }
         }
@@ -76,6 +78,12 @@ impl CodeParser for SynCodeParser {
 
 // ── Private helpers ──
 
+const IO_PREFIXES: &[&str] = &["std::fs::", "tokio::fs::", "std::net::", "reqwest::"];
+
+fn is_io_call(call_name: &str) -> bool {
+    IO_PREFIXES.iter().any(|prefix| call_name.starts_with(prefix))
+}
+
 impl SynCodeParser {
     fn format_use_tree(tree: &syn::UseTree) -> String {
         match tree {
@@ -103,6 +111,7 @@ impl SynCodeParser {
 struct FunctionVisitor {
     decision_points: u32,
     calls: Vec<String>,
+    calls_in_loops: Vec<(String, usize, usize)>,
     has_loop: bool,
     has_nested_loop: bool,
     max_depth: u32,
@@ -137,6 +146,7 @@ impl FunctionVisitor {
                 inner.visit_block(&func.block);
                 self.decision_points += inner.decision_points;
                 self.calls.extend(inner.calls);
+                self.calls_in_loops.extend(inner.calls_in_loops);
                 if inner.has_loop {
                     self.has_loop = true;
                 }
@@ -247,6 +257,12 @@ impl FunctionVisitor {
                         .map(|s| s.ident.to_string())
                         .collect::<Vec<_>>()
                         .join("::");
+                    if self.loop_depth > 0 && is_io_call(&name) {
+                        let span = call.func.span();
+                        let line_col = span.start();
+                        self.calls_in_loops
+                            .push((name.clone(), line_col.line, line_col.column));
+                    }
                     self.calls.push(name);
                 }
                 for arg in &call.args {
