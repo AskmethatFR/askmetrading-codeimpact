@@ -1,5 +1,7 @@
-use codeimpact_hexagon::analysis::{AnalysisError, StressTestRun, TestRunnerPort};
+use std::path::Path;
 use std::time::{Duration, Instant};
+
+use codeimpact_hexagon::analysis::{AnalysisError, StressTestRun, TestRunnerPort};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -12,13 +14,28 @@ impl CargoTestRunner {
         Self { project_dir }
     }
 
-    fn run_cargo_test(
-        project_dir: &std::path::Path,
-        filter: Option<&str>,
-    ) -> Result<StressTestRun, AnalysisError> {
-        let start = Instant::now();
+    fn time_wrapper_available() -> bool {
+        Path::new("/usr/bin/time").exists()
+    }
 
-        let mut cmd = std::process::Command::new("cargo");
+    fn time_flag() -> &'static str {
+        if cfg!(target_os = "macos") { "-l" } else { "-v" }
+    }
+
+    fn build_cmd(
+        project_dir: &Path,
+        filter: Option<&str>,
+        use_time: bool,
+    ) -> std::process::Command {
+        let mut cmd = if use_time {
+            let mut c = std::process::Command::new("/usr/bin/time");
+            c.arg(Self::time_flag());
+            c.arg("cargo");
+            c
+        } else {
+            std::process::Command::new("cargo")
+        };
+
         cmd.arg("test");
         cmd.arg("--lib");
         cmd.stdout(std::process::Stdio::piped());
@@ -53,6 +70,17 @@ impl CargoTestRunner {
             }
         }
 
+        cmd
+    }
+
+    fn run_cargo_test(
+        project_dir: &Path,
+        filter: Option<&str>,
+    ) -> Result<StressTestRun, AnalysisError> {
+        let start = Instant::now();
+        let use_time = Self::time_wrapper_available();
+        let mut cmd = Self::build_cmd(project_dir, filter, use_time);
+
         let mut child = cmd
             .spawn()
             .map_err(|e| AnalysisError::TestRunnerError(format!("impossible de lancer cargo test: {}", e)))?;
@@ -85,8 +113,11 @@ impl CargoTestRunner {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        let cpu_time_ms = Self::parse_cpu_time(&stderr);
-        let memory_kb = Self::parse_memory_kb(&stderr);
+        let (cpu_time_ms, memory_kb) = if use_time {
+            (Self::parse_cpu_time(&stderr), Self::parse_memory_kb(&stderr))
+        } else {
+            (0, 0)
+        };
 
         let (tests_passed, tests_total) = Self::parse_test_results(&stdout);
 
@@ -101,19 +132,27 @@ impl CargoTestRunner {
     }
 
     fn parse_cpu_time(stderr: &str) -> u64 {
-        // macOS: "        0.12 real         0.10 user         0.02 sys"
-        if let Some(line) = stderr.lines().find(|l| l.trim().contains("user")) {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                if let Ok(secs) = val.parse::<f64>() {
-                    return (secs * 1000.0) as u64;
+        // macOS /usr/bin/time -l: "0.06 real         0.01 user         0.02 sys"
+        for line in stderr.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("user") {
+                let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+                if tokens.len() >= 4 {
+                    // ["0.06", "real", "0.01", "user", ...]
+                    if let Ok(secs) = tokens[2].parse::<f64>() {
+                        return (secs * 1000.0) as u64;
+                    }
                 }
             }
         }
-        // Linux: "User time (seconds): 0.10"
-        if let Some(line) = stderr.lines().find(|l| l.trim().starts_with("User time")) {
-            if let Some(val) = line.split(':').nth(1) {
-                if let Ok(secs) = val.trim().parse::<f64>() {
-                    return (secs * 1000.0) as u64;
+        // Linux /usr/bin/time -v: "User time (seconds): 0.10"
+        for line in stderr.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("User time") {
+                if let Some(val) = trimmed.split(':').nth(1) {
+                    if let Ok(secs) = val.trim().parse::<f64>() {
+                        return (secs * 1000.0) as u64;
+                    }
                 }
             }
         }
@@ -121,27 +160,20 @@ impl CargoTestRunner {
     }
 
     fn parse_memory_kb(stderr: &str) -> u64 {
-        // macOS: "maximum resident set size (kbytes): 12345"
-        if let Some(line) = stderr.lines().find(|l| {
-            l.trim()
-                .to_lowercase()
-                .contains("maximum resident set size")
-        }) {
-            if let Some(val) = line.split(':').nth(1) {
-                if let Ok(kb) = val.trim().parse::<u64>() {
-                    return kb;
-                }
-            }
-        }
-        // Linux: "Maximum resident set size (kbytes): 12345"
-        if let Some(line) = stderr.lines().find(|l| {
-            l.trim()
-                .to_lowercase()
-                .contains("maximum resident set size")
-        }) {
-            if let Some(val) = line.split(':').nth(1) {
-                if let Ok(kb) = val.trim().parse::<u64>() {
-                    return kb;
+        for line in stderr.lines() {
+            let trimmed = line.trim();
+            let lower = trimmed.to_lowercase();
+            if lower.contains("maximum resident set size") {
+                let val_str = if let Some(val) = trimmed.split(':').nth(1) {
+                    // Linux: "Maximum resident set size (kbytes): 12345"
+                    val.trim()
+                } else {
+                    // macOS: "32555008  maximum resident set size"
+                    trimmed.split_whitespace().next().unwrap_or("0")
+                };
+                if let Ok(kb) = val_str.parse::<u64>() {
+                    // macOS reports bytes, Linux reports KB
+                    return if lower.contains("(kbytes)") { kb } else { kb / 1024 };
                 }
             }
         }
