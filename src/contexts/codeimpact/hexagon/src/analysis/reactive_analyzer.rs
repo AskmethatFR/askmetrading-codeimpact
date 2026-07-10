@@ -1,6 +1,16 @@
 use super::economic_impact::EconomicImpact;
 use super::stress_test_run::StressTestRun;
 
+const KB_TO_BYTES: u64 = 1024;
+const MEMORY_TO_TOTAL_RATIO: f64 = 0.0001;
+const STRESS_LEVEL_LOW_MAX: f64 = 1_000.0;
+const STRESS_LEVEL_MODERATE_MAX: f64 = 10_000.0;
+const STRESS_LEVEL_HIGH_MAX: f64 = 100_000.0;
+const STRESS_LEVEL_LOW: &str = "low";
+const STRESS_LEVEL_MODERATE: &str = "moderate";
+const STRESS_LEVEL_HIGH: &str = "high";
+const STRESS_LEVEL_CRITICAL: &str = "critical";
+
 pub struct ReactiveAnalyzer;
 
 impl ReactiveAnalyzer {
@@ -11,29 +21,21 @@ impl ReactiveAnalyzer {
     pub fn analyze(run: &StressTestRun) -> EconomicImpact {
         let cpu_seconds = run.cpu_time_ms() as f64 / 1000.0;
         let cpu_cost = cpu_seconds * Self::MICRODOLLARS_PER_CPU_SECOND;
-        let memory_bytes = run.memory_kb() * 1024;
-        let total = cpu_cost + memory_bytes as f64 * 0.0001;
+        let memory_bytes = run.memory_kb() * KB_TO_BYTES;
+        let total = cpu_cost + memory_bytes as f64 * MEMORY_TO_TOTAL_RATIO;
         let level = Self::compute_stress_level(total);
         EconomicImpact::new(cpu_cost, memory_bytes, total, level)
     }
 
-    /// Level thresholds for real-world stress test costs (μ$).
-    ///
-    /// | Range (μ$) | Range ($) | Level |
-    /// |---|---|---|
-    /// | 0–1 000 | $0–$0.001 | low |
-    /// | 1 001–10 000 | $0.001–$0.01 | moderate |
-    /// | 10 001–100 000 | $0.01–$0.10 | high |
-    /// | 100 001+ | $0.10+ | critical |
     fn compute_stress_level(total_cost_microdollars: f64) -> &'static str {
-        if total_cost_microdollars <= 1000.0 {
-            "low"
-        } else if total_cost_microdollars <= 10_000.0 {
-            "moderate"
-        } else if total_cost_microdollars <= 100_000.0 {
-            "high"
+        if total_cost_microdollars <= STRESS_LEVEL_LOW_MAX {
+            STRESS_LEVEL_LOW
+        } else if total_cost_microdollars <= STRESS_LEVEL_MODERATE_MAX {
+            STRESS_LEVEL_MODERATE
+        } else if total_cost_microdollars <= STRESS_LEVEL_HIGH_MAX {
+            STRESS_LEVEL_HIGH
         } else {
-            "critical"
+            STRESS_LEVEL_CRITICAL
         }
     }
 }

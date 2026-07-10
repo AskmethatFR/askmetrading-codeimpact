@@ -46,18 +46,27 @@ impl EconomicImpact {
     }
 }
 
+/// Level thresholds (μ$).
+pub const LEVEL_LOW_MAX: f64 = 10.0;
+pub const LEVEL_MODERATE_MAX: f64 = 20.0;
+pub const LEVEL_HIGH_MAX: f64 = 40.0;
+pub const LEVEL_LOW: &str = "low";
+pub const LEVEL_MODERATE: &str = "moderate";
+pub const LEVEL_HIGH: &str = "high";
+pub const LEVEL_CRITICAL: &str = "critical";
+
 /// Compute the level string from a total cost value.
 ///
 /// Thresholds: 0–10 = low, 11–20 = moderate, 21–40 = high, 41+ = critical.
 pub fn compute_level(total_cost: f64) -> &'static str {
-    if total_cost <= 10.0 {
-        "low"
-    } else if total_cost <= 20.0 {
-        "moderate"
-    } else if total_cost <= 40.0 {
-        "high"
+    if total_cost <= LEVEL_LOW_MAX {
+        LEVEL_LOW
+    } else if total_cost <= LEVEL_MODERATE_MAX {
+        LEVEL_MODERATE
+    } else if total_cost <= LEVEL_HIGH_MAX {
+        LEVEL_HIGH
     } else {
-        "critical"
+        LEVEL_CRITICAL
     }
 }
 
