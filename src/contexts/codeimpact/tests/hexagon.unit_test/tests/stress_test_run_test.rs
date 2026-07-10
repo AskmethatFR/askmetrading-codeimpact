@@ -10,11 +10,13 @@ use codeimpact_secondaries::gateways::test_runners::test_runner_stub::TestRunner
 // 2. stress_test_run_passed_never_exceeds_total
 // 3. stress_test_run_duration_must_be_positive
 // 4. reactive_analyzer_converts_run_to_economic_impact
-// 5. reactive_analyzer_high_cpu_time_gives_critical_level
+// 5. reactive_analyzer_high_cpu_time_gives_moderate_level
 // 6. reactive_analyzer_zero_cpu_time_gives_low_level
-// 7. run_stress_test_invokes_runner_and_writer
-// 8. run_stress_test_with_filter
-// 9. run_stress_test_propagates_runner_error
+// 7. reactive_analyzer_high_memory_gives_high_level
+// 8. reactive_analyzer_extreme_memory_gives_critical_level
+// 9. run_stress_test_invokes_runner_and_writer
+// 10. run_stress_test_with_filter
+// 11. run_stress_test_propagates_runner_error
 
 fn make_run() -> StressTestRun {
     StressTestRun::new(1500, 1200, 8192, 42, 50, None)
@@ -62,10 +64,11 @@ fn reactive_analyzer_converts_run_to_economic_impact() {
 }
 
 #[test]
-fn reactive_analyzer_high_cpu_time_gives_critical_level() {
+fn reactive_analyzer_high_cpu_time_gives_moderate_level() {
     let run = StressTestRun::new(60000, 50000, 1024, 1, 1, None);
     let impact = ReactiveAnalyzer::analyze(&run);
-    assert_eq!(impact.level(), "critical");
+    // 50s CPU = 1389 μ$ + 1 MB mem = 105 μ$ → total ≈ 1494 μ$ → moderate
+    assert_eq!(impact.level(), "moderate");
 }
 
 #[test]
@@ -73,6 +76,22 @@ fn reactive_analyzer_zero_cpu_time_gives_low_level() {
     let run = StressTestRun::new(10, 0, 0, 1, 1, None);
     let impact = ReactiveAnalyzer::analyze(&run);
     assert_eq!(impact.level(), "low");
+}
+
+#[test]
+fn reactive_analyzer_high_memory_gives_high_level() {
+    // 500 MB memory → 500*1024*1024*0.0001 = 52428 μ$ → high
+    let run = StressTestRun::new(1000, 1000, 512_000, 1, 1, None);
+    let impact = ReactiveAnalyzer::analyze(&run);
+    assert_eq!(impact.level(), "high");
+}
+
+#[test]
+fn reactive_analyzer_extreme_memory_gives_critical_level() {
+    // 10 GB memory → 10*1024*1024*1024*0.0001 = 1_073_741 μ$ → critical
+    let run = StressTestRun::new(1000, 1000, 10_485_760, 1, 1, None);
+    let impact = ReactiveAnalyzer::analyze(&run);
+    assert_eq!(impact.level(), "critical");
 }
 
 #[test]
