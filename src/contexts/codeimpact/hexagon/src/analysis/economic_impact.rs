@@ -49,7 +49,7 @@ impl EconomicImpact {
 /// Compute the level string from a total cost value.
 ///
 /// Thresholds: 0–10 = low, 11–20 = moderate, 21–40 = high, 41+ = critical.
-pub(crate) fn compute_level(total_cost: f64) -> &'static str {
+pub fn compute_level(total_cost: f64) -> &'static str {
     if total_cost <= 10.0 {
         "low"
     } else if total_cost <= 20.0 {

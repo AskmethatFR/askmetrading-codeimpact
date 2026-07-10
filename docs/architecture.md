@@ -101,10 +101,13 @@ codeimpact/
 │       │   ├── economic_impact.rs      # EconomicImpact VO + EconomicImpactEstimator
 │       │   ├── call_graph.rs           # CallGraph + analyse transitive
 │       │   ├── code_parser.rs          # ParsedFunction, analyse AST
-│       │   └── complexity_detector.rs  # ComplexityWarning, patterns
+│       │   ├── complexity_detector.rs  # ComplexityWarning, patterns
+│       │   ├── reactive_analyzer.rs    # ReactiveAnalyzer — impact réel via stress test
+│       │   ├── stress_test_run.rs      # StressTestRun VO + TestRunnerPort trait
+│       │   └── run_stress_test.rs      # RunStressTest use case
 │       ├── gateways-secondary_ports/
 │       │   ├── code_reader_port.rs     # trait
-│       │   └── report_writer_port.rs   # trait
+│       │   └── report_writer_port.rs   # trait (inclut write_stress_test)
 │       └── use_cases-application_services/
 │           └── run_analysis.rs         # use case
 ├── secondaries/
@@ -117,13 +120,16 @@ codeimpact/
 │           └── report_writers/
 │               ├── console_report_writer.rs
 │               └── report_writer_stub.rs
+│           └── test_runners/
+│               ├── cargo_test_runner.rs
+│               └── test_runner_stub.rs
 ├── primaries/
 │   └── src/main.rs                     # clap CLI
 └── tests/
     ├── fixtures/sample.rs
-    ├── hexagon.unit_test/              # 26 tests (VOs, analyzer, use case, economic impact)
-    ├── secondaries.integration_test/   # 4 tests (reader, writer)
-    └── primaries.e2e_test/             # 3 tests (CLI)
+    ├── hexagon.unit_test/              # 35 tests (VOs, analyzer, use case, economic impact, stress test)
+    ├── secondaries.integration_test/   # 6 tests (reader, writer, cargo test runner)
+    └── primaries.e2e_test/             # 8 tests (CLI)
 ```
 
 ## Bounded Context
@@ -150,10 +156,10 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 |---|---|---|---|
 | US1 | P0 | Analyse complexité cyclomatique | ✅ Livré |
 | US2 | P0 | Estimation impact économique (CPU/mem) | ✅ Livré |
-| US3 | P0 | Estimation impact écologique (CO2) | 📋 En attente |
+| US3 | P0 | Estimation impact écologique (CO2) | ✅ Livré |
 | US4 | P0 | Rapport JSON | 📋 En attente |
-| US5 | P1 | Détection I/O dans boucles | 📋 En attente |
-| US6 | P1 | Stress test instrumenté | 📋 En attente |
+| US5 | P1 | Détection I/O dans boucles | ✅ Livré |
+| US6 | P1 | Stress test instrumenté | ✅ Livré |
 | US7 | P1 | Rapport HTML | 📋 En attente |
 | US8 | P1 | Seuils d'alerte personnalisés | 📋 En attente |
 

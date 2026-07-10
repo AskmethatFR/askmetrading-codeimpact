@@ -30,18 +30,7 @@ impl CodeParserStub {
 
 impl CodeParser for CodeParserStub {
     fn parse(&self, _source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
-        match &self.result {
-            Ok(functions) => Ok(functions.clone()),
-            Err(e) => match e {
-                AnalysisError::IoError(msg) => Err(AnalysisError::IoError(msg.clone())),
-                AnalysisError::AnalysisFailed(msg) => {
-                    Err(AnalysisError::AnalysisFailed(msg.clone()))
-                }
-                AnalysisError::UnsupportedTarget(msg) => {
-                    Err(AnalysisError::UnsupportedTarget(msg.clone()))
-                }
-            },
-        }
+        self.result.clone()
     }
 
     fn parse_file_dependencies(
@@ -49,18 +38,7 @@ impl CodeParser for CodeParserStub {
         _source: &str,
     ) -> Result<Vec<String>, AnalysisError> {
         match &self.deps_result {
-            Some(result) => match result {
-                Ok(deps) => Ok(deps.clone()),
-                Err(e) => match e {
-                    AnalysisError::IoError(msg) => Err(AnalysisError::IoError(msg.clone())),
-                    AnalysisError::AnalysisFailed(msg) => {
-                        Err(AnalysisError::AnalysisFailed(msg.clone()))
-                    }
-                    AnalysisError::UnsupportedTarget(msg) => {
-                        Err(AnalysisError::UnsupportedTarget(msg.clone()))
-                    }
-                },
-            },
+            Some(result) => result.clone(),
             None => Ok(vec![]),
         }
     }

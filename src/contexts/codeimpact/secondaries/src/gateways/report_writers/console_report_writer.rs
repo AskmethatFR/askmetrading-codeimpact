@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
+use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
 const MICRODOLLARS_TO_DOLLARS: f64 = 1_000_000.0;
@@ -200,6 +202,47 @@ impl ReportWriter for ConsoleReportWriter {
 
         println!("==============================");
 
+        Ok(())
+    }
+
+    fn write_stress_test(
+        &self,
+        run: &StressTestRun,
+        impact: &EconomicImpact,
+    ) -> Result<(), AnalysisError> {
+        println!("=== Stress Test ===");
+        let filter_label = run
+            .filter()
+            .map(|f| format!(" (filtre: {})", f))
+            .unwrap_or_default();
+        println!("Tests: {}/{} passés{}", run.tests_passed(), run.tests_total(), filter_label);
+        println!("Durée: {} ms", run.duration_ms());
+        println!("Temps CPU: {} ms", run.cpu_time_ms());
+        let memory_mb = run.memory_kb() as f64 / 1024.0;
+        if memory_mb >= 1024.0 {
+            println!("Mémoire: {:.1} GB", memory_mb / 1024.0);
+        } else {
+            println!("Mémoire: {:.1} MB", memory_mb);
+        }
+        println!();
+        println!("=== Impact économique réel ===");
+        let dollars = impact.cpu_cost_microdollars() / 1_000_000.0;
+        if dollars < 0.0001 {
+            println!("Coût CPU: ${:.6}", dollars);
+        } else if dollars < 1.0 {
+            println!("Coût CPU: ${:.4}", dollars);
+        } else {
+            println!("Coût CPU: ${:.2}", dollars);
+        }
+        let memory_kb = impact.memory_bytes() as f64 / 1024.0;
+        if memory_kb >= 1024.0 {
+            println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
+        } else {
+            println!("Mémoire: {:.1} KB", memory_kb);
+        }
+        println!("Coût total: ${:.6}", impact.total_cost_microdollars() / 1_000_000.0);
+        println!("Niveau: {}", impact.level());
+        println!("==============================");
         Ok(())
     }
 }

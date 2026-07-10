@@ -48,7 +48,7 @@ hexagon → rien
 | 3 | Estimation impact écologique (CO2) | US2 | P0 |
 | 4 | Rapport JSON | US1 | P0 |
 | 5 | Détection I/O dans boucles | US1 | P1 |
-| 6 | Stress test instrumenté | US1, US2 | P1 |
+| 6 | Stress test instrumenté | US1, US2 | P1 | ✅ |
 | 7 | Rapport HTML | US4 | P1 |
 | 8 | Seuils d'alerte personnalisés | US1, US2, US3 | P1 |
 
