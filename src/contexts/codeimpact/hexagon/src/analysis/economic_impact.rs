@@ -164,6 +164,7 @@ mod tests {
             decision_points,
             depth: 0,
             match_arms: 0,
+            calls_in_loops: vec![],
         }
     }
 

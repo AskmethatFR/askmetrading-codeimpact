@@ -10,6 +10,9 @@ pub struct ParsedFunction {
     pub decision_points: u32,
     pub depth: u32,
     pub match_arms: u32,
+    /// Tuples of (call_name, line, col) — I/O calls detected inside loops.
+    /// CodeLocation is not used here because the call name is not a file path.
+    pub calls_in_loops: Vec<(String, usize, usize)>,
 }
 
 pub trait CodeParser: Send + Sync {

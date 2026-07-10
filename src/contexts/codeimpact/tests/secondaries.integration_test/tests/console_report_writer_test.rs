@@ -1,9 +1,11 @@
+use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FileDependency;
+use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use std::path::PathBuf;
@@ -117,5 +119,25 @@ fn write_project_report_without_impacts() {
     }];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     let result = writer.write_project_report(&graph);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn write_console_with_io_in_loops() {
+    let writer = ConsoleReportWriter::new();
+    let warnings = vec![
+        IoInLoopWarning {
+            function: "read_file".to_string(),
+            io_call: "std::fs::read".to_string(),
+            location: CodeLocation::new("".into(), 5, 9),
+        },
+        IoInLoopWarning {
+            function: "write_data".to_string(),
+            io_call: "std::fs::write".to_string(),
+            location: CodeLocation::new("".into(), 10, 5),
+        },
+    ];
+    let metrics = CodeMetrics::new(5).with_io_in_loops(warnings);
+    let result = writer.write_console(&metrics);
     assert!(result.is_ok());
 }

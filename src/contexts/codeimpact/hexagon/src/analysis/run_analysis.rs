@@ -2,11 +2,13 @@ use std::path::PathBuf;
 
 use super::analysis_rule::AnalysisRule;
 use super::analysis_target::{AnalysisTarget, TargetType};
+use super::code_location::CodeLocation;
 use super::code_metrics::CodeMetrics;
 use super::code_parser::CodeParser;
 use super::code_reader::CodeReader;
 use super::errors::AnalysisError;
 use super::file_consumption_graph::{resolve_file_dependency, FileConsumptionGraph};
+use super::io_in_loop_warning::IoInLoopWarning;
 use super::proactive_analyzer;
 use super::report_writer::ReportWriter;
 
@@ -39,6 +41,7 @@ impl RunAnalysis {
         }
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
+        let metrics = Self::set_file_paths(metrics, target.path());
         self.reporter.write_console(&metrics)?;
         Ok(())
     }
@@ -63,6 +66,7 @@ impl RunAnalysis {
                         self.parser.as_ref(),
                     ) {
                         Ok(metrics) => {
+                            let metrics = Self::set_file_paths(metrics, file);
                             per_file.push((file.clone(), metrics));
                         }
                         Err(e) => {
@@ -114,5 +118,26 @@ impl RunAnalysis {
 
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?;
         self.reporter.write_project_report(&graph)
+    }
+
+    fn set_file_paths(metrics: CodeMetrics, path: &PathBuf) -> CodeMetrics {
+        let file_path = path.to_string_lossy().to_string();
+        let updated: Vec<IoInLoopWarning> = metrics
+            .io_in_loops()
+            .iter()
+            .map(|w| IoInLoopWarning {
+                location: CodeLocation::new(
+                    file_path.clone(),
+                    w.location.line(),
+                    w.location.col(),
+                ),
+                ..w.clone()
+            })
+            .collect();
+        if updated.is_empty() {
+            metrics
+        } else {
+            metrics.with_io_in_loops(updated)
+        }
     }
 }

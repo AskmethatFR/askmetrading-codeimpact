@@ -222,3 +222,64 @@ fn closure_inside_if_does_not_create_false_positive() {
     // The if inside the closure is still parsed — it's Rust code
     assert_eq!(functions[0].decision_points, 1);
 }
+
+#[test]
+fn io_call_in_loop_is_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 {\n        std::fs::read_to_string(\"f\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    let (call_name, line, _col) = &functions[0].calls_in_loops[0];
+    assert_eq!(call_name, "std::fs::read_to_string");
+    assert_eq!(*line, 3);
+}
+
+#[test]
+fn non_io_call_in_loop_not_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 {\n        println!(\"x\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert!(
+        functions[0].calls_in_loops.is_empty(),
+        "println! should not be tracked as I/O in loop"
+    );
+}
+
+#[test]
+fn io_call_not_in_loop_not_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    std::fs::read_to_string(\"f\");\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert!(
+        functions[0].calls_in_loops.is_empty(),
+        "I/O call outside loop should not be tracked"
+    );
+}
+
+#[test]
+fn multiple_io_calls_in_loop_all_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 {\n        std::fs::read(\"a\");\n        std::net::TcpStream::connect(\"b\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 2);
+    assert_eq!(functions[0].calls_in_loops[0].0, "std::fs::read");
+    assert_eq!(functions[0].calls_in_loops[1].0, "std::net::TcpStream::connect");
+}
+
+#[test]
+fn tokio_fs_call_in_loop_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 {\n        tokio::fs::read_to_string(\"f\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert_eq!(functions[0].calls_in_loops[0].0, "tokio::fs::read_to_string");
+}
+
+#[test]
+fn reqwest_call_in_loop_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 {\n        reqwest::get(\"url\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert_eq!(functions[0].calls_in_loops[0].0, "reqwest::get");
+}

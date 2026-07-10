@@ -86,6 +86,25 @@ impl ReportWriter for ConsoleReportWriter {
         } else {
             println!("========================");
         }
+
+        let io_in_loops = metrics.io_in_loops();
+        if !io_in_loops.is_empty() {
+            println!();
+            println!("=== I/O dans boucles ===");
+            for w in io_in_loops {
+                let location_str = if w.location.file_path().is_empty() {
+                    format!("{}:{}", w.location.line(), w.location.col())
+                } else {
+                    w.location.to_string()
+                };
+                println!(
+                    "[CRITICAL] {} → I/O dans boucle: {} ({})",
+                    w.function, w.io_call, location_str
+                );
+            }
+            println!("========================");
+        }
+
         Ok(())
     }
 

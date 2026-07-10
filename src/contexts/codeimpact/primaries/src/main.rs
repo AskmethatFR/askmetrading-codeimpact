@@ -54,7 +54,7 @@ fn main() {
             let parser = SynCodeParser::new();
             let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
 
-            match use_case.handle(&target, &[AnalysisRule::CyclomaticComplexity]) {
+            match use_case.handle(&target, &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops]) {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!("erreur: {}", e);

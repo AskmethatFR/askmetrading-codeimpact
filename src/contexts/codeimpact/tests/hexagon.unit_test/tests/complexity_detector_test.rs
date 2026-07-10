@@ -35,6 +35,7 @@ fn make_fn(
         decision_points,
         depth,
         match_arms,
+        calls_in_loops: vec![],
     }
 }
 

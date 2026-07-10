@@ -13,6 +13,7 @@ fn make_parser(decision_points: u32) -> CodeParserStub {
         decision_points,
         depth: 0,
         match_arms: 0,
+        calls_in_loops: vec![],
     }])
 }
 
@@ -29,6 +30,7 @@ fn make_multi_parser(points: &[u32]) -> CodeParserStub {
             decision_points: dp,
             depth: 0,
             match_arms: 0,
+            calls_in_loops: vec![],
         })
         .collect();
     CodeParserStub::with_functions(functions)
@@ -278,4 +280,53 @@ fn analysis_includes_ecological_impact() {
     assert!(impact.co2_grams() > 0.0);
     assert!(impact.energy_joules() > 0.0);
     assert_eq!(impact.efficiency_class().label(), "A");
+}
+
+#[test]
+fn io_in_loops_rule_detects_io_in_loops() {
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "read_file".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![("std::fs::read".to_string(), 5, 9)],
+    }]);
+    let metrics = proactive_analyzer::analyze(
+        "fn read_file() { for _ in 0..10 { std::fs::read(\"file\"); } }",
+        &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops],
+        &parser,
+    )
+    .expect("analysis should succeed");
+    let io = metrics.io_in_loops();
+    assert_eq!(io.len(), 1);
+    assert_eq!(io[0].function, "read_file");
+    assert_eq!(io[0].io_call, "std::fs::read");
+    assert_eq!(io[0].location.to_string(), ":5:9");
+}
+
+#[test]
+fn io_in_loops_rule_not_in_rules_returns_empty() {
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "read_file".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![("std::fs::read".to_string(), 5, 9)],
+    }]);
+    let metrics = proactive_analyzer::analyze(
+        "fn read_file() { for _ in 0..10 { std::fs::read(\"file\"); } }",
+        &[AnalysisRule::CyclomaticComplexity],
+        &parser,
+    )
+    .expect("analysis should succeed");
+    let io = metrics.io_in_loops();
+    assert!(io.is_empty(), "IoInLoops not in rules should return empty");
 }
