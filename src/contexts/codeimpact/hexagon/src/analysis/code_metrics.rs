@@ -1,3 +1,4 @@
+use super::code_location::CodeLocation;
 use super::complexity_detector::ComplexityWarning;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
@@ -6,6 +7,7 @@ use super::io_in_loop_warning::IoInLoopWarning;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDetail {
     pub name: String,
+    pub location: CodeLocation,
     pub direct: u32,
     pub transitive: u32,
     pub call_depth: usize,
@@ -128,6 +130,11 @@ impl CodeMetrics {
 
     pub fn with_io_in_loops(mut self, io_in_loops: Vec<IoInLoopWarning>) -> Self {
         self.io_in_loops = io_in_loops;
+        self
+    }
+
+    pub fn with_function_details(mut self, function_details: Vec<FunctionDetail>) -> Self {
+        self.function_details = function_details;
         self
     }
 }

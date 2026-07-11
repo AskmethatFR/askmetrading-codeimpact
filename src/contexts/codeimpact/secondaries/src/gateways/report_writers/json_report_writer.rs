@@ -50,6 +50,7 @@ struct MetricsDto {
 #[derive(serde::Serialize)]
 struct FunctionDetailDto {
     name: String,
+    location: LocationDto,
     direct: u32,
     transitive: u32,
     call_depth: usize,
@@ -76,6 +77,7 @@ struct WarningDto {
     pattern: String,
     severity: String,
     function: String,
+    location: LocationDto,
     message: String,
     suggestion: String,
 }
@@ -156,6 +158,11 @@ pub fn serialize_metrics(
         .iter()
         .map(|d: &FunctionDetail| FunctionDetailDto {
             name: d.name.clone(),
+            location: LocationDto {
+                file: d.location.file_path().to_string(),
+                line: d.location.line(),
+                col: d.location.col(),
+            },
             direct: d.direct,
             transitive: d.transitive,
             call_depth: d.call_depth,
@@ -176,6 +183,11 @@ pub fn serialize_metrics(
                 pattern,
                 severity,
                 function: w.function.clone(),
+                location: LocationDto {
+                    file: w.location.file_path().to_string(),
+                    line: w.location.line(),
+                    col: w.location.col(),
+                },
                 message: w.message.clone(),
                 suggestion: w.suggestion.clone(),
             }

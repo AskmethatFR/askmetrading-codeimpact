@@ -26,7 +26,7 @@ impl CodeParser for SynCodeParser {
                 visitor.visit_block(&func.block);
                 functions.push(ParsedFunction {
                     name,
-                    start_line: 0,
+                    start_line: func.span().start().line,
                     calls: visitor.calls,
                     has_loop: visitor.has_loop,
                     has_nested_loop: visitor.has_nested_loop,

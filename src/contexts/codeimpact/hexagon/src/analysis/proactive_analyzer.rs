@@ -1,5 +1,6 @@
 use super::analysis_rule::AnalysisRule;
 use super::call_graph::CallGraph;
+use super::code_location::CodeLocation;
 use super::code_metrics::{CodeMetrics, FunctionDetail};
 use super::code_parser::CodeParser;
 use super::complexity_detector::{ComplexityDetector, DetectionConfig};
@@ -39,6 +40,7 @@ pub fn analyze(
             let in_cycle = call_graph.has_cycle(&f.name);
             FunctionDetail {
                 name: f.name.clone(),
+                location: CodeLocation::new(String::new(), f.start_line, 1),
                 direct,
                 transitive,
                 call_depth,

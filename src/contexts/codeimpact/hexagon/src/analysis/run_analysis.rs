@@ -122,7 +122,34 @@ impl RunAnalysis {
 
     fn set_file_paths(metrics: CodeMetrics, path: &PathBuf) -> CodeMetrics {
         let file_path = path.to_string_lossy().to_string();
-        let updated: Vec<IoInLoopWarning> = metrics
+
+        let updated_warnings: Vec<super::complexity_detector::ComplexityWarning> = metrics
+            .warnings()
+            .iter()
+            .map(|w| super::complexity_detector::ComplexityWarning {
+                location: CodeLocation::new(
+                    file_path.clone(),
+                    w.location.line(),
+                    w.location.col(),
+                ),
+                ..w.clone()
+            })
+            .collect();
+
+        let updated_details: Vec<super::code_metrics::FunctionDetail> = metrics
+            .function_details()
+            .iter()
+            .map(|d| super::code_metrics::FunctionDetail {
+                location: CodeLocation::new(
+                    file_path.clone(),
+                    d.location.line(),
+                    d.location.col(),
+                ),
+                ..d.clone()
+            })
+            .collect();
+
+        let updated_io: Vec<IoInLoopWarning> = metrics
             .io_in_loops()
             .iter()
             .map(|w| IoInLoopWarning {
@@ -134,11 +161,11 @@ impl RunAnalysis {
                 ..w.clone()
             })
             .collect();
-        if updated.is_empty() {
-            metrics
-        } else {
-            metrics.with_io_in_loops(updated)
-        }
+
+        metrics
+            .with_warnings(updated_warnings)
+            .with_function_details(updated_details)
+            .with_io_in_loops(updated_io)
     }
 
     pub fn handle_json(

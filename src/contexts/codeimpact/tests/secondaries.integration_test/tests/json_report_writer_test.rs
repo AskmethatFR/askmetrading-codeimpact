@@ -24,6 +24,7 @@ fn make_metrics_with_impacts() -> CodeMetrics {
     CodeMetrics::with_call_graph(5, 8, 2, vec!["foo".into()], vec![
         codeimpact_hexagon::analysis::FunctionDetail {
             name: "main".into(),
+            location: codeimpact_hexagon::analysis::CodeLocation::new("src/main.rs".into(), 1, 1),
             direct: 5,
             transitive: 8,
             call_depth: 2,
@@ -75,6 +76,9 @@ fn json_writer_produces_valid_json() {
     assert_eq!(details["transitive"], 8);
     assert_eq!(details["call_depth"], 2);
     assert_eq!(details["in_cycle"], false);
+    assert_eq!(details["location"]["file"], "src/main.rs");
+    assert_eq!(details["location"]["line"], 1);
+    assert_eq!(details["location"]["col"], 1);
 
     // Check economic impact
     let econ = &json["metrics"]["economic_impact"];

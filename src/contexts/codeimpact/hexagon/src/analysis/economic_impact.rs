@@ -144,6 +144,7 @@ impl EconomicImpactEstimator {
 #[cfg(test)]
 mod tests {
     use super::super::call_graph::CallGraph;
+    use super::super::code_location::CodeLocation;
     use super::super::code_metrics::CodeMetrics;
     use super::super::code_parser::ParsedFunction;
     use super::*;
@@ -200,6 +201,7 @@ mod tests {
                     pattern: WarningPattern::DeepConditional,
                     severity: WarningSeverity::Warning,
                     function: "foo".into(),
+                    location: CodeLocation::new(String::new(), 1, 1),
                     message: "w".into(),
                     suggestion: "s".into(),
                 },
@@ -207,6 +209,7 @@ mod tests {
                     pattern: WarningPattern::NestedLoops,
                     severity: WarningSeverity::Warning,
                     function: "bar".into(),
+                    location: CodeLocation::new(String::new(), 1, 1),
                     message: "w".into(),
                     suggestion: "s".into(),
                 },

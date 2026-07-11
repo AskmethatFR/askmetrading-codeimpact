@@ -47,6 +47,24 @@ impl ReportWriter for ConsoleReportWriter {
         println!("Fonctions avec cycle: {}", cycle_count);
         println!("Niveau: {}", metrics.complexity_level());
 
+        let details = metrics.function_details();
+        if !details.is_empty() {
+            println!();
+            println!("=== Détails par fonction ===");
+            for d in details {
+                let loc = if d.location.file_path().is_empty() {
+                    format!(":{}", d.location.line())
+                } else {
+                    d.location.to_string()
+                };
+                let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                println!(
+                    "  {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
+                    d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                );
+            }
+        }
+
         if let Some(economic) = metrics.economic_impact() {
             println!();
             println!("=== Impact économique estimé ===");
@@ -84,7 +102,12 @@ impl ReportWriter for ConsoleReportWriter {
                     WarningSeverity::Warning => "WARNING",
                     WarningSeverity::Critical => "CRITICAL",
                 };
-                println!("[{}] {} → {}", label, w.function, w.message);
+                let loc = if w.location.file_path().is_empty() {
+                    format!(":{}", w.location.line())
+                } else {
+                    w.location.to_string()
+                };
+                println!("[{}] {} → {} ({})", label, w.function, w.message, loc);
             }
             println!("========================");
         } else {
@@ -149,6 +172,14 @@ impl ReportWriter for ConsoleReportWriter {
                     metrics.transitive_complexity(),
                     metrics.complexity_level(),
                 );
+                for d in metrics.function_details() {
+                    let loc = d.location.to_string();
+                    let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                    println!(
+                        "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
+                        d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                    );
+                }
             }
         }
         println!();
