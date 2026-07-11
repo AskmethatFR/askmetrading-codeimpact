@@ -100,3 +100,21 @@ fn handle_project_json_returns_string() {
     assert!(!json.is_empty(), "JSON string should not be empty");
     assert!(json.contains("project"), "project JSON should contain target_type project");
 }
+
+#[test]
+fn handle_project_json_empty_project_returns_error() {
+    let reader = CodeReaderStub::new(); // no files added
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+
+    let result = use_case.handle_project_json(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+    );
+
+    match result {
+        Err(codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed(_)) => {}
+        _ => panic!("expected AnalysisFailed for empty project, got {:?}", result),
+    }
+}
