@@ -10,3 +10,43 @@ codeimpact_secondaries = { path = "../../secondaries" }
 [lib]
 test = false
 doctest = false
+
+[[test]]
+name = "call_graph_test"
+path = "tests/call_graph_test.rs"
+
+[[test]]
+name = "code_metrics_test"
+path = "tests/code_metrics_test.rs"
+
+[[test]]
+name = "complexity_detector_test"
+path = "tests/complexity_detector_test.rs"
+
+[[test]]
+name = "ecological_impact_test"
+path = "tests/ecological_impact_test.rs"
+
+[[test]]
+name = "economic_impact_test"
+path = "tests/economic_impact_test.rs"
+
+[[test]]
+name = "file_consumption_graph_test"
+path = "tests/file_consumption_graph_test.rs"
+
+[[test]]
+name = "proactive_analyzer_test"
+path = "tests/proactive_analyzer_test.rs"
+
+[[test]]
+name = "run_analysis_test"
+path = "tests/run_analysis_test.rs"
+
+[[test]]
+name = "run_analysis_json_test"
+path = "tests/run_analysis_json_test.rs"
+
+[[test]]
+name = "stress_test_run_test"
+path = "tests/stress_test_run_test.rs"
