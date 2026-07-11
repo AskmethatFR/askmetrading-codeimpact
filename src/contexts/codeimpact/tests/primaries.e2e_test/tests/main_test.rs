@@ -349,3 +349,76 @@ fn e2e_analyze_html_format_on_single_file_target_errors() {
     );
 }
 
+// QA branch-coverage gap fixes (US7 T1, still T1 — no new behavior):
+// 3. --format html without -o defaults the output path to ./report.html (relative to cwd)
+// 4. -o pointing at a nonexistent parent directory fails cleanly, no absolute path leak (ADR-0006)
+
+#[test]
+fn e2e_analyze_html_format_without_output_flag_defaults_to_report_html_in_cwd() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let isolated_cwd = std::env::temp_dir()
+        .join(format!("codeimpact_default_output_test_{}", std::process::id()));
+    std::fs::create_dir_all(&isolated_cwd).expect("create isolated cwd");
+    let expected_path = isolated_cwd.join("report.html");
+    let _ = std::fs::remove_file(&expected_path);
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--format", "html"])
+        .current_dir(&isolated_cwd)
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected without -o. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        expected_path.exists(),
+        "default output path ./report.html should exist in cwd {:?}",
+        isolated_cwd
+    );
+
+    let _ = std::fs::remove_file(&expected_path);
+    let _ = std::fs::remove_dir(&isolated_cwd);
+}
+
+#[test]
+fn e2e_analyze_html_format_output_to_nonexistent_dir_errors_without_path_leak() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let bogus_output = "/nonexistent_dir_xyz/report.html";
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+            "-o",
+            bogus_output,
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "exit non-zero expected when the output directory does not exist. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("/nonexistent_dir_xyz"),
+        "error message must not leak the requested absolute path (ADR-0006): {}",
+        stderr
+    );
+}
+
