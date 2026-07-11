@@ -29,6 +29,7 @@ fn graph_with_files(files: Vec<(&str, u32, u32)>) -> FileConsumptionGraph {
 // 6. JsonReportWriter.write_html returns Err (does not support html output)
 // 7. ConsoleReportWriter.write_html returns Err (does not support html output)
 // 8. SharedReportWriterStub.write_html captures last_html
+// 9. a graph with >=1 file whose complexity is 0 (max_score == 0) yields score_pct 0, no div-by-zero panic
 
 #[test]
 fn write_html_is_self_contained() {
@@ -141,4 +142,28 @@ fn stub_write_html_captures_last_html() {
 
     assert!(result.is_ok());
     assert_eq!(*stub.last_html.lock().unwrap(), Some(result.unwrap()));
+}
+
+#[test]
+fn write_html_zero_complexity_file_has_zero_score_pct_no_panic() {
+    let writer = HtmlReportWriter::new();
+    // A non-empty graph (unlike write_html_empty_graph_returns_valid_single_root_shell,
+    // which has 0 files and never exercises the ternary body at all) where every
+    // file's transitive_complexity is 0, so max_score == 0 in build_report_vm.
+    let graph = graph_with_files(vec![("src/empty.rs", 0, 0)]);
+
+    let html = writer
+        .write_html(&graph, "my-project")
+        .expect("write_html should succeed for an all-zero-complexity project, not panic on div-by-zero");
+
+    assert!(
+        html.contains("\"score\":0"),
+        "zero-complexity file should report score 0: {}",
+        html
+    );
+    assert!(
+        html.contains("\"score_pct\":0"),
+        "max_score == 0 branch must yield score_pct 0, not divide by zero: {}",
+        html
+    );
 }
