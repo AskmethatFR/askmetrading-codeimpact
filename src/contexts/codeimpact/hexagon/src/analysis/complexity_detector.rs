@@ -1,4 +1,5 @@
 use super::call_graph::CallGraph;
+use super::code_location::CodeLocation;
 use super::code_parser::ParsedFunction;
 
 /// Pattern category for a complexity warning.
@@ -26,6 +27,7 @@ pub struct ComplexityWarning {
     pub pattern: WarningPattern,
     pub severity: WarningSeverity,
     pub function: String,
+    pub location: CodeLocation,
     pub message: String,
     pub suggestion: String,
 }
@@ -90,6 +92,7 @@ impl ComplexityDetector {
                         pattern: WarningPattern::QuadraticLoop,
                         severity: WarningSeverity::Critical,
                         function: f.name.clone(),
+                        location: CodeLocation::new(String::new(), f.start_line, 1),
                         message: format!(
                             "O(n²) probable: appelle {} qui contient une boucle",
                             callee
@@ -113,6 +116,7 @@ impl ComplexityDetector {
                     pattern: WarningPattern::NestedLoops,
                     severity: WarningSeverity::Warning,
                     function: f.name.clone(),
+                    location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: "boucles imbriquées détectées".to_string(),
                     suggestion: "Extraire la boucle interne dans une fonction séparée".to_string(),
                 });
@@ -134,6 +138,7 @@ impl ComplexityDetector {
                     pattern: WarningPattern::DeepCallChain,
                     severity: WarningSeverity::Warning,
                     function: f.name.clone(),
+                    location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: format!(
                         "chaîne d'appels de {} niveaux (seuil: {})",
                         depth, config.max_call_depth
@@ -169,6 +174,7 @@ impl ComplexityDetector {
                         pattern: WarningPattern::HiddenComplexity,
                         severity: WarningSeverity::Warning,
                         function: f.name.clone(),
+                        location: CodeLocation::new(String::new(), f.start_line, 1),
                         message: format!("appelle {} qui est {:.1}x plus complexe", callee, ratio),
                         suggestion: "Extraire la logique complexe ou simplifier le callee"
                             .to_string(),
@@ -191,6 +197,7 @@ impl ComplexityDetector {
                     pattern: WarningPattern::Recursion,
                     severity: WarningSeverity::Critical,
                     function: f.name.clone(),
+                    location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: "récursion détectée".to_string(),
                     suggestion: "Remplacer la récursion par une approche itérative".to_string(),
                 });
@@ -210,6 +217,7 @@ impl ComplexityDetector {
                     pattern: WarningPattern::LargeMatch,
                     severity: WarningSeverity::Warning,
                     function: f.name.clone(),
+                    location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: format!(
                         "{} arms match (seuil: {})",
                         f.match_arms, config.max_match_arms
@@ -234,6 +242,7 @@ impl ComplexityDetector {
                     pattern: WarningPattern::DeepConditional,
                     severity: WarningSeverity::Warning,
                     function: f.name.clone(),
+                    location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: format!(
                         "{} niveaux d'imbrication conditionnelle (seuil: {})",
                         f.depth, config.max_conditional_depth
@@ -272,6 +281,23 @@ mod tests {
             depth,
             match_arms,
             calls_in_loops: vec![],
+        }
+    }
+
+    fn make_warning(
+        function: &str,
+        pattern: WarningPattern,
+        severity: WarningSeverity,
+        message: &str,
+        suggestion: &str,
+    ) -> ComplexityWarning {
+        ComplexityWarning {
+            pattern,
+            severity,
+            function: function.to_string(),
+            location: super::CodeLocation::new(String::new(), 1, 1),
+            message: message.to_string(),
+            suggestion: suggestion.to_string(),
         }
     }
 

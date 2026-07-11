@@ -1,5 +1,5 @@
 use codeimpact_hexagon::analysis::{
-    CodeMetrics, ComplexityWarning, ParsedFunction, WarningPattern, WarningSeverity,
+    CodeLocation, CodeMetrics, ComplexityWarning, ParsedFunction, WarningPattern, WarningSeverity,
 };
 
 // Test List:
@@ -19,6 +19,7 @@ fn make_warning(function: &str, severity: WarningSeverity) -> ComplexityWarning 
         pattern: WarningPattern::DeepConditional,
         severity,
         function: function.to_string(),
+        location: CodeLocation::new(String::new(), 1, 1),
         message: "test warning".to_string(),
         suggestion: "test suggestion".to_string(),
     }
