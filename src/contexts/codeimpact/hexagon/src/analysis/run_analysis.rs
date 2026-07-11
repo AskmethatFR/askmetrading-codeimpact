@@ -190,55 +190,7 @@ impl RunAnalysis {
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
     ) -> Result<String, AnalysisError> {
-        // For project-level JSON, analyze all files and produce project-level JSON
-        let files = self.code_reader.list_rust_files(target.path())?;
-        let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
-        let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
-        let crate_root = target.path().clone();
-
-        for file in &files {
-            let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
-            match self.code_reader.read_source(&file_target) {
-                Ok(source) => {
-                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
-                        Ok(metrics) => {
-                            let metrics = Self::set_file_paths(metrics, file);
-                            per_file.push((file.clone(), metrics));
-                        }
-                        Err(_) => {}
-                    }
-                    // Parse file dependencies
-                    if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
-                        for raw in &raw_deps {
-                            if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
-                                raw,
-                                file,
-                                &crate_root,
-                                &files,
-                            ) {
-                                all_deps.push(
-                                    super::file_consumption_graph::FileDependency {
-                                        from: file.clone(),
-                                        to,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-
-        // For project-level JSON, we aggregate metrics and produce JSON
-        // Use the aggregated metrics from the consumption graph
-        if per_file.is_empty() {
-            return Err(AnalysisError::AnalysisFailed(
-                "no files could be analyzed in the project".into(),
-            ));
-        }
-
-        let graph = FileConsumptionGraph::build(&per_file, all_deps)?;
+        let graph = self.build_project_graph(target, rules)?;
         let aggregated = graph.aggregated_metrics();
 
         // Build a single CodeMetrics from aggregated data for JSON serialization
@@ -260,6 +212,22 @@ impl RunAnalysis {
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
     ) -> Result<String, AnalysisError> {
+        let graph = self.build_project_graph(target, rules)?;
+        let target_str = target.path().to_string_lossy();
+        self.reporter.write_html(&graph, &target_str)
+    }
+
+    /// Walks every Rust file under `target`, analyzes it, and resolves
+    /// inter-file dependencies into a `FileConsumptionGraph`. Analysis or
+    /// parsing failures on an individual file are silently skipped (best
+    /// effort over a whole project) — shared by handle_project_json and
+    /// handle_project_html, which differ only in what they do with the
+    /// resulting graph.
+    fn build_project_graph(
+        &self,
+        target: &AnalysisTarget,
+        rules: &[AnalysisRule],
+    ) -> Result<FileConsumptionGraph, AnalysisError> {
         let files = self.code_reader.list_rust_files(target.path())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
@@ -267,34 +235,26 @@ impl RunAnalysis {
 
         for file in &files {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
-            match self.code_reader.read_source(&file_target) {
-                Ok(source) => {
-                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
-                        Ok(metrics) => {
-                            let metrics = Self::set_file_paths(metrics, file);
-                            per_file.push((file.clone(), metrics));
-                        }
-                        Err(_) => {}
-                    }
-                    if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
-                        for raw in &raw_deps {
-                            if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
-                                raw,
-                                file,
-                                &crate_root,
-                                &files,
-                            ) {
-                                all_deps.push(
-                                    super::file_consumption_graph::FileDependency {
-                                        from: file.clone(),
-                                        to,
-                                    },
-                                );
-                            }
+            if let Ok(source) = self.code_reader.read_source(&file_target) {
+                if let Ok(metrics) = proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                    let metrics = Self::set_file_paths(metrics, file);
+                    per_file.push((file.clone(), metrics));
+                }
+                if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
+                    for raw in &raw_deps {
+                        if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
+                            raw,
+                            file,
+                            &crate_root,
+                            &files,
+                        ) {
+                            all_deps.push(super::file_consumption_graph::FileDependency {
+                                from: file.clone(),
+                                to,
+                            });
                         }
                     }
                 }
-                Err(_) => {}
             }
         }
 
@@ -304,8 +264,6 @@ impl RunAnalysis {
             ));
         }
 
-        let graph = FileConsumptionGraph::build(&per_file, all_deps)?;
-        let target_str = target.path().to_string_lossy();
-        self.reporter.write_html(&graph, &target_str)
+        FileConsumptionGraph::build(&per_file, all_deps)
     }
 }
