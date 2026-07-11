@@ -109,6 +109,10 @@ fn main() {
                     }
                 }
                 OutputFormat::Html => {
+                    if !is_project {
+                        eprintln!("erreur: le format html nécessite une cible projet (--path <dossier>)");
+                        std::process::exit(1);
+                    }
                     let writer = HtmlReportWriter::new();
                     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     match use_case.handle_project_html(&target, rules) {
