@@ -321,3 +321,31 @@ fn e2e_analyze_html_format_writes_self_contained_project_view() {
     );
 }
 
+#[test]
+fn e2e_analyze_html_format_on_single_file_target_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "html"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "html format on a single-file target should fail (T1 scope: project view only). stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains(fixture.to_str().unwrap()),
+        "error message must not leak the absolute path (ADR-0006): {}",
+        stderr
+    );
+}
+
