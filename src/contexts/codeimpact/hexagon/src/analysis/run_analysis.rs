@@ -257,9 +257,55 @@ impl RunAnalysis {
 
     pub fn handle_project_html(
         &self,
-        _target: &AnalysisTarget,
-        _rules: &[AnalysisRule],
+        target: &AnalysisTarget,
+        rules: &[AnalysisRule],
     ) -> Result<String, AnalysisError> {
-        Ok(String::new())
+        let files = self.code_reader.list_rust_files(target.path())?;
+        let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
+        let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
+        let crate_root = target.path().clone();
+
+        for file in &files {
+            let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
+            match self.code_reader.read_source(&file_target) {
+                Ok(source) => {
+                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                        Ok(metrics) => {
+                            let metrics = Self::set_file_paths(metrics, file);
+                            per_file.push((file.clone(), metrics));
+                        }
+                        Err(_) => {}
+                    }
+                    if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
+                        for raw in &raw_deps {
+                            if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
+                                raw,
+                                file,
+                                &crate_root,
+                                &files,
+                            ) {
+                                all_deps.push(
+                                    super::file_consumption_graph::FileDependency {
+                                        from: file.clone(),
+                                        to,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+
+        if per_file.is_empty() {
+            return Err(AnalysisError::AnalysisFailed(
+                "no files could be analyzed in the project".into(),
+            ));
+        }
+
+        let graph = FileConsumptionGraph::build(&per_file, all_deps)?;
+        let target_str = target.path().to_string_lossy();
+        self.reporter.write_html(&graph, &target_str)
     }
 }
