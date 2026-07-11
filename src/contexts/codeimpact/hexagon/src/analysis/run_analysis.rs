@@ -254,4 +254,12 @@ impl RunAnalysis {
         self.reporter
             .write_json(&project_metrics, &target_str, "project")
     }
+
+    pub fn handle_project_html(
+        &self,
+        _target: &AnalysisTarget,
+        _rules: &[AnalysisRule],
+    ) -> Result<String, AnalysisError> {
+        Ok(String::new())
+    }
 }

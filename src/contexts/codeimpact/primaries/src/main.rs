@@ -55,8 +55,9 @@ fn main() {
             let output_format = match format.as_str() {
                 "console" => OutputFormat::Console,
                 "json" => OutputFormat::Json,
+                "html" => OutputFormat::Html,
                 _ => {
-                    eprintln!("erreur: format invalide '{}'. Formats supportés: console, json", format);
+                    eprintln!("erreur: format invalide '{}'. Formats supportés: console, json, html", format);
                     std::process::exit(1);
                 }
             };
@@ -103,6 +104,10 @@ fn main() {
                             std::process::exit(1);
                         }
                     }
+                }
+                OutputFormat::Html => {
+                    eprintln!("erreur: format html pas encore câblé au CLI");
+                    std::process::exit(1);
                 }
             }
         }

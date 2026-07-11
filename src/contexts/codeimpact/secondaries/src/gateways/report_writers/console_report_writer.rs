@@ -346,4 +346,14 @@ impl ReportWriter for ConsoleReportWriter {
         println!("==============================");
         Ok(())
     }
+
+    fn write_html(
+        &self,
+        _graph: &FileConsumptionGraph,
+        _target: &str,
+    ) -> Result<String, AnalysisError> {
+        Err(AnalysisError::AnalysisFailed(
+            "console writer does not support html output".into(),
+        ))
+    }
 }

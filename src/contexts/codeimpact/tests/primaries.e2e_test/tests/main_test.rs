@@ -321,6 +321,3 @@ fn e2e_analyze_html_format_writes_self_contained_project_view() {
     );
 }
 
-// e2e_analyze_html_format_on_file_target_errors is added once "html" is a
-// recognized format — otherwise it would pass for the wrong reason (any
-// unrecognized format already errors today), which is not a genuine RED.

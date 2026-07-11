@@ -50,3 +50,7 @@ path = "tests/run_analysis_json_test.rs"
 [[test]]
 name = "stress_test_run_test"
 path = "tests/stress_test_run_test.rs"
+
+[[test]]
+name = "run_analysis_html_test"
+path = "tests/run_analysis_html_test.rs"
