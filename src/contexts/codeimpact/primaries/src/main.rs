@@ -3,12 +3,14 @@ use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
+use codeimpact_hexagon::analysis::OutputFormat;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::RunStressTest;
 use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
+use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
 
 #[derive(Parser)]
@@ -24,6 +26,8 @@ enum Commands {
         file: Option<PathBuf>,
         #[arg(long)]
         path: Option<PathBuf>,
+        #[arg(long, default_value = "console")]
+        format: String,
     },
     StressTest {
         #[arg(long)]
@@ -35,7 +39,7 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Analyze { file, path } => {
+        Commands::Analyze { file, path, format } => {
             let file_path = match (file, path) {
                 (Some(f), None) | (None, Some(f)) => f.clone(),
                 (Some(_), Some(_)) => {
@@ -48,6 +52,15 @@ fn main() {
                 }
             };
 
+            let output_format = match format.as_str() {
+                "console" => OutputFormat::Console,
+                "json" => OutputFormat::Json,
+                _ => {
+                    eprintln!("erreur: format invalide '{}'. Formats supportés: console, json", format);
+                    std::process::exit(1);
+                }
+            };
+
             let target_type = if file_path.is_dir() {
                 TargetType::Project
             } else {
@@ -55,16 +68,41 @@ fn main() {
             };
 
             let target = AnalysisTarget::new(file_path, target_type);
+            let is_project = *target.target_type() == TargetType::Project;
             let reader = FileSystemCodeReader::new();
-            let writer = ConsoleReportWriter::new();
             let parser = SynCodeParser::new();
-            let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+            let rules = &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops];
 
-            match use_case.handle(&target, &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops]) {
-                Ok(()) => std::process::exit(0),
-                Err(e) => {
-                    eprintln!("erreur: {}", e);
-                    std::process::exit(1);
+            match output_format {
+                OutputFormat::Console => {
+                    let writer = ConsoleReportWriter::new();
+                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    match use_case.handle(&target, rules) {
+                        Ok(()) => std::process::exit(0),
+                        Err(e) => {
+                            eprintln!("erreur: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                OutputFormat::Json => {
+                    let writer = JsonReportWriter::new();
+                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let result = if is_project {
+                        use_case.handle_project_json(&target, rules)
+                    } else {
+                        use_case.handle_json(&target, rules)
+                    };
+                    match result {
+                        Ok(json) => {
+                            println!("{}", json);
+                            std::process::exit(0);
+                        }
+                        Err(e) => {
+                            eprintln!("erreur: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
                 }
             }
         }

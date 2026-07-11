@@ -12,6 +12,7 @@ mod errors;
 pub mod file_consumption_graph;
 pub mod io_in_loop_warning;
 pub mod io_in_loops_detector;
+mod output_format;
 pub mod proactive_analyzer;
 pub mod reactive_analyzer;
 mod report_writer;
@@ -37,6 +38,7 @@ pub use file_consumption_graph::{
 };
 pub use io_in_loop_warning::IoInLoopWarning;
 pub use io_in_loops_detector::IoInLoopsDetector;
+pub use output_format::OutputFormat;
 pub use proactive_analyzer::analyze;
 pub use reactive_analyzer::ReactiveAnalyzer;
 pub use report_writer::ReportWriter;

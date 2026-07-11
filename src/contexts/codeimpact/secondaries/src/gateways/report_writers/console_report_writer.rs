@@ -112,6 +112,17 @@ impl ReportWriter for ConsoleReportWriter {
         Ok(())
     }
 
+    fn write_json(
+        &self,
+        metrics: &CodeMetrics,
+        target: &str,
+        target_type: &str,
+    ) -> Result<String, AnalysisError> {
+        // ConsoleReportWriter uses same DTOs as JsonReportWriter for consistent JSON output (ADR-4.4)
+        use super::json_report_writer;
+        json_report_writer::serialize_metrics(metrics, target, target_type)
+    }
+
     fn write_project_report(
         &self,
         graph: &FileConsumptionGraph,

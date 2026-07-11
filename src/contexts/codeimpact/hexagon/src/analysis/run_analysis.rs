@@ -140,4 +140,91 @@ impl RunAnalysis {
             metrics.with_io_in_loops(updated)
         }
     }
+
+    pub fn handle_json(
+        &self,
+        target: &AnalysisTarget,
+        rules: &[AnalysisRule],
+    ) -> Result<String, AnalysisError> {
+        let source = self.code_reader.read_source(target)?;
+        let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
+        let metrics = Self::set_file_paths(metrics, target.path());
+        let target_str = target.path().to_string_lossy();
+        let target_type = if *target.target_type() == TargetType::Project {
+            "project"
+        } else {
+            "file"
+        };
+        self.reporter.write_json(&metrics, &target_str, target_type)
+    }
+
+    pub fn handle_project_json(
+        &self,
+        target: &AnalysisTarget,
+        rules: &[AnalysisRule],
+    ) -> Result<String, AnalysisError> {
+        // For project-level JSON, analyze all files and produce project-level JSON
+        let files = self.code_reader.list_rust_files(target.path())?;
+        let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
+        let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
+        let crate_root = target.path().clone();
+
+        for file in &files {
+            let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
+            match self.code_reader.read_source(&file_target) {
+                Ok(source) => {
+                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                        Ok(metrics) => {
+                            let metrics = Self::set_file_paths(metrics, file);
+                            per_file.push((file.clone(), metrics));
+                        }
+                        Err(_) => {}
+                    }
+                    // Parse file dependencies
+                    if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
+                        for raw in &raw_deps {
+                            if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
+                                raw,
+                                file,
+                                &crate_root,
+                                &files,
+                            ) {
+                                all_deps.push(
+                                    super::file_consumption_graph::FileDependency {
+                                        from: file.clone(),
+                                        to,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+
+        // For project-level JSON, we aggregate metrics and produce JSON
+        // Use the aggregated metrics from the consumption graph
+        if per_file.is_empty() {
+            return Err(AnalysisError::AnalysisFailed(
+                "no files could be analyzed in the project".into(),
+            ));
+        }
+
+        let graph = FileConsumptionGraph::build(&per_file, all_deps)?;
+        let aggregated = graph.aggregated_metrics();
+
+        // Build a single CodeMetrics from aggregated data for JSON serialization
+        let project_metrics = CodeMetrics::with_call_graph(
+            aggregated.total_cyclomatic_complexity,
+            aggregated.total_transitive_complexity,
+            aggregated.max_call_depth,
+            aggregated.files_with_cycles.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+            vec![],
+        );
+
+        let target_str = target.path().to_string_lossy();
+        self.reporter
+            .write_json(&project_metrics, &target_str, "project")
+    }
 }

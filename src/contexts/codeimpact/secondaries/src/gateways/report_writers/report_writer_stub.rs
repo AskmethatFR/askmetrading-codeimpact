@@ -13,6 +13,7 @@ pub struct SharedReportWriterStub {
     pub last_graph: Arc<Mutex<Option<FileConsumptionGraph>>>,
     pub last_stress_run: Arc<Mutex<Option<StressTestRun>>>,
     pub last_stress_impact: Arc<Mutex<Option<EconomicImpact>>>,
+    pub last_json: Arc<Mutex<Option<String>>>,
 }
 
 impl SharedReportWriterStub {
@@ -22,6 +23,7 @@ impl SharedReportWriterStub {
             last_graph: Arc::new(Mutex::new(None)),
             last_stress_run: Arc::new(Mutex::new(None)),
             last_stress_impact: Arc::new(Mutex::new(None)),
+            last_json: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -30,6 +32,20 @@ impl ReportWriter for SharedReportWriterStub {
     fn write_console(&self, metrics: &CodeMetrics) -> Result<(), AnalysisError> {
         *self.last_metrics.lock().unwrap() = Some(metrics.clone());
         Ok(())
+    }
+
+    fn write_json(
+        &self,
+        metrics: &CodeMetrics,
+        target: &str,
+        target_type: &str,
+    ) -> Result<String, AnalysisError> {
+        let json = format!(
+            r#"{{"tool":{{"name":"codeimpact","version":"0.1.0"}},"timestamp":"2026-07-11T15:30:00Z","target":"{}","target_type":"{}","metrics":{{"cyclomatic_complexity":{}}}}}"#,
+            target, target_type, metrics.cyclomatic_complexity()
+        );
+        *self.last_json.lock().unwrap() = Some(json.clone());
+        Ok(json)
     }
 
     fn write_project_report(
