@@ -4,7 +4,7 @@
 
 - **Core:** Rust (zero-dep hexagon)
 - **CLI:** `clap` derive
-- **JSON:** `serde` / `serde_json` (futur)
+- **JSON:** `serde` / `serde_json`
 - **Cross-langage:** FFI (`extern "C"` pour adapters .NET/Node.js/Java — futur)
 
 ## Principes architecturaux
@@ -31,7 +31,7 @@ hexagon → rien
 
 ### DDD Tactical
 
-- **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation
+- **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation, OutputFormat
 - **Domain Services:** ProactiveAnalyzer (statique), ReactiveAnalyzer (dynamique), EconomicImpactEstimator
 - **Pas d'Entity / Aggregate** dans le MVP (pas de persistence, pas de cycle de vie)
 
@@ -42,7 +42,7 @@ hexagon → rien
 | CodeReaderPort | FileSystemCodeReader | — |
 | ProfilerPort | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | CargoTestRunner | — |
-| ReportWriterPort | ConsoleReportWriter | JsonReportWriter |
+| ReportWriterPort | ConsoleReportWriter, JsonReportWriter | — |
 
 ### Naming conventions
 
@@ -83,6 +83,10 @@ hexagon → rien
 3. **Memory scaled by 0.0001** in total cost. Memory is cheap relative to CPU; this factor bridges the magnitude gap.
 4. **Levels mirror complexity thresholds.** Same 0–10/11–20/21–40/41+ scheme as `CodeMetrics::complexity_level()` for user consistency.
 
+## JSON Report Format
+
+`JsonReportWriter` (P0 adapter) produces JSON output via `write_json` on the `ReportWriter` port. See [[json-report-schema]] for full schema and [[ADR-0007]] for architecture decisions.
+
 ## Module structure (actuelle)
 
 ```
@@ -104,12 +108,14 @@ codeimpact/
 │       │   ├── complexity_detector.rs  # ComplexityWarning, patterns
 │       │   ├── reactive_analyzer.rs    # ReactiveAnalyzer — impact réel via stress test
 │       │   ├── stress_test_run.rs      # StressTestRun VO + TestRunnerPort trait
-│       │   └── run_stress_test.rs      # RunStressTest use case
+│       │   ├── run_stress_test.rs      # RunStressTest use case
+│       │   ├── output_format.rs        # OutputFormat enum (Console, Json)
+│       │   └── report_writer.rs        # ReportWriter port trait (write_console, write_json)
 │       ├── gateways-secondary_ports/
 │       │   ├── code_reader_port.rs     # trait
 │       │   └── report_writer_port.rs   # trait (inclut write_stress_test)
 │       └── use_cases-application_services/
-│           └── run_analysis.rs         # use case
+│           └── run_analysis.rs         # use case (handle, handle_json, handle_project_json)
 ├── secondaries/
 │   └── src/
 │       ├── lib.rs
@@ -119,16 +125,17 @@ codeimpact/
 │           │   └── code_reader_stub.rs
 │           └── report_writers/
 │               ├── console_report_writer.rs
+│               ├── json_report_writer.rs    # DTOs sérialisés + JsonReportWriter
 │               └── report_writer_stub.rs
 │           └── test_runners/
 │               ├── cargo_test_runner.rs
 │               └── test_runner_stub.rs
 ├── primaries/
-│   └── src/main.rs                     # clap CLI
+│   └── src/main.rs                     # clap CLI (--format console|json)
 └── tests/
     ├── fixtures/sample.rs
-    ├── hexagon.unit_test/              # 35 tests (VOs, analyzer, use case, economic impact, stress test)
-    ├── secondaries.integration_test/   # 6 tests (reader, writer, cargo test runner)
+    ├── hexagon.unit_test/              # 35+ tests (VOs, analyzer, use case, economic impact, stress test, handle_json)
+    ├── secondaries.integration_test/   # 6+ tests (reader, writer, JSON report writer, cargo test runner)
     └── primaries.e2e_test/             # 8 tests (CLI)
 ```
 
@@ -146,6 +153,7 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | MicroDollars | Unité de coût CPU: 1 μ$ = 10⁻⁶ $. Base: ~0.10 $/CPU-heure cloud |
 | EconomicImpactEstimator | Domain service qui calcule EconomicImpact à partir de métriques statiques |
 | EcologicalImpact | CO2/énergie dérivé de l'impact économique |
+| OutputFormat | Enum de format de sortie: Console, Json |
 | StressTestRun | Exécution d'un test existant avec instrumentation |
 | ProactiveAnalysis | Analyse statique (linter) |
 | ReactiveAnalysis | Analyse dynamique (stress test) |
@@ -157,7 +165,7 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | US1 | P0 | Analyse complexité cyclomatique | ✅ Livré |
 | US2 | P0 | Estimation impact économique (CPU/mem) | ✅ Livré |
 | US3 | P0 | Estimation impact écologique (CO2) | ✅ Livré |
-| US4 | P0 | Rapport JSON | 📋 En attente |
+| US4 | P0 | Rapport JSON | ✅ Livré |
 | US5 | P1 | Détection I/O dans boucles | ✅ Livré |
 | US6 | P1 | Stress test instrumenté | ✅ Livré |
 | US7 | P1 | Rapport HTML | 📋 En attente |
@@ -173,3 +181,4 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | 0004 | Heuristiques P0 → profiling réel P2 | ✅ Accepté |
 | 0005 | Package-by-context, package-by-layer à l'intérieur | ✅ Accepté |
 | 0006 | Sécurité: canonicalize, limite taille fichier, pas de fuite de path | ✅ Appliqué dans US1 |
+| 0007 | JSON Report Format — Output Format & Schema | ✅ Appliqué dans US4 |

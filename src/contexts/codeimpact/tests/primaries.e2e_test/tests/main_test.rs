@@ -198,3 +198,69 @@ fn e2e_analyze_sample_contains_io_in_loop() {
         stdout
     );
 }
+
+#[test]
+fn e2e_analyze_json_format_outputs_valid_json() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected for --format json. stdout: {}",
+        stdout
+    );
+
+    // Parse JSON
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("output should be valid JSON");
+    
+    // Check schema fields
+    assert_eq!(json["tool"]["name"], "codeimpact", "tool name should be codeimpact");
+    assert!(json["tool"]["version"].is_string(), "version should be present");
+    assert!(json["timestamp"].is_string(), "timestamp should be present");
+    assert_eq!(json["target_type"], "file", "target_type should be file");
+    assert!(json["metrics"]["cyclomatic_complexity"].is_number(), "cyclomatic_complexity should be present");
+    assert!(json["metrics"]["transitive_complexity"].is_number(), "transitive_complexity should be present");
+}
+
+#[test]
+fn e2e_analyze_default_format_is_console() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    // Default output should be console format (French text)
+    assert!(
+        stdout.contains("Complexité directe"),
+        "default format should be console: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_invalid_format_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "invalid"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "exit non-zero expected for invalid format");
+    assert!(
+        stderr.contains("invalide") || stderr.contains("erreur"),
+        "stderr should contain error about invalid format: {}",
+        stderr
+    );
+}
