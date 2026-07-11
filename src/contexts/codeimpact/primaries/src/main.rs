@@ -10,6 +10,7 @@ use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
+use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
 
@@ -28,6 +29,8 @@ enum Commands {
         path: Option<PathBuf>,
         #[arg(long, default_value = "console")]
         format: String,
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
     },
     StressTest {
         #[arg(long)]
@@ -39,7 +42,7 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Analyze { file, path, format } => {
+        Commands::Analyze { file, path, format, output } => {
             let file_path = match (file, path) {
                 (Some(f), None) | (None, Some(f)) => f.clone(),
                 (Some(_), Some(_)) => {
@@ -106,8 +109,27 @@ fn main() {
                     }
                 }
                 OutputFormat::Html => {
-                    eprintln!("erreur: format html pas encore câblé au CLI");
-                    std::process::exit(1);
+                    let writer = HtmlReportWriter::new();
+                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    match use_case.handle_project_html(&target, rules) {
+                        Ok(html) => {
+                            let output_path = output.clone().unwrap_or_else(|| PathBuf::from("report.html"));
+                            match write_html_report(&output_path, &html) {
+                                Ok(()) => {
+                                    println!("Rapport HTML généré: {}", output_path.display());
+                                    std::process::exit(0);
+                                }
+                                Err(msg) => {
+                                    eprintln!("erreur: {}", msg);
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("erreur: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
                 }
             }
         }
@@ -128,4 +150,23 @@ fn main() {
             }
         }
     }
+}
+
+/// Writes the HTML report to `output_path` (ADR-0006 discipline, scaled to
+/// intent: the -o path is user-chosen so path-traversal risk is low, but
+/// the parent directory is still canonicalized and error messages stay
+/// path-anonymised).
+fn write_html_report(output_path: &PathBuf, html: &str) -> Result<(), String> {
+    let parent = match output_path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    };
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| "dossier de sortie introuvable".to_string())?;
+    let file_name = output_path
+        .file_name()
+        .ok_or_else(|| "nom de fichier de sortie invalide".to_string())?;
+    let resolved_path = canonical_parent.join(file_name);
+    std::fs::write(&resolved_path, html)
+        .map_err(|_| "impossible d'écrire le fichier de sortie".to_string())
 }
