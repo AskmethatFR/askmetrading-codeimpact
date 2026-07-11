@@ -264,3 +264,63 @@ fn e2e_analyze_invalid_format_errors() {
         stderr
     );
 }
+
+// US7 T1 — HTML report walking skeleton.
+// Test List:
+// 1. --format html -o <path> on a project dir writes a self-contained HTML file showing the project view (RED first — behavioral, pins the user-observable outcome)
+// 2. --format html on a single-file target errors (T1 scope: project view only)
+
+#[test]
+fn e2e_analyze_html_format_writes_self_contained_project_view() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output_path =
+        std::env::temp_dir().join(format!("codeimpact_report_{}.html", std::process::id()));
+    let _ = std::fs::remove_file(&output_path);
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected for --format html. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let html = std::fs::read_to_string(&output_path)
+        .expect("html output file should have been created");
+    let _ = std::fs::remove_file(&output_path);
+
+    assert!(html.contains("<!DOCTYPE html>"), "missing doctype: {}", html);
+    assert_eq!(html.matches("<html").count(), 1, "expected a single html root");
+    assert!(
+        !html.contains("<link "),
+        "self-contained report must not reference an external stylesheet: {}",
+        html
+    );
+    assert!(
+        !html.contains("<script src="),
+        "self-contained report must not reference an external script: {}",
+        html
+    );
+    assert!(
+        html.contains("sample.rs"),
+        "project view should list the analyzed files: {}",
+        html
+    );
+}
+
+// e2e_analyze_html_format_on_file_target_errors is added once "html" is a
+// recognized format — otherwise it would pass for the wrong reason (any
+// unrecognized format already errors today), which is not a genuine RED.
