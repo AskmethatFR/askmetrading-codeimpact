@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AnalysisError;
@@ -31,26 +32,30 @@ impl ConsoleReportWriter {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl ReportWriter for ConsoleReportWriter {
-    fn write_console(&self, metrics: &CodeMetrics) -> Result<(), AnalysisError> {
-        println!("=== Rapport d'analyse ===");
-        println!("Complexité directe: {}", metrics.cyclomatic_complexity());
-        println!(
+    /// Write console report to a custom writer (used for testing).
+    pub fn write_console_to(
+        &self,
+        writer: &mut dyn Write,
+        metrics: &CodeMetrics,
+    ) {
+        writeln!(writer, "=== Rapport d'analyse ===").unwrap();
+        writeln!(writer, "Complexité directe: {}", metrics.cyclomatic_complexity()).unwrap();
+        writeln!(
+            writer,
             "Complexité transitive: {} (dont {} cachée dans les appels)",
             metrics.transitive_complexity(),
             metrics.hidden_complexity(),
-        );
-        println!("Profondeur d'appels max: {}", metrics.max_call_depth());
+        ).unwrap();
+        writeln!(writer, "Profondeur d'appels max: {}", metrics.max_call_depth()).unwrap();
         let cycle_count = metrics.functions_with_cycles().len();
-        println!("Fonctions avec cycle: {}", cycle_count);
-        println!("Niveau: {}", metrics.complexity_level());
+        writeln!(writer, "Fonctions avec cycle: {}", cycle_count).unwrap();
+        writeln!(writer, "Niveau: {}", metrics.complexity_level()).unwrap();
 
         let details = metrics.function_details();
         if !details.is_empty() {
-            println!();
-            println!("=== Détails par fonction ===");
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== Détails par fonction ===").unwrap();
             for d in details {
                 let loc = if d.location.file_path().is_empty() {
                     format!(":{}", d.location.line())
@@ -58,45 +63,46 @@ impl ReportWriter for ConsoleReportWriter {
                     d.location.to_string()
                 };
                 let cycle = if d.in_cycle { " [cycle]" } else { "" };
-                println!(
+                writeln!(
+                    writer,
                     "  {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
                     d.name, d.direct, d.transitive, d.call_depth, cycle, loc
-                );
+                ).unwrap();
             }
         }
 
         if let Some(economic) = metrics.economic_impact() {
-            println!();
-            println!("=== Impact économique estimé ===");
-            println!("Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars()));
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== Impact économique estimé ===").unwrap();
+            writeln!(writer, "Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars())).unwrap();
             let memory_kb = economic.memory_bytes() as f64 / 1024.0;
             if memory_kb >= 1024.0 {
-                println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
+                writeln!(writer, "Mémoire: {:.1} MB", memory_kb / 1024.0).unwrap();
             } else {
-                println!("Mémoire: {:.1} KB", memory_kb);
+                writeln!(writer, "Mémoire: {:.1} KB", memory_kb).unwrap();
             }
-            println!("Coût total: {}", format_dollars(economic.total_cost_microdollars()));
-            println!("Niveau: {}", economic.level());
+            writeln!(writer, "Coût total: {}", format_dollars(economic.total_cost_microdollars())).unwrap();
+            writeln!(writer, "Niveau: {}", economic.level()).unwrap();
         }
 
         if let Some(ecological) = metrics.ecological_impact() {
-            println!();
-            println!("=== Impact écologique estimé ===");
-            println!("CO₂: {:.1} g", ecological.co2_grams());
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== Impact écologique estimé ===").unwrap();
+            writeln!(writer, "CO₂: {:.1} g", ecological.co2_grams()).unwrap();
             let energy_joules = ecological.energy_joules();
             let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
             if energy_joules >= 1000.0 {
-                println!("Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh);
+                writeln!(writer, "Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh).unwrap();
             } else {
-                println!("Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh);
+                writeln!(writer, "Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh).unwrap();
             }
-            println!("Classe: {}", ecological.efficiency_class().label());
+            writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
         }
 
         let warnings = metrics.warnings();
         if !warnings.is_empty() {
-            println!();
-            println!("=== Avertissements ===");
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== Avertissements ===").unwrap();
             for w in warnings {
                 let label = match w.severity {
                     WarningSeverity::Warning => "WARNING",
@@ -107,31 +113,184 @@ impl ReportWriter for ConsoleReportWriter {
                 } else {
                     w.location.to_string()
                 };
-                println!("[{}] {} → {} ({})", label, w.function, w.message, loc);
+                writeln!(
+                    writer,
+                    "[{}][{:?}] {} → {} ({})",
+                    label, w.pattern, w.function, w.message, loc
+                ).unwrap();
             }
-            println!("========================");
+            writeln!(writer, "========================").unwrap();
         } else {
-            println!("========================");
+            writeln!(writer, "========================").unwrap();
         }
 
         let io_in_loops = metrics.io_in_loops();
         if !io_in_loops.is_empty() {
-            println!();
-            println!("=== I/O dans boucles ===");
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== I/O dans boucles ===").unwrap();
             for w in io_in_loops {
                 let location_str = if w.location.file_path().is_empty() {
                     format!("{}:{}", w.location.line(), w.location.col())
                 } else {
                     w.location.to_string()
                 };
-                println!(
+                writeln!(
+                    writer,
                     "[CRITICAL] {} → I/O dans boucle: {} ({})",
                     w.function, w.io_call, location_str
-                );
+                ).unwrap();
             }
-            println!("========================");
+            writeln!(writer, "========================").unwrap();
+        }
+    }
+
+    /// Write project report to a custom writer (used for testing).
+    pub fn write_project_report_to(
+        &self,
+        writer: &mut dyn Write,
+        graph: &FileConsumptionGraph,
+    ) {
+        let aggregated = graph.aggregated_metrics();
+
+        writeln!(writer, "=== Métriques par fichier ===").unwrap();
+        let per_file = graph.per_file_metrics();
+        if per_file.is_empty() {
+            writeln!(writer, "(aucun fichier analysé)").unwrap();
+            return;
         }
 
+        // Sort files for deterministic output
+        let mut sorted_files: Vec<&PathBuf> = per_file.keys().collect();
+        sorted_files.sort();
+
+        for path in &sorted_files {
+            if let Some(metrics) = per_file.get(*path) {
+                writeln!(
+                    writer,
+                    "{} — complexité directe: {}, complexité transitive: {}, niveau: {}",
+                    path.display(),
+                    metrics.cyclomatic_complexity(),
+                    metrics.transitive_complexity(),
+                    metrics.complexity_level(),
+                ).unwrap();
+                for d in metrics.function_details() {
+                    let loc = d.location.to_string();
+                    let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                    writeln!(
+                        writer,
+                        "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
+                        d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                    ).unwrap();
+                }
+                // Hidden complexity per file
+                writeln!(
+                    writer,
+                    "    complexité cachée dans les appels: {}",
+                    metrics.hidden_complexity(),
+                ).unwrap();
+                // Warnings per file
+                let warnings = metrics.warnings();
+                if !warnings.is_empty() {
+                    writeln!(writer, "    avertissements:").unwrap();
+                    for w in warnings {
+                        let label = match w.severity {
+                            WarningSeverity::Warning => "WARNING",
+                            WarningSeverity::Critical => "CRITICAL",
+                        };
+                        let loc_str = w.location.to_string();
+                        writeln!(
+                            writer,
+                            "      [{}][{:?}] {} → {} ({})",
+                            label, w.pattern, w.function, w.message, loc_str
+                        ).unwrap();
+                    }
+                }
+                // I/O in loops per file
+                let io_warnings = metrics.io_in_loops();
+                if !io_warnings.is_empty() {
+                    writeln!(writer, "    I/O dans boucles:").unwrap();
+                    for w in io_warnings {
+                        let loc_str = w.location.to_string();
+                        writeln!(
+                            writer,
+                            "      [CRITICAL] {} → I/O dans boucle: {} ({})",
+                            w.function,
+                            w.io_call,
+                            loc_str,
+                        ).unwrap();
+                    }
+                }
+            }
+        }
+        writeln!(writer).unwrap();
+
+        writeln!(writer, "=== Chaînes de consommation ===").unwrap();
+        for path in &sorted_files {
+            let chain = graph.consumption_chain(path);
+            if chain.len() > 1 {
+                let chain_str: Vec<String> = chain
+                    .iter()
+                    .map(|p| p.file_stem().unwrap().to_str().unwrap().to_string())
+                    .collect();
+                writeln!(writer, "  {} → {}", path.display(), chain_str.join(" → ")).unwrap();
+            }
+        }
+        writeln!(writer).unwrap();
+
+        writeln!(writer, "=== Cycles ===").unwrap();
+        let cycles = graph.files_with_cycles();
+        if cycles.is_empty() {
+            writeln!(writer, "  (aucun cycle détecté)").unwrap();
+        } else {
+            for path in &cycles {
+                writeln!(writer, "  {} fait partie d'un cycle de dépendances", path.display()).unwrap();
+            }
+        }
+        writeln!(writer).unwrap();
+
+        writeln!(writer, "=== Résumé du projet ===").unwrap();
+        writeln!(writer, "Fichiers analysés: {}", aggregated.total_files).unwrap();
+        writeln!(writer, "Dépendances totales: {}", graph.total_dependencies()).unwrap();
+        writeln!(writer, "Complexité directe totale: {}", aggregated.total_cyclomatic_complexity).unwrap();
+        writeln!(writer, "Complexité transitive totale: {}", aggregated.total_transitive_complexity).unwrap();
+        writeln!(writer, "Profondeur max de chaîne: {}", aggregated.max_call_depth).unwrap();
+        writeln!(writer, "Fichiers en cycle: {}", aggregated.files_with_cycles.len()).unwrap();
+
+        if let Some(economic) = &aggregated.total_economic_impact {
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== Impact économique total ===").unwrap();
+            writeln!(writer, "Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars())).unwrap();
+            let memory_kb = economic.memory_bytes() as f64 / 1024.0;
+            if memory_kb >= 1024.0 {
+                writeln!(writer, "Mémoire: {:.1} MB", memory_kb / 1024.0).unwrap();
+            } else {
+                writeln!(writer, "Mémoire: {:.1} KB", memory_kb).unwrap();
+            }
+            writeln!(writer, "Coût total: {}", format_dollars(economic.total_cost_microdollars())).unwrap();
+            writeln!(writer, "Niveau: {}", economic.level()).unwrap();
+        }
+
+        if let Some(ecological) = &aggregated.total_ecological_impact {
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== Impact écologique total ===").unwrap();
+            writeln!(writer, "CO₂: {:.1} g", ecological.co2_grams()).unwrap();
+            let energy_joules = ecological.energy_joules();
+            let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
+            if energy_joules >= 1000.0 {
+                writeln!(writer, "Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh).unwrap();
+            } else {
+                writeln!(writer, "Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh).unwrap();
+            }
+            writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
+        }
+
+        writeln!(writer, "==============================").unwrap();
+    }
+}
+
+impl ReportWriter for ConsoleReportWriter {
+    fn write_console(&self, metrics: &CodeMetrics) -> Result<(), AnalysisError> {
+        self.write_console_to(&mut std::io::stdout().lock(), metrics);
         Ok(())
     }
 
@@ -150,102 +309,7 @@ impl ReportWriter for ConsoleReportWriter {
         &self,
         graph: &FileConsumptionGraph,
     ) -> Result<(), AnalysisError> {
-        let aggregated = graph.aggregated_metrics();
-
-        println!("=== Métriques par fichier ===");
-        let per_file = graph.per_file_metrics();
-        if per_file.is_empty() {
-            println!("(aucun fichier analysé)");
-            return Ok(());
-        }
-
-        // Sort files for deterministic output
-        let mut sorted_files: Vec<&PathBuf> = per_file.keys().collect();
-        sorted_files.sort();
-
-        for path in &sorted_files {
-            if let Some(metrics) = per_file.get(*path) {
-                println!(
-                    "{} — complexité directe: {}, complexité transitive: {}, niveau: {}",
-                    path.display(),
-                    metrics.cyclomatic_complexity(),
-                    metrics.transitive_complexity(),
-                    metrics.complexity_level(),
-                );
-                for d in metrics.function_details() {
-                    let loc = d.location.to_string();
-                    let cycle = if d.in_cycle { " [cycle]" } else { "" };
-                    println!(
-                        "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                        d.name, d.direct, d.transitive, d.call_depth, cycle, loc
-                    );
-                }
-            }
-        }
-        println!();
-
-        println!("=== Chaînes de consommation ===");
-        for path in &sorted_files {
-            let chain = graph.consumption_chain(path);
-            if chain.len() > 1 {
-                let chain_str: Vec<String> = chain
-                    .iter()
-                    .map(|p| p.file_stem().unwrap().to_str().unwrap().to_string())
-                    .collect();
-                println!("  {} → {}", path.display(), chain_str.join(" → "));
-            }
-        }
-        println!();
-
-        println!("=== Cycles ===");
-        let cycles = graph.files_with_cycles();
-        if cycles.is_empty() {
-            println!("  (aucun cycle détecté)");
-        } else {
-            for path in &cycles {
-                println!("  {} fait partie d'un cycle de dépendances", path.display());
-            }
-        }
-        println!();
-
-        println!("=== Résumé du projet ===");
-        println!("Fichiers analysés: {}", aggregated.total_files);
-        println!("Dépendances totales: {}", graph.total_dependencies());
-        println!("Complexité directe totale: {}", aggregated.total_cyclomatic_complexity);
-        println!("Complexité transitive totale: {}", aggregated.total_transitive_complexity);
-        println!("Profondeur max de chaîne: {}", aggregated.max_call_depth);
-        println!("Fichiers en cycle: {}", aggregated.files_with_cycles.len());
-
-        if let Some(economic) = &aggregated.total_economic_impact {
-            println!();
-            println!("=== Impact économique total ===");
-            println!("Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars()));
-            let memory_kb = economic.memory_bytes() as f64 / 1024.0;
-            if memory_kb >= 1024.0 {
-                println!("Mémoire: {:.1} MB", memory_kb / 1024.0);
-            } else {
-                println!("Mémoire: {:.1} KB", memory_kb);
-            }
-            println!("Coût total: {}", format_dollars(economic.total_cost_microdollars()));
-            println!("Niveau: {}", economic.level());
-        }
-
-        if let Some(ecological) = &aggregated.total_ecological_impact {
-            println!();
-            println!("=== Impact écologique total ===");
-            println!("CO₂: {:.1} g", ecological.co2_grams());
-            let energy_joules = ecological.energy_joules();
-            let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
-            if energy_joules >= 1000.0 {
-                println!("Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh);
-            } else {
-                println!("Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh);
-            }
-            println!("Classe: {}", ecological.efficiency_class().label());
-        }
-
-        println!("==============================");
-
+        self.write_project_report_to(&mut std::io::stdout().lock(), graph);
         Ok(())
     }
 

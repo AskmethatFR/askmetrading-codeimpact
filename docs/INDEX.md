@@ -9,6 +9,7 @@
 | ID | Type | Title | Status | Updated | Links | Path |
 |---|---|---|---|---|---|---|
 | architecture-overview | technical | Architecture — CodeImpact | Applied | 2026-07-11 | [[ADR-0001]], [[ADR-0002]], [[ADR-0003]], [[ADR-0004]], [[ADR-0005]], [[ADR-0006]], [[ADR-0007]], [[economic-impact-estimator]], [[json-report-schema]] | docs/architecture.md |
+| console-report-enriched | technical | Console Report Format — CodeImpact (Enriched) | Applied | 2026-07-11 | [[architecture-overview]], [[json-report-schema]] | docs/technical/console-report-enriched.md |
 | economic-impact-estimator | technical | Economic Impact Estimator — Technical Rationale | Applied | 2026-07-08 | [[ADR-0004]], [[architecture-overview]] | docs/technical/economic-impact.md |
 | json-report-schema | technical | JSON Report Schema — CodeImpact | Applied | 2026-07-11 | [[ADR-0007]], [[architecture-overview]] | docs/technical/json-report-schema.md |
 | ADR-0001 | technical | Core Rust, zero-dep hexagon | Accepted | 2026-07-08 | [[architecture-overview]] | docs/ADR-0001-rust-core-hexagon.md |
@@ -22,7 +23,7 @@
 
 ## Graph Health
 
-- **Total nodes:** 11
+- **Total nodes:** 12
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅

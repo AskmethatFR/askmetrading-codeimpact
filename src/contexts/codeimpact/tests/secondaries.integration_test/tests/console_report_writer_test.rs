@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
+use codeimpact_hexagon::analysis::ComplexityWarning;
 use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::EfficiencyClass;
@@ -7,6 +8,8 @@ use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FileDependency;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::WarningPattern;
+use codeimpact_hexagon::analysis::WarningSeverity;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use std::path::PathBuf;
 
@@ -140,4 +143,95 @@ fn write_console_with_io_in_loops() {
     let metrics = CodeMetrics::new(5).with_io_in_loops(warnings);
     let result = writer.write_console(&metrics);
     assert!(result.is_ok());
+}
+
+#[test]
+fn write_console_shows_pattern_name() {
+    let writer = ConsoleReportWriter::new();
+    let warning = ComplexityWarning {
+        pattern: WarningPattern::QuadraticLoop,
+        severity: WarningSeverity::Critical,
+        function: "process_data".to_string(),
+        location: CodeLocation::new("src/lib.rs".into(), 42, 1),
+        message: "boucle quadratique détectée".to_string(),
+        suggestion: "utiliser un HashMap".to_string(),
+    };
+    let metrics = CodeMetrics::new(5).with_warnings(vec![warning]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("[CRITICAL][QuadraticLoop]"),
+        "expected [CRITICAL][QuadraticLoop] in output, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_shows_per_file_warnings() {
+    let writer = ConsoleReportWriter::new();
+    let warning = ComplexityWarning {
+        pattern: WarningPattern::NestedLoops,
+        severity: WarningSeverity::Warning,
+        function: "search".to_string(),
+        location: CodeLocation::new("src/search.rs".into(), 15, 1),
+        message: "boucles imbriquées".to_string(),
+        suggestion: "extraire la logique".to_string(),
+    };
+    let metrics = CodeMetrics::new(5).with_warnings(vec![warning]);
+    let files = vec![(path("src/search.rs"), metrics)];
+    let deps = vec![];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("NestedLoops"),
+        "expected NestedLoops in output, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_shows_per_file_io_in_loops() {
+    let writer = ConsoleReportWriter::new();
+    let io_warning = IoInLoopWarning {
+        function: "read_file".to_string(),
+        io_call: "std::fs::read".to_string(),
+        location: CodeLocation::new("src/reader.rs".into(), 10, 5),
+    };
+    let metrics = CodeMetrics::new(5).with_io_in_loops(vec![io_warning]);
+    let files = vec![(path("src/reader.rs"), metrics)];
+    let deps = vec![];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("I/O dans boucle"),
+        "expected I/O warning in output, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_no_warnings_does_not_show_section() {
+    let writer = ConsoleReportWriter::new();
+    let metrics = CodeMetrics::new(5); // no warnings, no io_in_loops
+    let files = vec![(path("src/clean.rs"), metrics)];
+    let deps = vec![];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        !output.contains("avertissements:"),
+        "should not show warnings section when no warnings, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("I/O dans boucles:"),
+        "should not show I/O section when no io_in_loops, got: {}",
+        output
+    );
 }
