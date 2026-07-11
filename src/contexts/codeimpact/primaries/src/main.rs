@@ -156,7 +156,7 @@ fn main() {
 /// intent: the -o path is user-chosen so path-traversal risk is low, but
 /// the parent directory is still canonicalized and error messages stay
 /// path-anonymised).
-fn write_html_report(output_path: &PathBuf, html: &str) -> Result<(), String> {
+fn write_html_report(output_path: &std::path::Path, html: &str) -> Result<(), String> {
     let parent = match output_path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => std::path::Path::new("."),
