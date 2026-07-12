@@ -21,11 +21,12 @@
 | ADR-0006 | technical | Sécurité — Canonicalize, Limite Taille, Pas de Fuite de Path | Applied | 2026-07-08 | [[architecture-overview]] | docs/ADR-0006-security-measures.md |
 | ADR-0007 | technical | JSON Report Format — Output Format & Schema | Applied | 2026-07-11 | [[architecture-overview]], [[json-report-schema]] | docs/ADR-0007-json-report-format.md |
 | ADR-0008 | technical | HTML Report Format — Self-Contained Output & XSS Defense | Applied | 2026-07-12 | [[architecture-overview]], [[html-report]] | docs/ADR-0008-html-report-format.md |
+| ADR-0009 | technical | CI GitHub Actions & posture supply-chain (dépôt public) | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0006]] | docs/ADR-0009-ci-supply-chain.md |
 | glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-11 | [[architecture-overview]] | docs/glossary.md |
 
 ## Graph Health
 
-- **Total nodes:** 14
+- **Total nodes:** 15
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅
