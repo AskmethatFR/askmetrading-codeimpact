@@ -185,6 +185,19 @@ impl CargoTestRunner {
             .unwrap_or_default()
     }
 
+    /// Reads `pipe` to completion, honestly bounded: past `cap` bytes,
+    /// returns Err rather than silently truncating. A silent truncation
+    /// on the BUILD stream would feed `parse_test_binary_paths` a cut-off
+    /// JSON stream — fewer binaries measured, no error — exactly the
+    /// class of quietly-incomplete result this ticket exists to kill
+    /// (#39 follow-up, Security MEDIUM).
+    fn drain_with_cap(
+        mut pipe: impl std::io::Read,
+        cap: usize,
+    ) -> Result<Vec<u8>, AnalysisError> {
+        Ok(Vec::new())
+    }
+
     /// Builds every test binary in the workspace, unmeasured, and returns
     /// their confined paths (#39: a `--workspace` build produces one test
     /// target per member, not one).
@@ -560,6 +573,34 @@ mod tests {
                 stream_redirect
             ),
         )
+    }
+
+    // Test List (drain_with_cap — bounded read, #39 follow-up / Security
+    // MEDIUM finding "unbounded in-memory buffering of child output"):
+    // 1. output within the cap -> Ok with the full bytes, unchanged
+    // 2. output over the cap -> Err, never a silently truncated Ok
+
+    #[test]
+    fn drain_with_cap_returns_full_output_within_the_cap() {
+        let data = vec![b'x'; 100];
+        let cursor = std::io::Cursor::new(data.clone());
+
+        let result = CargoTestRunner::drain_with_cap(cursor, 200);
+
+        assert_eq!(result.expect("100 bytes is within a 200-byte cap"), data);
+    }
+
+    #[test]
+    fn drain_with_cap_errors_when_output_exceeds_the_cap() {
+        let data = vec![b'x'; 300];
+        let cursor = std::io::Cursor::new(data);
+
+        let result = CargoTestRunner::drain_with_cap(cursor, 200);
+
+        assert!(
+            result.is_err(),
+            "300 bytes over a 200-byte cap must be Err, never a silently truncated Ok"
+        );
     }
 
     #[test]
