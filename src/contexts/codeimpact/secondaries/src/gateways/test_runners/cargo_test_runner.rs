@@ -190,12 +190,26 @@ impl CargoTestRunner {
         found
     }
 
+    /// Thin wrapper: probes for `/usr/bin/time` on the real filesystem and
+    /// delegates to the testable inner function. Kept separate so tests can
+    /// drive the `use_time = false` (no-sampler) path deterministically,
+    /// without depending on the host having (or lacking) `/usr/bin/time`
+    /// (#36 retry B2 — mirrors the `measure_cmd(..., use_time: bool)` seam).
     fn measure_test_binary(
         project_dir: &Path,
         binary: &Path,
         filter: Option<&str>,
     ) -> Result<StressTestRun, AnalysisError> {
         let use_time = Self::time_wrapper_available();
+        Self::measure_test_binary_with_sampler(project_dir, binary, filter, use_time)
+    }
+
+    fn measure_test_binary_with_sampler(
+        project_dir: &Path,
+        binary: &Path,
+        filter: Option<&str>,
+        use_time: bool,
+    ) -> Result<StressTestRun, AnalysisError> {
         let cmd = Self::measure_cmd(project_dir, binary, filter, use_time);
         let (elapsed, output) = Self::run_with_timeout(cmd)?;
 
