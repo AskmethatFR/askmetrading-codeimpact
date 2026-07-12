@@ -1,7 +1,26 @@
 use std::process::Command;
+use std::sync::Mutex;
 
 use codeimpact_hexagon::analysis::TestRunnerPort;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
+
+/// Every test in this file shells out to real `cargo`/`rustc` processes
+/// against its own temp crate. Rust's test harness runs tests within one
+/// binary in parallel by default, so without serialization these
+/// concurrent compiles genuinely contend for CPU/IO on the SAME host at
+/// the SAME time — self-inflicted noise (not external host load) that
+/// made an earlier version of
+/// `cargo_test_runner_excludes_build_time_from_measured_duration` flaky
+/// specifically when run as part of the full suite (a measure-phase-only
+/// timing spiking to 1350ms under contention), even though it was stable
+/// in isolation. Discovered running the mandated `cargo test --workspace`
+/// gate (#36 retry, last).
+fn lock_cargo_spawn() -> std::sync::MutexGuard<'static, ()> {
+    static CARGO_SPAWN_LOCK: Mutex<()> = Mutex::new(());
+    CARGO_SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn create_temp_crate(name: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -40,6 +59,7 @@ fn test_add_negative() {
 
 #[test]
 fn cargo_test_runner_runs_tests_and_returns_metrics() {
+    let _guard = lock_cargo_spawn();
     let crate_dir = create_temp_crate("test_crate");
 
     // Build the crate first so the test run is fast
@@ -64,6 +84,7 @@ fn cargo_test_runner_runs_tests_and_returns_metrics() {
 
 #[test]
 fn cargo_test_runner_with_filter() {
+    let _guard = lock_cargo_spawn();
     let crate_dir = create_temp_crate("test_crate_filter");
 
     let build = Command::new("cargo")
@@ -85,6 +106,7 @@ fn cargo_test_runner_with_filter() {
 
 #[test]
 fn cargo_test_runner_on_empty_crate_returns_zero() {
+    let _guard = lock_cargo_spawn();
     let crate_dir = create_temp_crate("empty_crate");
     std::fs::write(crate_dir.path().join("src/lib.rs"), "").expect("write empty lib.rs");
 
@@ -102,56 +124,97 @@ fn cargo_test_runner_on_empty_crate_returns_zero() {
     assert_eq!(result.tests_passed(), 0);
 }
 
-// #36 bug 2 — the acceptance criterion for "build is excluded from the
-// measurement". An earlier version of this test asserted an absolute bound
-// (`duration_ms < 2000`) which QA reproduced as flaky under machine load
-// (14674ms, 8067ms on a contended runner). Replaced with a relative,
-// load-tolerant comparison: run the SAME crate cold (unbuilt — `run_tests`
-// must compile it internally, unmeasured) and then warm (already built by
-// the cold call). If build time leaked into the measured window, the cold
-// duration would be dominated by the rustc compile and dwarf the warm
-// duration by an order of magnitude or more. If build time is correctly
-// excluded, both calls measure only the same two trivial assertions and
-// stay within the same order of magnitude — regardless of how loaded the
-// machine is, because contention inflates both runs together (they run
-// back-to-back on the same host under the same conditions), not just one.
+/// Injected, wall-clock (not CPU-bound) delay a `build.rs` sleeps for
+/// before compilation can proceed. A `std::thread::sleep` floor cannot be
+/// shortened by host load — contention can only push it later, never
+/// earlier — which is what makes it a safe, deterministic stand-in for
+/// "build time", unlike measuring a real `rustc` compile (see history
+/// below).
+const INJECTED_BUILD_DELAY_MS: u64 = 20_000;
+
+/// How high `duration_ms` may legitimately go for JUST running two trivial
+/// assertions. Sized well above the highest measure-phase-only timing
+/// observed while calibrating this test (a freshly linked binary's FIRST
+/// execution on this host occasionally took ~2-3s — plausibly on-access
+/// AV/EDR or Gatekeeper validation of a just-written executable, unrelated
+/// to this crate's code), while staying well below
+/// `INJECTED_BUILD_DELAY_MS`, which mutated code cannot finish under.
+const MEASURED_DURATION_THRESHOLD_MS: u64 = 8_000;
+
+fn create_temp_crate_with_slow_build(name: &str) -> tempfile::TempDir {
+    let dir = create_temp_crate(name);
+    std::fs::write(
+        dir.path().join("build.rs"),
+        format!(
+            "fn main() {{ std::thread::sleep(std::time::Duration::from_millis({INJECTED_BUILD_DELAY_MS})); }}\n"
+        ),
+    )
+    .expect("write build.rs");
+    dir
+}
+
+// #36 bug 2 / retry (last) — the acceptance criterion for "build is
+// excluded from the measurement".
+//
+// History: an earlier version asserted an absolute bound (`duration_ms <
+// 2000`), which QA reproduced as flaky under machine load. That was
+// replaced with a cold/warm RATIO (run the same crate unbuilt, then
+// already-built, compare `duration_ms` of the two). QA then mutated
+// `run_cargo_test` to fold build time back into `duration_ms` — reintroducing
+// bug 2 verbatim — and the ratio test stayed GREEN across 4 runs. Root
+// cause: the "warm" call still shells out to `cargo test --no-run` to
+// check freshness, so its `duration_ms` was dominated by cargo/rustc
+// process-spawn overhead — the SAME fixed cost that dominates a cold
+// compile of this trivial, zero-dependency crate. A THIRD attempt compared
+// `duration_ms` against an independently-measured "ground truth" (a direct,
+// test-only call to the measure phase, bypassing `run_cargo_test`
+// entirely) — a real improvement, but it still compared two REAL,
+// host-dependent timings, and under genuine contention (this file's other
+// cargo-spawning tests running concurrently) the correct-code measure
+// phase itself was observed spiking to 1350ms, well past any ratio bound
+// that also has to reject a merely-600ms-ish mutated reading. Two
+// real-world timings of the same order of magnitude can always be pushed
+// into each other's range by load — no ratio or multiplier fixes that.
+//
+// Fix: stop measuring real build time altogether. Give the temp crate a
+// `build.rs` that deliberately sleeps for a KNOWN, fixed
+// `INJECTED_BUILD_DELAY_MS` before compilation proceeds. This turns "how
+// long did the build take" from a noisy, host-dependent quantity into a
+// constant we control:
+//   - Correct code: `duration_ms` is just the measure phase (running 2
+//     trivial assertions) — a build script only runs during compilation,
+//     never during the compiled binary's execution, so it never touches
+//     this number. Calibration on this host showed at most ~3.2s for that
+//     phase, entirely due to first-execution latency of a just-linked
+//     binary (see `MEASURED_DURATION_THRESHOLD_MS`), never anywhere near
+//     `INJECTED_BUILD_DELAY_MS`.
+//   - Mutated code (build folded into `duration_ms`, #36 bug 2
+//     reintroduced): `duration_ms` includes the `cargo test --no-run`
+//     call that runs `build.rs`, so it is AT LEAST
+//     `INJECTED_BUILD_DELAY_MS` — a `sleep()` floor that contention cannot
+//     lower.
+// `MEASURED_DURATION_THRESHOLD_MS` sits in a gap neither side can cross:
+// correct code has no path to spending seconds on measure-phase-only work,
+// and mutated code cannot finish in under `INJECTED_BUILD_DELAY_MS`
+// because the sleep alone blocks that long — the two are separated by a
+// difference in KIND of work (a fixed sleep vs. running two assertions),
+// not by a margin contention could close.
 #[test]
 fn cargo_test_runner_excludes_build_time_from_measured_duration() {
-    let crate_dir = create_temp_crate("cold_warm_crate");
+    let _guard = lock_cargo_spawn();
+    let crate_dir = create_temp_crate_with_slow_build("slow_build_crate");
     let runner = CargoTestRunner::new(crate_dir.path().to_path_buf());
 
-    // Cold: crate_dir is intentionally NOT pre-built. `run_tests` must
-    // compile it internally before measuring.
-    let cold = runner
-        .run_tests(None)
-        .expect("cold run_tests should succeed");
-    assert_eq!(cold.tests_total(), 2);
-    assert_eq!(cold.tests_passed(), 2);
+    let result = runner.run_tests(None).expect("run_tests should succeed");
 
-    // Warm: same crate, now already built by the cold call above.
-    let warm = runner
-        .run_tests(None)
-        .expect("warm run_tests should succeed");
-    assert_eq!(warm.tests_total(), 2);
-    assert_eq!(warm.tests_passed(), 2);
-
-    let cold_ms = cold.duration_ms().max(1) as f64;
-    let warm_ms = warm.duration_ms().max(1) as f64;
-    let ratio = cold_ms / warm_ms;
-
-    // 30x is deliberately generous: rustc startup overhead alone puts a
-    // genuine (excluded) compile at several hundred ms to ~1-2s, while the
-    // measured run of two trivial assertions is a handful of ms — so a real
-    // regression (build time leaking into the window) produces a ratio far
-    // above this, typically 50-200x+. 30x still comfortably absorbs a noisy
-    // CI host (observed up to ~13x from transient contention during manual
-    // validation) without masking the actual regression this test exists to
-    // catch.
+    assert_eq!(result.tests_total(), 2);
+    assert_eq!(result.tests_passed(), 2);
     assert!(
-        ratio < 30.0,
-        "cold run ({cold_ms} ms) should stay within the same order of \
-         magnitude as warm run ({warm_ms} ms) — a {ratio:.1}x ratio suggests \
-         build time leaked into the measured duration"
+        result.duration_ms() < MEASURED_DURATION_THRESHOLD_MS,
+        "duration_ms ({}) should be far below the {INJECTED_BUILD_DELAY_MS}ms \
+         build.rs deliberately sleeps for — a value this high means build \
+         time leaked into the measured duration",
+        result.duration_ms()
     );
 }
 
@@ -167,6 +230,7 @@ fn cargo_test_runner_with_sampler_available_reports_measured_cpu_and_memory() {
         return;
     }
 
+    let _guard = lock_cargo_spawn();
     let crate_dir = create_temp_crate("sampled_crate");
 
     let build = Command::new("cargo")
@@ -224,6 +288,7 @@ edition = "2021"
 // measurement" scenario the check exists to prevent.
 #[test]
 fn cargo_test_runner_returns_error_when_a_workspace_member_fails_to_compile() {
+    let _guard = lock_cargo_spawn();
     let dir = tempfile::tempdir().expect("create temp dir");
     std::fs::write(
         dir.path().join("Cargo.toml"),
