@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -7,6 +8,13 @@ use codeimpact_hexagon::analysis::{
 };
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Bound on a child's buffered stdout/stderr. This repo's own
+/// `--workspace --message-format=json` build output is ~70KB — 64MB
+/// leaves three orders of magnitude of headroom for a legitimate test
+/// binary's output while still protecting the host against a runaway
+/// print loop or `--nocapture` (#39 follow-up, Security MEDIUM).
+const MAX_CHILD_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct CargoTestRunner {
     project_dir: std::path::PathBuf,
@@ -125,28 +133,43 @@ impl CargoTestRunner {
         mut cmd: Command,
         budget: Duration,
     ) -> Result<(Duration, Output), AnalysisError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
         let start = Instant::now();
         let mut child = cmd
             .spawn()
             .map_err(|e| AnalysisError::TestRunnerError(format!("impossible de lancer: {}", e)))?;
 
-        let stdout_reader = child.stdout.take().map(Self::spawn_drain_thread);
-        let stderr_reader = child.stderr.take().map(Self::spawn_drain_thread);
+        let stdout_reader = child
+            .stdout
+            .take()
+            .map(|pipe| Self::spawn_drain_thread(pipe, MAX_CHILD_OUTPUT_BYTES));
+        let stderr_reader = child
+            .stderr
+            .take()
+            .map(|pipe| Self::spawn_drain_thread(pipe, MAX_CHILD_OUTPUT_BYTES));
 
-        let status = loop {
+        // Poll for the timeout budget, but ALWAYS fall through to join the
+        // reader threads below — on every path, success or failure — so
+        // no exit path leaves a reader thread (and its pipe FD) leaked
+        // (#39 follow-up, Security MEDIUM/LOW).
+        let status_result = loop {
             if start.elapsed() > budget {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AnalysisError::TestRunnerError(
+                Self::kill_child_and_group(&mut child);
+                break Err(AnalysisError::TestRunnerError(
                     "le processus a dépassé le timeout de 300s".into(),
                 ));
             }
             match child.try_wait() {
-                Ok(Some(status)) => break status,
+                Ok(Some(status)) => break Ok(status),
                 Ok(None) => std::thread::sleep(Duration::from_millis(100)),
                 Err(e) => {
-                    let _ = child.kill();
-                    return Err(AnalysisError::TestRunnerError(format!(
+                    Self::kill_child_and_group(&mut child);
+                    break Err(AnalysisError::TestRunnerError(format!(
                         "processus interrompu: {}",
                         e
                     )));
@@ -157,32 +180,77 @@ impl CargoTestRunner {
         let elapsed = start.elapsed();
         let stdout = Self::join_drain_thread(stdout_reader);
         let stderr = Self::join_drain_thread(stderr_reader);
+
+        let status = status_result?;
         Ok((
             elapsed,
             Output {
                 status,
-                stdout,
-                stderr,
+                stdout: stdout?,
+                stderr: stderr?,
             },
         ))
     }
 
-    /// Spawns a thread that reads a child's pipe to completion, off the
-    /// poll loop's critical path.
-    fn spawn_drain_thread(
-        mut pipe: impl std::io::Read + Send + 'static,
-    ) -> std::thread::JoinHandle<Vec<u8>> {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
-            buf
-        })
+    /// Kills the child AND (best effort) its whole process group, then
+    /// ALWAYS reaps it (`wait()`) so it never lingers as a zombie. Used
+    /// identically on the timeout branch and the `try_wait()`-error
+    /// branch, so both get the exact same discipline (#39 follow-up,
+    /// Security LOW).
+    fn kill_child_and_group(child: &mut std::process::Child) {
+        #[cfg(unix)]
+        Self::kill_process_group(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
-    fn join_drain_thread(reader: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
-        reader
-            .map(|handle| handle.join().unwrap_or_default())
-            .unwrap_or_default()
+    /// Best-effort defense against a grandchild process inheriting the
+    /// pipe's write end and holding it open after the direct child is
+    /// killed — that would otherwise block the reader thread's read
+    /// forever, waiting for an EOF that never comes (#39 follow-up,
+    /// Security MEDIUM). `run_with_timeout_with_budget` places the child
+    /// in its own process group (`process_group(0)`); signalling the
+    /// NEGATIVE pid here reaches every process in that group, not just
+    /// the direct child. This is defense in depth, not a hard guarantee:
+    /// a grandchild that calls `setsid()` to leave the group can still
+    /// evade it — closing that gap fully needs OS-level cgroup/job-object
+    /// confinement, out of scope here.
+    #[cfg(unix)]
+    fn kill_process_group(pid: u32) {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        const SIGKILL: i32 = 9;
+        unsafe {
+            kill(-(pid as i32), SIGKILL);
+        }
+    }
+
+    /// Spawns a thread that reads a child's pipe to completion — bounded
+    /// by `cap` — off the poll loop's critical path.
+    fn spawn_drain_thread(
+        pipe: impl std::io::Read + Send + 'static,
+        cap: usize,
+    ) -> std::thread::JoinHandle<Result<Vec<u8>, AnalysisError>> {
+        std::thread::spawn(move || Self::drain_with_cap(pipe, cap))
+    }
+
+    /// Joins a reader thread, surfacing BOTH kinds of failure honestly
+    /// instead of silently defaulting to an empty buffer: the reader's
+    /// own `Err` (cap exceeded, io error) and the thread having panicked.
+    /// A read error must not silently become "the child printed nothing"
+    /// (#39 follow-up, Security LOW/MEDIUM).
+    fn join_drain_thread(
+        reader: Option<std::thread::JoinHandle<Result<Vec<u8>, AnalysisError>>>,
+    ) -> Result<Vec<u8>, AnalysisError> {
+        match reader {
+            Some(handle) => handle.join().unwrap_or_else(|_| {
+                Err(AnalysisError::TestRunnerError(
+                    "le thread de lecture de la sortie du processus a paniqué".into(),
+                ))
+            }),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Reads `pipe` to completion, honestly bounded: past `cap` bytes,
@@ -191,11 +259,25 @@ impl CargoTestRunner {
     /// JSON stream — fewer binaries measured, no error — exactly the
     /// class of quietly-incomplete result this ticket exists to kill
     /// (#39 follow-up, Security MEDIUM).
-    fn drain_with_cap(
-        mut pipe: impl std::io::Read,
-        cap: usize,
-    ) -> Result<Vec<u8>, AnalysisError> {
-        Ok(Vec::new())
+    fn drain_with_cap(mut pipe: impl std::io::Read, cap: usize) -> Result<Vec<u8>, AnalysisError> {
+        let mut buf = Vec::new();
+        (&mut pipe)
+            .take(cap as u64 + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| {
+                AnalysisError::TestRunnerError(format!(
+                    "lecture de la sortie du processus impossible: {}",
+                    e
+                ))
+            })?;
+
+        if buf.len() > cap {
+            return Err(AnalysisError::TestRunnerError(
+                "le processus a produit plus de sortie que la limite autorisée".into(),
+            ));
+        }
+
+        Ok(buf)
     }
 
     /// Builds every test binary in the workspace, unmeasured, and returns
@@ -600,6 +682,57 @@ mod tests {
         assert!(
             result.is_err(),
             "300 bytes over a 200-byte cap must be Err, never a silently truncated Ok"
+        );
+    }
+
+    // Test List (spawn_drain_thread / join_drain_thread — wiring the cap
+    // and surfacing failures honestly instead of swallowing them into an
+    // empty buffer, #39 follow-up / Security MEDIUM+LOW):
+    // 1. spawn_drain_thread enforces the cap it is given (not just the
+    //    pure drain_with_cap function in isolation — the actual thread
+    //    wiring production code uses)
+    // 2. join_drain_thread propagates a reader's Err instead of turning
+    //    it into a silent empty Vec
+    // 3. join_drain_thread propagates a reader thread PANIC as an Err too
+    //    — not just an io/cap error inside the thread
+
+    #[test]
+    fn spawn_drain_thread_propagates_the_cap_error() {
+        let data = vec![b'x'; 300];
+        let cursor = std::io::Cursor::new(data);
+
+        let handle = CargoTestRunner::spawn_drain_thread(cursor, 200);
+        let result = CargoTestRunner::join_drain_thread(Some(handle));
+
+        assert!(
+            result.is_err(),
+            "the thread wiring must enforce the cap it was given, not just the pure function"
+        );
+    }
+
+    #[test]
+    fn join_drain_thread_propagates_a_reader_error() {
+        let handle = std::thread::spawn(|| Err(AnalysisError::TestRunnerError("boom".into())));
+
+        let result = CargoTestRunner::join_drain_thread(Some(handle));
+
+        assert!(
+            result.is_err(),
+            "a reader thread's Err must not be silently swallowed into an empty buffer"
+        );
+    }
+
+    #[test]
+    fn join_drain_thread_propagates_a_reader_panic() {
+        let handle = std::thread::spawn(|| -> Result<Vec<u8>, AnalysisError> {
+            panic!("simulated reader thread panic");
+        });
+
+        let result = CargoTestRunner::join_drain_thread(Some(handle));
+
+        assert!(
+            result.is_err(),
+            "a reader thread PANIC must not be silently swallowed into an empty buffer"
         );
     }
 
