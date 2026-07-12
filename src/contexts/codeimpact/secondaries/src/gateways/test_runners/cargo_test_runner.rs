@@ -226,6 +226,21 @@ impl CargoTestRunner {
         Ok(canonical_candidate)
     }
 
+    /// Confines every candidate binary from a `--workspace` build (#39).
+    /// Fails closed on the first rejection: a hostile candidate does not
+    /// get silently dropped while the good ones proceed — the whole run
+    /// is rejected, mirroring the single-binary discipline above applied
+    /// to a batch.
+    fn confine_all(
+        project_dir: &Path,
+        candidates: &[PathBuf],
+    ) -> Result<Vec<PathBuf>, AnalysisError> {
+        candidates
+            .iter()
+            .map(|candidate| Self::confine_to_target_dir(project_dir, candidate))
+            .collect()
+    }
+
     /// Thin wrapper: probes for `/usr/bin/time` on the real filesystem and
     /// delegates to the testable inner function. Kept separate so tests can
     /// drive the `use_time = false` (no-sampler) path deterministically,
@@ -643,6 +658,68 @@ mod tests {
         let result = CargoTestRunner::confine_to_target_dir(project.path(), &missing_candidate);
 
         assert!(result.is_err());
+    }
+
+    // Test List (confine_all — batch confinement across N binaries, #39):
+    // 16. every candidate inside target -> Ok with N canonical paths
+    // 17. one candidate outside target -> Err, the whole run rejected
+    // 18. the rejection error message leaks no path (ADR-0006)
+
+    #[test]
+    fn confine_all_accepts_every_candidate_inside_target() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        let target_dir = project.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        let binary_a = target_dir.join("alpha-abc123");
+        let binary_b = target_dir.join("beta-def456");
+        std::fs::write(&binary_a, b"").expect("write fake binary");
+        std::fs::write(&binary_b, b"").expect("write fake binary");
+
+        let result = CargoTestRunner::confine_all(
+            project.path(),
+            &[binary_a.clone(), binary_b.clone()],
+        );
+
+        let confined = result.expect("both candidates are inside target");
+        assert_eq!(confined.len(), 2);
+    }
+
+    #[test]
+    fn confine_all_rejects_the_whole_run_when_any_candidate_is_outside_target() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        let target_dir = project.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        let inside = target_dir.join("alpha-abc123");
+        std::fs::write(&inside, b"").expect("write fake binary");
+        let outside_dir = tempfile::tempdir().expect("create temp dir");
+        let outside = outside_dir.path().join("evil-binary");
+        std::fs::write(&outside, b"").expect("write fake binary");
+
+        let result = CargoTestRunner::confine_all(project.path(), &[inside, outside]);
+
+        assert!(
+            result.is_err(),
+            "expected the whole run to be rejected when any candidate is outside target"
+        );
+    }
+
+    #[test]
+    fn confine_all_rejection_message_leaks_no_path() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        let target_dir = project.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        let inside = target_dir.join("alpha-abc123");
+        std::fs::write(&inside, b"").expect("write fake binary");
+        let outside_dir = tempfile::tempdir().expect("create temp dir");
+        let outside = outside_dir.path().join("evil-binary");
+        std::fs::write(&outside, b"").expect("write fake binary");
+
+        let err = CargoTestRunner::confine_all(project.path(), &[inside, outside.clone()])
+            .expect_err("should be rejected");
+
+        let message = err.to_string();
+        assert!(!message.contains(&outside.to_string_lossy().to_string()));
+        assert!(!message.contains(&outside_dir.path().to_string_lossy().to_string()));
     }
 
     #[test]
