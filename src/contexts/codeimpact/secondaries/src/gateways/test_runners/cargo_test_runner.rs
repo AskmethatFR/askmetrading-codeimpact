@@ -313,6 +313,12 @@ impl CargoTestRunner {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
+        if !Self::has_test_summary_line(&stdout) {
+            return Err(AnalysisError::TestRunnerError(
+                "le binaire de test ne s'est pas terminé normalement".into(),
+            ));
+        }
+
         let (cpu_time_ms, memory_kb) = if use_time {
             (
                 Self::parse_cpu_time(&stderr)
@@ -419,6 +425,19 @@ impl CargoTestRunner {
             }
         }
         None
+    }
+
+    /// A libtest binary that ran to completion — pass, fail, or zero
+    /// tests — always prints a `test result: ...` summary line. A binary
+    /// that crashed mid-harness (SIGSEGV, `abort()`, a panic that kills
+    /// the process before the summary) prints none. This, not the exit
+    /// status, is the discriminator: a binary with FAILING tests exits
+    /// non-zero on its ordinary, nominal path and must stay measurable
+    /// (#39 follow-up — Dev B).
+    fn has_test_summary_line(stdout: &str) -> bool {
+        stdout
+            .lines()
+            .any(|line| line.trim().starts_with("test result"))
     }
 
     fn parse_test_results(stdout: &str) -> (u32, u32) {
