@@ -245,24 +245,32 @@ impl CargoTestRunner {
     }
 
     /// Spawns a thread that reads a child's pipe to completion — bounded
-    /// by `cap` — off the poll loop's critical path.
+    /// by `cap` — off the poll loop's critical path. Reports back through
+    /// a channel rather than a `JoinHandle` so `join_drain_thread` can
+    /// bound how long it waits (see there).
     fn spawn_drain_thread(
         pipe: impl std::io::Read + Send + 'static,
         cap: usize,
-    ) -> std::thread::JoinHandle<Result<Vec<u8>, AnalysisError>> {
-        std::thread::spawn(move || Self::drain_with_cap(pipe, cap))
+    ) -> std::sync::mpsc::Receiver<Result<Vec<u8>, AnalysisError>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(Self::drain_with_cap(pipe, cap));
+        });
+        rx
     }
 
-    /// Joins a reader thread, surfacing BOTH kinds of failure honestly
-    /// instead of silently defaulting to an empty buffer: the reader's
-    /// own `Err` (cap exceeded, io error) and the thread having panicked.
-    /// A read error must not silently become "the child printed nothing"
-    /// (#39 follow-up, Security LOW/MEDIUM).
+    /// Waits for a reader thread's result, surfacing BOTH kinds of
+    /// failure honestly instead of silently defaulting to an empty
+    /// buffer: the reader's own `Err` (cap exceeded, io error) and the
+    /// thread having panicked (dropping its sender without ever
+    /// sending — surfaced as a disconnected channel). A read error must
+    /// not silently become "the child printed nothing" (#39 follow-up,
+    /// Security LOW/MEDIUM).
     fn join_drain_thread(
-        reader: Option<std::thread::JoinHandle<Result<Vec<u8>, AnalysisError>>>,
+        reader: Option<std::sync::mpsc::Receiver<Result<Vec<u8>, AnalysisError>>>,
     ) -> Result<Vec<u8>, AnalysisError> {
         match reader {
-            Some(handle) => handle.join().unwrap_or_else(|_| {
+            Some(rx) => rx.recv().unwrap_or_else(|_| {
                 Err(AnalysisError::TestRunnerError(
                     "le thread de lecture de la sortie du processus a paniqué".into(),
                 ))
@@ -719,8 +727,8 @@ mod tests {
         let data = vec![b'x'; 300];
         let cursor = std::io::Cursor::new(data);
 
-        let handle = CargoTestRunner::spawn_drain_thread(cursor, 200);
-        let result = CargoTestRunner::join_drain_thread(Some(handle));
+        let rx = CargoTestRunner::spawn_drain_thread(cursor, 200);
+        let result = CargoTestRunner::join_drain_thread(Some(rx));
 
         assert!(
             result.is_err(),
@@ -730,9 +738,11 @@ mod tests {
 
     #[test]
     fn join_drain_thread_propagates_a_reader_error() {
-        let handle = std::thread::spawn(|| Err(AnalysisError::TestRunnerError("boom".into())));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err(AnalysisError::TestRunnerError("boom".into())))
+            .expect("send into a channel with no dropped receiver");
 
-        let result = CargoTestRunner::join_drain_thread(Some(handle));
+        let result = CargoTestRunner::join_drain_thread(Some(rx));
 
         assert!(
             result.is_err(),
@@ -742,16 +752,63 @@ mod tests {
 
     #[test]
     fn join_drain_thread_propagates_a_reader_panic() {
-        let handle = std::thread::spawn(|| -> Result<Vec<u8>, AnalysisError> {
+        // A thread that panics before calling tx.send drops its sender
+        // on unwind — the receiver observes exactly this disconnected
+        // state. Spawning a real panicking thread that owns `tx` proves
+        // the actual mechanism spawn_drain_thread relies on, not just a
+        // manual std::mem::drop standing in for it.
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, AnalysisError>>();
+        let handle = std::thread::spawn(move || {
+            let _keep_tx_alive_until_panic = &tx;
             panic!("simulated reader thread panic");
         });
+        let _ = handle.join();
 
-        let result = CargoTestRunner::join_drain_thread(Some(handle));
+        let result = CargoTestRunner::join_drain_thread(Some(rx));
 
         assert!(
             result.is_err(),
             "a reader thread PANIC must not be silently swallowed into an empty buffer"
         );
+    }
+
+    // Test List (join_drain_thread — bounded wait, #39 follow-up /
+    // Security HIGH): a reader thread that is genuinely still alive and
+    // connected, but stuck (e.g. blocked reading a pipe a setsid'd
+    // grandchild holds open — see
+    // run_with_timeout_with_budget_does_not_hang_when_a_grandchild_holds_the_pipe_open),
+    // must not block join_drain_thread forever. Bounded via an outer
+    // watchdog channel so THIS test cannot hang the suite even if the
+    // bound regresses.
+    // 1. a receiver that never receives (sender kept alive, connected,
+    //    just never sends) -> join_drain_thread still returns, as an
+    //    Err, within a sane wall-clock bound — not "never"
+
+    #[test]
+    fn join_drain_thread_times_out_instead_of_blocking_forever() {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, AnalysisError>>();
+        // Keep `tx` alive for the whole test: the channel stays
+        // connected (this is NOT the disconnected/panic case above) —
+        // it simply never receives, exactly like a reader thread stuck
+        // in read() on a pipe that will never see EOF.
+
+        let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = CargoTestRunner::join_drain_thread(Some(rx));
+            let _ = watchdog_tx.send(result);
+        });
+
+        let result = watchdog_rx.recv_timeout(Duration::from_secs(20)).expect(
+            "join_drain_thread did not return within 20s — an unbounded wait on a reader \
+             that never completes blocks the whole tool forever",
+        );
+
+        assert!(
+            result.is_err(),
+            "a reader that never completes must eventually be reported as an error, \
+             not block forever nor silently return Ok"
+        );
+        drop(tx);
     }
 
     #[test]
