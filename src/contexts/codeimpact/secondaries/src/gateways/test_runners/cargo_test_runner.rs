@@ -190,6 +190,22 @@ impl CargoTestRunner {
         found
     }
 
+    /// Confines a candidate binary path to `project_dir/target` before it is
+    /// ever executed (#36 retry B3). `cargo ... --message-format=json`
+    /// reports an `executable` path that this process later re-executes in a
+    /// separate `Command::new(binary)` call — a TOCTOU window a hostile
+    /// `.cargo/config.toml` (`[build] target-dir = <outside path>`, pure repo
+    /// content, no code execution needed) can steer outside the project.
+    /// Mirrors the canonicalize-then-confine discipline `FileSystemCodeReader`
+    /// already applies to mere reads (ADR-0006) — executing is strictly more
+    /// dangerous than reading, so it gets the same discipline.
+    fn confine_to_target_dir(
+        _project_dir: &Path,
+        candidate: &Path,
+    ) -> Result<PathBuf, AnalysisError> {
+        Ok(candidate.to_path_buf())
+    }
+
     /// Thin wrapper: probes for `/usr/bin/time` on the real filesystem and
     /// delegates to the testable inner function. Kept separate so tests can
     /// drive the `use_time = false` (no-sampler) path deterministically,
@@ -498,6 +514,54 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&script, perms).expect("make fake test binary executable");
         script
+    }
+
+    // Test List (confine_to_target_dir — reject an executable path outside
+    // project_dir/target, #36 retry B3 / TOCTOU hardening):
+    // 1. candidate inside project_dir/target -> accepted
+    // 2. candidate outside project_dir/target -> rejected
+    // 3. the rejection error message leaks no path (ADR-0006)
+
+    #[test]
+    fn confine_to_target_dir_accepts_path_inside_target() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        let target_dir = project.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        let binary = target_dir.join("mycrate-abc123");
+        std::fs::write(&binary, b"").expect("write fake binary");
+
+        let result = CargoTestRunner::confine_to_target_dir(project.path(), &binary);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn confine_to_target_dir_rejects_path_outside_target() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let outside = tempfile::tempdir().expect("create temp dir");
+        let outside_binary = outside.path().join("evil-binary");
+        std::fs::write(&outside_binary, b"").expect("write fake binary");
+
+        let result = CargoTestRunner::confine_to_target_dir(project.path(), &outside_binary);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn confine_to_target_dir_rejection_message_leaks_no_path() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let outside = tempfile::tempdir().expect("create temp dir");
+        let outside_binary = outside.path().join("evil-binary");
+        std::fs::write(&outside_binary, b"").expect("write fake binary");
+
+        let err = CargoTestRunner::confine_to_target_dir(project.path(), &outside_binary)
+            .expect_err("should be rejected");
+
+        let message = err.to_string();
+        assert!(!message.contains(&outside_binary.to_string_lossy().to_string()));
+        assert!(!message.contains(&outside.path().to_string_lossy().to_string()));
     }
 
     #[test]
