@@ -51,25 +51,58 @@ captures `last_html` for tests.
 
 ## View-model (presentation DTOs, secondaries only)
 
-`#[derive(Serialize)]` DTOs beside the adapter — never on hexagon types (ADR-8.4):
+`#[derive(Serialize)]` DTOs beside the adapter — never on hexagon types (ADR-8.4).
+Since T2 the island carries a **flat node map** (project + folders + files), not a
+file list:
 
 ```rust
-struct ReportVm  { project: ProjectVm, files: Vec<FileNodeVm> }
-struct ProjectVm { target: String, file_count: usize }
-struct FileNodeVm {
+struct ReportVm  { project: ProjectVm, stats: Vec<StatVm>, nodes: Vec<NodeVm> }
+struct ProjectVm { target: String, tool: String }
+struct StatVm    { label: String, value: String, sub: String }   // exactly 8, fixed order
+
+struct NodeVm {
+    id: String,                 // "" = root | "hexagon/src" | "hexagon/src/main.rs"
+    name: String,
+    kind: String,               // "project" | "folder" | "file"   — closed set
     path: String,
-    kind_label: String,   // T1: constant "FILE" (no per-file kind on the graph yet)
-    score: u32,           // = transitive_complexity() — display heuristic (AD-4)
-    score_pct: u8,        // score normalised to project max (bar width); 0 when max_score == 0
-    level_label: String,  // = complexity_level()
+    child_ids: Vec<String>,     // pre-sorted; empty for files
+    score: u32,                 // = transitive_complexity() — display heuristic (ADR-8.8)
+    level: String,              // "low"|"moderate"|"high"|"critical" — closed set
+    metrics: Vec<MetricVm>,     // always 4: direct, transitive, hidden, depth
+    functions: Vec<FunctionVm>, // files only
+    warnings: Vec<WarningVm>,
+    ios: Vec<IoVm>,
+    economic:   Option<EconomicVm>,
+    ecological: Option<EcologicalVm>,
 }
 ```
 
-`build_report_vm(graph, target)` iterates `graph.per_file_metrics()`, computes
-the project max score for bar normalisation, and sorts files by path. Score is
-`transitive_complexity()` — **a display heuristic, not a new domain metric**
-(ADR-8.8): inventing a scoring concept would leak business logic into the
-adapter (ca-layering).
+**The tree, the aggregation, the thresholds, the bar percentages and the number
+formatting are all computed in Rust** (`html/view_model.rs`), never in JS — see
+ADR-8.10. The JS is left as a pure `VM → DOM` projection with no arithmetic and no
+branching on data, which is what makes the XSS defense auditable.
+
+**Aggregation rule** (postorder; a folder has no `CodeMetrics` of its own):
+
+| Field | Rule |
+|---|---|
+| direct / transitive / hidden | **Σ** children |
+| max call depth, `score` | **max** children (a depth is a max, never a sum) |
+| `level` | **max** of descendant file `complexity_level()` by ordinal `low < moderate < high < critical` (ADR-8.8 addendum) |
+| `warnings` / `ios` | concat of all descendants, depth-first |
+| `economic` / `ecological` | **fold of the children's domain values** via `EconomicImpact::add` / `EcologicalImpact::add` — never a fabricated coefficient (ADR-8.8 addendum) |
+
+`EcologicalImpact::add` re-derives `EfficiencyClass::from_co2(Σ co2)`, so a folder's
+eco class is recomputed from the summed CO₂ rather than copied from a child.
+
+Bar percentages: `pct(v, scale) = 0` when `v == 0 || scale == 0`, else
+`clamp(round(v / scale * 100), 5, 100)` — the 5 % floor keeps a non-zero value
+visible, the `scale == 0` guard is the div-by-zero case.
+
+`target` is **canonicalized** before the file paths are stripped against it. Without
+this, the raw CLI path never matches the paths `FileSystemCodeReader` canonicalizes,
+and the tree degenerates into a single-child folder chain from the filesystem root
+(found by dogfooding, fixed in `ba99529`).
 
 ## Document structure & rendering
 
@@ -85,8 +118,39 @@ adapter (ca-layering).
 - `CSS`, `JS` are static Rust `const` string literals (no runtime template engine, ADR-8.3).
 - The data island = `serde_json::to_string(vm)` passed through `json_island_escape`.
 - The inline JS `JSON.parse`s the island and builds the DOM: every code-derived
-  value (`file.path`, `file.kind_label`, `file.level_label`, `data.project.target`)
-  is written via `textContent`/`createElement` — **never `innerHTML`**.
+  value is written via `textContent`/`createElement` — **never `innerHTML`**.
+
+Layout (design option **1a "Inspector"**, "Industry" design system): project banner,
+8-tile stat grid, then a split pane = file-tree sidebar (expand/collapse, per-node
+score + severity swatch) + node-detail pane. Fonts are Barlow / Barlow Condensed,
+embedded as base64 `@font-face` (ADR-8.11).
+
+## Rendering discipline (ADR-8.10)
+
+T2's DOM is ~10× bigger and far more dynamic than T1's flat table, so "remember to
+use `textContent`" is not a defense. Four mechanically-enforced rules:
+
+1. **One node factory.** `el(tag, cls, text)` — `textContent` is the *only* way data
+   enters the DOM.
+2. **Colours are CSS classes, resolved through closed whitelists.** `level`,
+   `severity` and eco-`class` are closed enums produced by an exhaustive Rust `match`;
+   the JS resolves them with `Object.prototype.hasOwnProperty.call(map, key)` + a
+   fallback. Data never becomes a style string. (The reference design markup is full
+   of `style="…{{ interpolated }}…"` — a sink T1 did not have. It was deliberately
+   **not** ported.)
+3. **Exactly two numeric `.style` sinks** in the whole file — `style.width` (bar %)
+   and `style.paddingLeft` (tree indent) — each `Number()`-coerced, `isFinite`-checked
+   and clamped.
+4. **Total ban** on `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write` /
+   `setAttribute` / `eval(` / `new Function` / `javascript:` / `srcdoc` / `cssText`.
+   Handlers are wired only via `addEventListener` + closure.
+
+Rules 3 and 4 are pinned by two structural tests (`rendered_js_has_only_two_style_sinks`,
+`rendered_js_contains_no_html_sink`) so a violation fails the build rather than ships.
+**Known gate weakness**: both match literal substrings, so a sink reached by string
+concatenation (`node["inner" + "HTML"]`) or bracket notation (`node["style"]["cssText"]`)
+slips through — demonstrated by the Security audit on #27. The shipped JS uses neither
+pattern; hardening the gates is tracked separately.
 
 ## Security — XSS defense (the load-bearing decision)
 
@@ -106,26 +170,45 @@ Two layers (ADR-8.5 / ADR-8.6):
 
 CSP is not applicable to a `file://` document — the two layers above are the
 whole defense, and were judged sufficient (Security: 0 critical/high/medium).
-Verified live end-to-end with a real file named with an `<img onerror>` payload
-(neutralised as text), plus an independent mutation check: bypassing
-`json_island_escape` fails exactly the 2 breakout integration tests, proving the
-tests bite.
+
+Re-verified at T2, after the renderer was fully rewritten:
+- The emitted JS was executed in jsdom against an adversarial data island — payloads
+  in every text field, `__proto__` / `constructor` keys in every whitelist-resolved
+  field, `NaN` / `Infinity` / `"100; background:url(evil)"` in every numeric field.
+  Zero code execution, zero markup parsed, `Object.prototype` unpolluted, clamps held.
+- **Mutation check**: replacing `json_island_escape`'s body with the identity fails
+  **13 tests** (7 unit + 6 integration payload-injection tests covering file path,
+  folder name, function name, warning message, suggestion, I/O call). The defense is
+  real, not decorative.
 
 **Accepted risk (LOW, A01/CWE-22)**: `-o ../x.html` writes outside cwd. No trust
 boundary crossed (local single-user CLI). Documented, not fixed (ADR-8.9).
+
+**Accepted disclosure (INFO, CWE-200)**: file nodes display the absolute canonicalized
+path, so a shared report leaks the username and directory layout. **Pre-existing since
+T1** (the same value sat in a table cell); T2 does not introduce or worsen it. ADR-8.9's
+path-anonymisation covers the `-o` *error message*, not the report body.
+
+**Known limit (INFO, CWE-400)**: a warning is cloned into every ancestor folder node,
+so a pathologically deep, narrow tree tends toward O(depth²) warning bytes in the island.
+Bounded severity — local single-user CLI, the cost is paid by the user themselves.
 
 ## Staged delivery (US7)
 
 | Slice | Scope | Status |
 |---|---|---|
 | **T1** | Walking skeleton: port + `OutputFormat::Html` + adapter, **project view** (file list + score + level badge), CLI `--format html -o`, XSS defense | **Applied** (#7) |
-| T2 | Node-detail drill-down (header, metrics grid, Contents, Functions table, Pattern warnings, I/O-in-loops, Economic + Ecological cards, Consumption chains) — pure client JS off the same island | Planned |
-| T3 | Interactivity: collapse/expand sections + Functions-table column sort (vanilla JS) | Planned |
+| **T2** | The **Inspector (1a) design**: Industry design system, banner + 8-tile stat grid, folder/file tree with postorder aggregation, full node detail (functions, warnings, I/O, economic + ecological), embedded Barlow fonts. Tree + aggregation computed in Rust (ADR-8.10) | **Applied** (#27) |
+| ~~T3~~ | ~~Functions-table column sort~~ — **dropped**: that was design option 1b; the operator chose 1a (tree navigation), which supersedes it | Dropped (#27) |
 | T4 | CI artifact upload (`actions/upload-artifact`) | Planned |
 
-The T1 data island carries the per-file model so T2 adds no Rust surface. Design
-reference: operator-provided node-detail template (design system: `--font-heading/body`,
-`--color-accent{,-600,-700,-900}`, `.blueprint` corner cards, `.tag`).
+Deferred, on the record: consumption chains (`graph.consumption_chain` exists, unused),
+the CI PASS/FAIL check band (belongs to US8 — needs thresholds), git metadata in the
+banner (no `GitMetadataPort` exists), filtering/search, dark theme.
+
+Design reference: operator-approved canvas, option **1a "Inspector"** of the "Industry"
+design system (steel accent ramps `--color-accent-100..900`, Barlow / Barlow Condensed,
+`.tag` / `.blueprint` components).
 
 ## References
 
