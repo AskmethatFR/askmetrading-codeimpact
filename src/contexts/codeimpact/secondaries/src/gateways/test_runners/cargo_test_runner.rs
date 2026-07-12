@@ -143,8 +143,10 @@ impl CargoTestRunner {
         Ok((elapsed, output))
     }
 
-    /// Builds the test binary, unmeasured, and returns its path.
-    fn build_test_binary(project_dir: &Path) -> Result<PathBuf, AnalysisError> {
+    /// Builds every test binary in the workspace, unmeasured, and returns
+    /// their confined paths (#39: a `--workspace` build produces one test
+    /// target per member, not one).
+    fn build_test_binaries(project_dir: &Path) -> Result<Vec<PathBuf>, AnalysisError> {
         let cmd = Self::build_cmd(project_dir);
         let (_elapsed, output) = Self::run_with_timeout(cmd)?;
 
@@ -155,13 +157,14 @@ impl CargoTestRunner {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let candidate = Self::parse_test_binary_paths(&stdout).into_iter().last().ok_or_else(|| {
-            AnalysisError::TestRunnerError(
+        let candidates = Self::parse_test_binary_paths(&stdout);
+        if candidates.is_empty() {
+            return Err(AnalysisError::TestRunnerError(
                 "impossible de localiser le binaire de test compilé".into(),
-            )
-        })?;
+            ));
+        }
 
-        Self::confine_to_target_dir(project_dir, &candidate)
+        Self::confine_all(project_dir, &candidates)
     }
 
     /// Parses `cargo ... --message-format=json` output to find every
@@ -300,8 +303,12 @@ impl CargoTestRunner {
         project_dir: &Path,
         filter: Option<&str>,
     ) -> Result<StressTestRun, AnalysisError> {
-        let binary = Self::build_test_binary(project_dir)?;
-        Self::measure_test_binary(project_dir, &binary, filter)
+        let binaries = Self::build_test_binaries(project_dir)?;
+        let runs: Vec<StressTestRun> = binaries
+            .iter()
+            .map(|binary| Self::measure_test_binary(project_dir, binary, filter))
+            .collect::<Result<_, _>>()?;
+        StressTestRun::aggregate(&runs)
     }
 
     /// Sums `user` + `sys` CPU time — kernel time (I/O syscalls, ...) was
@@ -675,10 +682,8 @@ mod tests {
         std::fs::write(&binary_a, b"").expect("write fake binary");
         std::fs::write(&binary_b, b"").expect("write fake binary");
 
-        let result = CargoTestRunner::confine_all(
-            project.path(),
-            &[binary_a.clone(), binary_b.clone()],
-        );
+        let result =
+            CargoTestRunner::confine_all(project.path(), &[binary_a.clone(), binary_b.clone()]);
 
         let confined = result.expect("both candidates are inside target");
         assert_eq!(confined.len(), 2);
