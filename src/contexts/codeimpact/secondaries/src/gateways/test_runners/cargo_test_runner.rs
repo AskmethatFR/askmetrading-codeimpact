@@ -480,4 +480,37 @@ mod tests {
         let stderr = "some unrelated tool output";
         assert_eq!(CargoTestRunner::parse_memory_kb(stderr), None);
     }
+
+    // Test List (measure_test_binary_with_sampler — the real no-sampler
+    // path, #36 retry B2): the acceptance criterion QA's rejected mutation
+    // proved missing.
+    // 1. use_time = false -> cpu_time_ms() and memory_kb() are both
+    //    Unmeasurable(NoSampler), never Available(0)
+
+    fn write_executable_script(dir: &Path, name: &str, contents: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join(name);
+        std::fs::write(&script, contents).expect("write fake test binary");
+        let mut perms = std::fs::metadata(&script)
+            .expect("read fake test binary metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("make fake test binary executable");
+        script
+    }
+
+    #[test]
+    fn measure_test_binary_with_sampler_no_sampler_yields_unmeasurable() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let binary =
+            write_executable_script(dir.path(), "fake_test_binary.sh", "#!/bin/sh\nexit 0\n");
+
+        let result =
+            CargoTestRunner::measure_test_binary_with_sampler(dir.path(), &binary, None, false)
+                .expect("measure should succeed");
+
+        assert_eq!(result.cpu_time_ms().available(), None);
+        assert_eq!(result.memory_kb().available(), None);
+    }
 }
