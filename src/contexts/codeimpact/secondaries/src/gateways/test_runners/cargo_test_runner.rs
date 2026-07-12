@@ -114,6 +114,13 @@ impl CargoTestRunner {
         Self::run_with_timeout_with_budget(cmd, TEST_TIMEOUT)
     }
 
+    /// Polls for the timeout budget while a child runs, WITHOUT ever
+    /// blocking the child on a full OS pipe buffer (~64KB). Draining
+    /// stdout/stderr is handed to two dedicated reader threads that run
+    /// concurrently with the poll loop — a child that writes past the
+    /// buffer threshold (a `--workspace` build's JSON, a chatty test
+    /// binary, `--nocapture`) would otherwise block on `write()` forever,
+    /// since `try_wait()` never returns while the child is stuck (#39).
     fn run_with_timeout_with_budget(
         mut cmd: Command,
         budget: Duration,
@@ -123,15 +130,19 @@ impl CargoTestRunner {
             .spawn()
             .map_err(|e| AnalysisError::TestRunnerError(format!("impossible de lancer: {}", e)))?;
 
-        loop {
+        let stdout_reader = child.stdout.take().map(Self::spawn_drain_thread);
+        let stderr_reader = child.stderr.take().map(Self::spawn_drain_thread);
+
+        let status = loop {
             if start.elapsed() > budget {
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err(AnalysisError::TestRunnerError(
                     "le processus a dépassé le timeout de 300s".into(),
                 ));
             }
             match child.try_wait() {
-                Ok(Some(_status)) => break,
+                Ok(Some(status)) => break status,
                 Ok(None) => std::thread::sleep(Duration::from_millis(100)),
                 Err(e) => {
                     let _ = child.kill();
@@ -141,13 +152,37 @@ impl CargoTestRunner {
                     )));
                 }
             }
-        }
+        };
 
         let elapsed = start.elapsed();
-        let output = child.wait_with_output().map_err(|e| {
-            AnalysisError::TestRunnerError(format!("impossible de lire la sortie: {}", e))
-        })?;
-        Ok((elapsed, output))
+        let stdout = Self::join_drain_thread(stdout_reader);
+        let stderr = Self::join_drain_thread(stderr_reader);
+        Ok((
+            elapsed,
+            Output {
+                status,
+                stdout,
+                stderr,
+            },
+        ))
+    }
+
+    /// Spawns a thread that reads a child's pipe to completion, off the
+    /// poll loop's critical path.
+    fn spawn_drain_thread(
+        mut pipe: impl std::io::Read + Send + 'static,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            buf
+        })
+    }
+
+    fn join_drain_thread(reader: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+        reader
+            .map(|handle| handle.join().unwrap_or_default())
+            .unwrap_or_default()
     }
 
     /// Builds every test binary in the workspace, unmeasured, and returns
@@ -501,7 +536,10 @@ mod tests {
         write_executable_script(
             dir,
             name,
-            &format!("#!/bin/sh\nyes x | head -c 200000 {}\nexit 0\n", stream_redirect),
+            &format!(
+                "#!/bin/sh\nyes x | head -c 200000 {}\nexit 0\n",
+                stream_redirect
+            ),
         )
     }
 
@@ -514,8 +552,7 @@ mod tests {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let result =
-            CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(10));
+        let result = CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(10));
 
         let (_elapsed, output) =
             result.expect("a child writing >64KB to stdout must not deadlock the timeout loop");
@@ -531,8 +568,7 @@ mod tests {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let result =
-            CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(10));
+        let result = CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(10));
 
         let (_elapsed, output) =
             result.expect("a child writing >64KB to stderr must not deadlock the timeout loop");
