@@ -441,4 +441,29 @@ mod tests {
         let stdout = r#"{"reason":"build-finished","success":true}"#;
         assert_eq!(CargoTestRunner::parse_test_binary_path(stdout), None);
     }
+
+    // Test List (parse_memory_kb — bytes on macOS vs kbytes on Linux, never
+    // default to 0, #36 retry B1):
+    // 1. macOS format: bytes -> converted to KB
+    // 2. Linux format: "(kbytes)" -> used directly, no conversion
+    // 3. no recognizable line -> None (never 0)
+
+    #[test]
+    fn parse_memory_kb_converts_bytes_to_kb_macos() {
+        let stderr = "  2097152  maximum resident set size";
+        // 2097152 bytes / 1024 = 2048 KB
+        assert_eq!(CargoTestRunner::parse_memory_kb(stderr), Some(2048));
+    }
+
+    #[test]
+    fn parse_memory_kb_uses_kbytes_directly_linux() {
+        let stderr = "\tMaximum resident set size (kbytes): 12345";
+        assert_eq!(CargoTestRunner::parse_memory_kb(stderr), Some(12345));
+    }
+
+    #[test]
+    fn parse_memory_kb_unparsable_output_is_none_not_zero() {
+        let stderr = "some unrelated tool output";
+        assert_eq!(CargoTestRunner::parse_memory_kb(stderr), None);
+    }
 }
