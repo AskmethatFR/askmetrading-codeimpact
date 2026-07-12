@@ -81,10 +81,45 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
 }
 .table td { padding: var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent); }
 .table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
-.path-cell { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
-.bar-track { display: inline-block; height: 6px; width: 100px; background: color-mix(in srgb, var(--color-text) 10%, transparent); vertical-align: middle; }
-.bar-fill { display: block; height: 100%; background: var(--color-accent-600); }
-.score-value { display: inline-block; margin-left: 8px; font-variant-numeric: tabular-nums; }
+
+.split { display: grid; grid-template-columns: 300px 1fr; border: 1px solid var(--color-divider); }
+.tree-pane {
+  border-right: 1px solid var(--color-divider); padding: var(--space-3) var(--space-2);
+  height: 720px; overflow: auto; background: color-mix(in srgb, var(--color-text) 2.5%, transparent);
+}
+.tree-heading {
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  margin: 2px 0 var(--space-2) 6px;
+}
+.tree-row {
+  display: flex; align-items: center; gap: 6px; padding: 5px 6px; cursor: pointer;
+}
+.tree-row:hover { background: color-mix(in srgb, var(--color-text) 5%, transparent); }
+.tree-row-selected { background: var(--color-accent-100); border-left: 2px solid var(--color-accent); }
+.tree-indent { flex: none; display: inline-block; }
+.tree-caret { width: 12px; flex: none; font-size: 11px; line-height: 1; color: var(--color-accent); }
+.tree-name {
+  flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tree-score { width: 22px; text-align: right; font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 12px; flex: none; }
+.swatch { width: 8px; height: 8px; flex: none; }
+
+.detail-pane { padding: var(--space-6) var(--space-6); height: 720px; overflow: auto; }
+.detail-header { display: flex; align-items: flex-start; gap: var(--space-4); justify-content: space-between; margin-bottom: var(--space-6); }
+.detail-kind { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent); margin-bottom: 2px; }
+.detail-name { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 27px; line-height: 1.08; letter-spacing: -0.015em; }
+.detail-path { font-size: 12px; color: color-mix(in srgb, var(--color-text) 52%, transparent); font-family: ui-monospace, Menlo, monospace; word-break: break-all; margin-top: 2px; }
+.detail-score-block { display: flex; align-items: center; gap: var(--space-4); flex: none; }
+.detail-score { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 36px; line-height: 0.95; }
+
+.metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 28px; }
+.metric-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; }
+.metric-label { color: color-mix(in srgb, var(--color-text) 66%, transparent); }
+.metric-value { font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
+.metric-track { height: 6px; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
+.metric-fill { height: 100%; background: var(--color-accent-600); }
 "#;
 
 // ── Renderer — the load-bearing part of ADR-8.5/8.6, formalised as ADR-8.10 ──
@@ -123,9 +158,26 @@ pub const JS: &str = r#"
     node.style.width = n + "%";
   }
 
+  function setIndent(node, depth) {
+    var d = Number(depth);
+    if (!isFinite(d) || d < 0) d = 0;
+    if (d > 20) d = 20;
+    node.style.paddingLeft = (d * 15) + "px";
+  }
+
   var raw = document.getElementById("ci-data").textContent;
   var data = JSON.parse(raw);
   var root = document.getElementById("ci-root");
+
+  var byId = {};
+  data.nodes.forEach(function (n) {
+    byId[n.id] = n;
+  });
+
+  var state = { expanded: {}, selected: "" };
+  data.nodes.forEach(function (n) {
+    if (n.kind !== "file") state.expanded[n.id] = true;
+  });
 
   function renderBanner() {
     var banner = el("div", "banner");
@@ -148,45 +200,100 @@ pub const JS: &str = r#"
     return grid;
   }
 
-  function renderFileTable() {
-    var wrap = el("div", "blueprint");
-    var table = el("table", "table");
-    var thead = el("thead");
-    var headRow = el("tr");
-    ["File", "Score", "Level"].forEach(function (label) {
-      headRow.appendChild(el("th", null, label));
+  function renderTreeRow(id, depth, container) {
+    var n = byId[id];
+    var isFolder = n.kind !== "file";
+    var rowCls = "tree-row" + (id === state.selected ? " tree-row-selected" : "");
+    var row = el("div", rowCls);
+
+    var indent = el("span", "tree-indent");
+    setIndent(indent, depth);
+    row.appendChild(indent);
+
+    row.appendChild(el("span", "tree-caret", isFolder ? (state.expanded[id] ? "▾" : "▸") : ""));
+    row.appendChild(el("span", "tree-name", n.name));
+    row.appendChild(el("span", "tree-score", String(n.score)));
+    row.appendChild(el("span", "swatch " + cls(LVL, n.level, "lvl-low")));
+
+    row.addEventListener("click", function () {
+      if (isFolder) state.expanded[id] = !state.expanded[id];
+      state.selected = id;
+      renderAll();
     });
-    thead.appendChild(headRow);
-    table.appendChild(thead);
 
-    var tbody = el("tbody");
-    data.files.forEach(function (file) {
-      var row = el("tr");
+    container.appendChild(row);
 
-      row.appendChild(el("td", "path-cell", file.path));
-
-      var scoreCell = el("td");
-      var track = el("span", "bar-track");
-      var fill = el("span", "bar-fill");
-      setPct(fill, file.score_pct);
-      track.appendChild(fill);
-      scoreCell.appendChild(track);
-      scoreCell.appendChild(el("span", "score-value", String(file.score)));
-      row.appendChild(scoreCell);
-
-      var levelCell = el("td");
-      levelCell.appendChild(el("span", "tag " + cls(LVL, file.level_label, "lvl-low"), file.level_label.toUpperCase()));
-      row.appendChild(levelCell);
-
-      tbody.appendChild(row);
-    });
-    table.appendChild(tbody);
-    wrap.appendChild(table);
-    return wrap;
+    if (isFolder && state.expanded[id]) {
+      n.child_ids.forEach(function (childId) {
+        renderTreeRow(childId, depth + 1, container);
+      });
+    }
   }
 
-  root.appendChild(renderBanner());
-  root.appendChild(renderStats());
-  root.appendChild(renderFileTable());
+  function renderTree() {
+    var pane = el("div", "tree-pane");
+    pane.appendChild(el("div", "tree-heading", "File tree"));
+    var list = el("div", "tree-list");
+    renderTreeRow("", 0, list);
+    pane.appendChild(list);
+    return pane;
+  }
+
+  function renderMetrics(node) {
+    var grid = el("div", "metrics-grid");
+    node.metrics.forEach(function (m) {
+      var row = el("div");
+      var top = el("div", "metric-top");
+      top.appendChild(el("span", "metric-label", m.label));
+      top.appendChild(el("span", "metric-value", m.value));
+      row.appendChild(top);
+      var track = el("div", "metric-track");
+      var fill = el("div", "metric-fill");
+      setPct(fill, m.pct);
+      track.appendChild(fill);
+      row.appendChild(track);
+      grid.appendChild(row);
+    });
+    return grid;
+  }
+
+  var KIND_LABEL = { project: "Project", folder: "Folder", file: "File" };
+
+  function renderDetail() {
+    var node = byId[state.selected] || byId[""];
+    var pane = el("div", "detail-pane");
+
+    var header = el("div", "detail-header");
+    var identity = el("div");
+    identity.appendChild(el("div", "detail-kind", cls(KIND_LABEL, node.kind, "File")));
+    identity.appendChild(el("div", "detail-name", node.name));
+    identity.appendChild(el("div", "detail-path", node.path));
+    header.appendChild(identity);
+
+    var scoreBlock = el("div", "detail-score-block");
+    scoreBlock.appendChild(el("div", "detail-score", String(node.score)));
+    scoreBlock.appendChild(el("span", "tag " + cls(LVL, node.level, "lvl-low"), node.level.toUpperCase()));
+    header.appendChild(scoreBlock);
+
+    pane.appendChild(header);
+    pane.appendChild(renderMetrics(node));
+    return pane;
+  }
+
+  function renderSplit() {
+    var split = el("div", "split");
+    split.appendChild(renderTree());
+    split.appendChild(renderDetail());
+    return split;
+  }
+
+  function renderAll() {
+    root.textContent = "";
+    root.appendChild(renderBanner());
+    root.appendChild(renderStats());
+    root.appendChild(renderSplit());
+  }
+
+  renderAll();
 })();
 "#;
