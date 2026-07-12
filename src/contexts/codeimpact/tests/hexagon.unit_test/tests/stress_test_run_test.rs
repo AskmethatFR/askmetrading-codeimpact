@@ -12,14 +12,15 @@ use codeimpact_secondaries::gateways::test_runners::test_runner_stub::TestRunner
 // 2. stress_test_run_passed_never_exceeds_total
 // 3. stress_test_run_duration_can_be_zero (a genuinely instant run is not "unmeasured")
 // 4. stress_test_run_reports_unmeasurable_cpu_and_memory (#36)
-// 5. reactive_analyzer_converts_run_to_economic_impact
-// 6. reactive_analyzer_high_cpu_time_gives_moderate_level
-// 7. reactive_analyzer_zero_cpu_time_gives_low_level
-// 8. reactive_analyzer_high_memory_gives_high_level
-// 9. reactive_analyzer_extreme_memory_gives_critical_level
-// 10. run_stress_test_invokes_runner_and_writer
-// 11. run_stress_test_with_filter
-// 12. run_stress_test_propagates_runner_error
+// 5. measurement_available_returns_none_for_unmeasurable (#36 retry N1)
+// 6. reactive_analyzer_converts_run_to_economic_impact
+// 7. reactive_analyzer_high_cpu_time_gives_moderate_level
+// 8. reactive_analyzer_zero_cpu_time_gives_low_level
+// 9. reactive_analyzer_high_memory_gives_high_level
+// 10. reactive_analyzer_extreme_memory_gives_critical_level
+// 11. run_stress_test_invokes_runner_and_writer
+// 12. run_stress_test_with_filter
+// 13. run_stress_test_propagates_runner_error
 
 fn available(value: u64) -> Measurement<u64> {
     Measurement::Available(value)
@@ -84,6 +85,14 @@ fn stress_test_run_reports_unmeasurable_cpu_and_memory() {
     assert_eq!(
         run.memory_kb(),
         Measurement::Unmeasurable(UnmeasurableReason::NoSampler)
+    );
+}
+
+#[test]
+fn measurement_available_returns_none_for_unmeasurable() {
+    assert_eq!(
+        Measurement::<u64>::Unmeasurable(UnmeasurableReason::NoSampler).available(),
+        None
     );
 }
 
