@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::analysis_rule::AnalysisRule;
 use super::analysis_target::{AnalysisTarget, TargetType};
@@ -60,11 +60,7 @@ impl RunAnalysis {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
             match self.code_reader.read_source(&file_target) {
                 Ok(source) => {
-                    match proactive_analyzer::analyze(
-                        &source,
-                        rules,
-                        self.parser.as_ref(),
-                    ) {
+                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
                         Ok(metrics) => {
                             let metrics = Self::set_file_paths(metrics, file);
                             per_file.push((file.clone(), metrics));
@@ -82,18 +78,13 @@ impl RunAnalysis {
                     match self.parser.parse_file_dependencies(&source) {
                         Ok(raw_deps) => {
                             for raw in &raw_deps {
-                                if let Some(to) = resolve_file_dependency(
-                                    raw,
-                                    file,
-                                    &crate_root,
-                                    &files,
-                                ) {
-                                    all_deps.push(
-                                        super::file_consumption_graph::FileDependency {
-                                            from: file.clone(),
-                                            to,
-                                        },
-                                    );
+                                if let Some(to) =
+                                    resolve_file_dependency(raw, file, &crate_root, &files)
+                                {
+                                    all_deps.push(super::file_consumption_graph::FileDependency {
+                                        from: file.clone(),
+                                        to,
+                                    });
                                 }
                             }
                         }
@@ -120,18 +111,14 @@ impl RunAnalysis {
         self.reporter.write_project_report(&graph)
     }
 
-    fn set_file_paths(metrics: CodeMetrics, path: &PathBuf) -> CodeMetrics {
+    fn set_file_paths(metrics: CodeMetrics, path: &Path) -> CodeMetrics {
         let file_path = path.to_string_lossy().to_string();
 
         let updated_warnings: Vec<super::complexity_detector::ComplexityWarning> = metrics
             .warnings()
             .iter()
             .map(|w| super::complexity_detector::ComplexityWarning {
-                location: CodeLocation::new(
-                    file_path.clone(),
-                    w.location.line(),
-                    w.location.col(),
-                ),
+                location: CodeLocation::new(file_path.clone(), w.location.line(), w.location.col()),
                 ..w.clone()
             })
             .collect();
@@ -140,11 +127,7 @@ impl RunAnalysis {
             .function_details()
             .iter()
             .map(|d| super::code_metrics::FunctionDetail {
-                location: CodeLocation::new(
-                    file_path.clone(),
-                    d.location.line(),
-                    d.location.col(),
-                ),
+                location: CodeLocation::new(file_path.clone(), d.location.line(), d.location.col()),
                 ..d.clone()
             })
             .collect();
@@ -153,11 +136,7 @@ impl RunAnalysis {
             .io_in_loops()
             .iter()
             .map(|w| IoInLoopWarning {
-                location: CodeLocation::new(
-                    file_path.clone(),
-                    w.location.line(),
-                    w.location.col(),
-                ),
+                location: CodeLocation::new(file_path.clone(), w.location.line(), w.location.col()),
                 ..w.clone()
             })
             .collect();
@@ -198,7 +177,11 @@ impl RunAnalysis {
             aggregated.total_cyclomatic_complexity,
             aggregated.total_transitive_complexity,
             aggregated.max_call_depth,
-            aggregated.files_with_cycles.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+            aggregated
+                .files_with_cycles
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect(),
             vec![],
         );
 
@@ -236,7 +219,9 @@ impl RunAnalysis {
         for file in &files {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
             if let Ok(source) = self.code_reader.read_source(&file_target) {
-                if let Ok(metrics) = proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                if let Ok(metrics) =
+                    proactive_analyzer::analyze(&source, rules, self.parser.as_ref())
+                {
                     let metrics = Self::set_file_paths(metrics, file);
                     per_file.push((file.clone(), metrics));
                 }

@@ -33,9 +33,7 @@ impl CodeReader for FileSystemCodeReader {
         }
 
         std::fs::read_to_string(&canonical).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => {
-                AnalysisError::IoError(ERR_FILE_NOT_FOUND.to_string())
-            }
+            std::io::ErrorKind::NotFound => AnalysisError::IoError(ERR_FILE_NOT_FOUND.to_string()),
             std::io::ErrorKind::PermissionDenied => {
                 AnalysisError::IoError("permission refusée".to_string())
             }
@@ -64,7 +62,7 @@ impl CodeReader for FileSystemCodeReader {
                 Ok(entry) => {
                     if entry.file_type().is_file() {
                         let path = entry.path();
-                        if path.extension().map_or(false, |ext| ext == "rs") {
+                        if path.extension().is_some_and(|ext| ext == "rs") {
                             match std::fs::metadata(path) {
                                 Ok(meta) if meta.len() <= MAX_FILE_SIZE => {
                                     files.push(path.to_path_buf());
