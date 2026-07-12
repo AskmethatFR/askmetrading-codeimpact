@@ -125,3 +125,39 @@ fn cargo_test_runner_excludes_build_time_from_measured_duration() {
         result.duration_ms()
     );
 }
+
+// #36 retry N2 — the mirror image of the Unmeasurable acceptance criteria:
+// when a sampler genuinely IS available, cpu_time_ms()/memory_kb() must come
+// back Available(_), not Unmeasurable. Guarded (not skipped/failed) on hosts
+// without /usr/bin/time — CI runs on Linux where it exists, but a bare
+// container must not see a red suite for a missing optional tool.
+#[test]
+fn cargo_test_runner_with_sampler_available_reports_measured_cpu_and_memory() {
+    if !std::path::Path::new("/usr/bin/time").exists() {
+        eprintln!("skipping: /usr/bin/time not available on this host");
+        return;
+    }
+
+    let crate_dir = create_temp_crate("sampled_crate");
+
+    let build = Command::new("cargo")
+        .args(["test", "--no-run"])
+        .current_dir(crate_dir.path())
+        .output()
+        .expect("build test crate");
+    assert!(build.status.success(), "build failed");
+
+    let runner = CargoTestRunner::new(crate_dir.path().to_path_buf());
+    let result = runner.run_tests(None).expect("run_tests should succeed");
+
+    assert!(
+        result.cpu_time_ms().available().is_some(),
+        "expected cpu_time_ms to be Available when /usr/bin/time is present, got {:?}",
+        result.cpu_time_ms()
+    );
+    assert!(
+        result.memory_kb().available().is_some(),
+        "expected memory_kb to be Available when /usr/bin/time is present, got {:?}",
+        result.memory_kb()
+    );
+}
