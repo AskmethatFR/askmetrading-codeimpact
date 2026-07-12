@@ -53,7 +53,7 @@ jobs:
           toolchain: stable
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo install cargo-llvm-cov --locked
+      - run: cargo install cargo-llvm-cov --locked --version 0.8.7
       - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - run: cargo llvm-cov report --html
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
