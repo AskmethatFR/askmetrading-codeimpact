@@ -738,3 +738,41 @@ fn report_contains_no_remote_url() {
         html
     );
 }
+
+// ── Bug found during manual verification (dogfooding the real CLI, not a
+// spec-listed test): the real FileSystemCodeReader canonicalizes every file
+// path it returns (file_system_code_reader.rs's `list_rust_files`), while
+// `target` reaches `write_html` as the RAW, un-canonicalized `--path` CLI
+// argument (run_analysis.rs's `handle_project_html`: `target.path().to_
+// string_lossy()`). `strip_prefix` against the raw target therefore almost
+// always fails in real usage — even when target and the files' common root
+// are the SAME directory — and node_id() falls back to the file's full
+// path, producing a degenerate single-child folder chain that mirrors the
+// entire filesystem path instead of a real, small project tree. Neither
+// the tech spec's §0 "verified findings" nor its `node_id` design anticipated
+// this — it assumed `target` and file paths already share a literal prefix.
+// Fixed in view_model.rs by canonicalizing `target` before stripping,
+// falling back to the raw string when canonicalization fails (e.g. these
+// tests' fixture paths, which do not exist on disk) — so this fix changes
+// NOTHING for the fixture-based tests above, only real filesystem targets.
+#[test]
+fn tree_ids_are_relative_when_target_resolves_to_the_files_common_root() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let target = dir.path().to_string_lossy().to_string();
+    let canonical_dir = std::fs::canonicalize(dir.path()).expect("canonicalize temp dir");
+    let file_path = canonical_dir.join("main.rs");
+
+    let writer = HtmlReportWriter::new();
+    let entries = vec![(file_path, make_metrics(1, 1))];
+    let graph = FileConsumptionGraph::build(&entries, vec![]).unwrap();
+
+    let html = writer.write_html(&graph, &target).expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""id":"main.rs","name":"main.rs","kind":"file""#),
+        "when target resolves (canonicalization/symlinks) to the files' common root, the tree \
+         must nest the file under a short relative id, not the full absolute path exploded into a \
+         single-child folder chain from the filesystem root: {}",
+        html
+    );
+}
