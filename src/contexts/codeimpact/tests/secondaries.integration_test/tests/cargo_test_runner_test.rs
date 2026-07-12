@@ -103,26 +103,55 @@ fn cargo_test_runner_on_empty_crate_returns_zero() {
 }
 
 // #36 bug 2 — the acceptance criterion for "build is excluded from the
-// measurement": deliberately do NOT pre-build this crate. `run_tests` must
-// still build it internally (unmeasured) before measuring, so the reported
-// `duration_ms` reflects only running two trivial assertions — not the
-// rustc compile, which alone takes far longer than this bound. A flaky
-// relative-timing comparison (build twice, compare) is avoided on purpose;
-// this is a single generous absolute bound.
+// measurement". An earlier version of this test asserted an absolute bound
+// (`duration_ms < 2000`) which QA reproduced as flaky under machine load
+// (14674ms, 8067ms on a contended runner). Replaced with a relative,
+// load-tolerant comparison: run the SAME crate cold (unbuilt — `run_tests`
+// must compile it internally, unmeasured) and then warm (already built by
+// the cold call). If build time leaked into the measured window, the cold
+// duration would be dominated by the rustc compile and dwarf the warm
+// duration by an order of magnitude or more. If build time is correctly
+// excluded, both calls measure only the same two trivial assertions and
+// stay within the same order of magnitude — regardless of how loaded the
+// machine is, because contention inflates both runs together (they run
+// back-to-back on the same host under the same conditions), not just one.
 #[test]
 fn cargo_test_runner_excludes_build_time_from_measured_duration() {
-    let crate_dir = create_temp_crate("unbuilt_crate");
-    // Intentionally no pre-build here: `run_tests` must do it internally.
-
+    let crate_dir = create_temp_crate("cold_warm_crate");
     let runner = CargoTestRunner::new(crate_dir.path().to_path_buf());
-    let result = runner.run_tests(None).expect("run_tests should succeed");
 
-    assert_eq!(result.tests_total(), 2);
-    assert_eq!(result.tests_passed(), 2);
+    // Cold: crate_dir is intentionally NOT pre-built. `run_tests` must
+    // compile it internally before measuring.
+    let cold = runner
+        .run_tests(None)
+        .expect("cold run_tests should succeed");
+    assert_eq!(cold.tests_total(), 2);
+    assert_eq!(cold.tests_passed(), 2);
+
+    // Warm: same crate, now already built by the cold call above.
+    let warm = runner
+        .run_tests(None)
+        .expect("warm run_tests should succeed");
+    assert_eq!(warm.tests_total(), 2);
+    assert_eq!(warm.tests_passed(), 2);
+
+    let cold_ms = cold.duration_ms().max(1) as f64;
+    let warm_ms = warm.duration_ms().max(1) as f64;
+    let ratio = cold_ms / warm_ms;
+
+    // 30x is deliberately generous: rustc startup overhead alone puts a
+    // genuine (excluded) compile at several hundred ms to ~1-2s, while the
+    // measured run of two trivial assertions is a handful of ms — so a real
+    // regression (build time leaking into the window) produces a ratio far
+    // above this, typically 50-200x+. 30x still comfortably absorbs a noisy
+    // CI host (observed up to ~13x from transient contention during manual
+    // validation) without masking the actual regression this test exists to
+    // catch.
     assert!(
-        result.duration_ms() < 2000,
-        "duration_ms should reflect only the measured run, not the build; got {} ms",
-        result.duration_ms()
+        ratio < 30.0,
+        "cold run ({cold_ms} ms) should stay within the same order of \
+         magnitude as warm run ({warm_ms} ms) — a {ratio:.1}x ratio suggests \
+         build time leaked into the measured duration"
     );
 }
 
