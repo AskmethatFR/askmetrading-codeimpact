@@ -75,7 +75,7 @@ impl CargoTestRunner {
         let mut cmd = Command::new("cargo");
         cmd.arg("test")
             .arg("--no-run")
-            .arg("--lib")
+            .arg("--workspace")
             .arg("--message-format=json");
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -155,7 +155,7 @@ impl CargoTestRunner {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let candidate = Self::parse_test_binary_path(&stdout).ok_or_else(|| {
+        let candidate = Self::parse_test_binary_paths(&stdout).into_iter().last().ok_or_else(|| {
             AnalysisError::TestRunnerError(
                 "impossible de localiser le binaire de test compilé".into(),
             )
@@ -164,12 +164,14 @@ impl CargoTestRunner {
         Self::confine_to_target_dir(project_dir, &candidate)
     }
 
-    /// Parses `cargo ... --message-format=json` output to find the
-    /// executable produced for the test profile. Takes the last match:
-    /// dependencies may also emit compiler-artifact messages, but the
-    /// crate's own test binary is emitted last.
-    fn parse_test_binary_path(stdout: &str) -> Option<PathBuf> {
-        let mut found = None;
+    /// Parses `cargo ... --message-format=json` output to find every
+    /// executable produced for the test profile, in emission order. A
+    /// `--workspace` build emits one `compiler-artifact` per test target
+    /// across every member — all of them must be collected, not just the
+    /// last one (#39: `--lib` + "keep the last" together caused a
+    /// multi-crate workspace to measure a single, arbitrary binary).
+    fn parse_test_binary_paths(stdout: &str) -> Vec<PathBuf> {
+        let mut found = Vec::new();
         for line in stdout.lines() {
             let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
@@ -186,7 +188,7 @@ impl CargoTestRunner {
                 continue;
             }
             if let Some(exe) = msg.get("executable").and_then(|e| e.as_str()) {
-                found = Some(PathBuf::from(exe));
+                found.push(PathBuf::from(exe));
             }
         }
         found
@@ -411,6 +413,21 @@ mod tests {
         assert!(args.contains(&"--no-run".to_string()));
     }
 
+    // #39 — root cause: `--lib` builds only lib test targets, structurally
+    // excluding every integration test in `tests/*.rs` (where every real
+    // test in this repo lives). `--workspace` must replace it so every
+    // member's test targets are built.
+    #[test]
+    fn build_cmd_builds_every_workspace_member() {
+        let cmd = CargoTestRunner::build_cmd(Path::new("."));
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"--workspace".to_string()));
+        assert!(!args.contains(&"--lib".to_string()));
+    }
+
     #[test]
     fn measure_cmd_wraps_binary_in_time_when_sampler_available() {
         let binary = Path::new("/tmp/fake-test-binary");
@@ -462,32 +479,45 @@ mod tests {
         assert_eq!(CargoTestRunner::parse_cpu_time(stderr), None);
     }
 
-    // Test List (parse_test_binary_path):
-    // 1. finds the executable of the compiler-artifact with profile.test == true
-    // 2. ignores non-test compiler-artifact messages (e.g. build-script, deps)
-    // 3. no matching artifact -> None
+    // Test List (parse_test_binary_paths — #39, collect EVERY test
+    // executable a `--workspace` build produces, in emission order):
+    // 1. 3 profile.test == true artifacts -> Vec of all 3, in order
+    // 2. profile.test == false / executable: null -> both excluded
+    // 3. no matching artifact -> [] (not a phantom entry)
 
     #[test]
-    fn parse_test_binary_path_finds_test_executable() {
-        let stdout = r#"{"reason":"compiler-artifact","profile":{"test":false},"executable":null}
-{"reason":"compiler-artifact","profile":{"test":true},"executable":"/tmp/target/debug/deps/mycrate-abc123"}
+    fn parse_test_binary_paths_collects_every_test_executable() {
+        let stdout = r#"{"reason":"compiler-artifact","profile":{"test":true},"executable":"/tmp/target/debug/deps/alpha-abc123"}
+{"reason":"compiler-artifact","profile":{"test":true},"executable":"/tmp/target/debug/deps/beta-def456"}
+{"reason":"compiler-artifact","profile":{"test":true},"executable":"/tmp/target/debug/deps/gamma-ghi789"}
 {"reason":"build-finished","success":true}"#;
         assert_eq!(
-            CargoTestRunner::parse_test_binary_path(stdout),
-            Some(PathBuf::from("/tmp/target/debug/deps/mycrate-abc123"))
+            CargoTestRunner::parse_test_binary_paths(stdout),
+            vec![
+                PathBuf::from("/tmp/target/debug/deps/alpha-abc123"),
+                PathBuf::from("/tmp/target/debug/deps/beta-def456"),
+                PathBuf::from("/tmp/target/debug/deps/gamma-ghi789"),
+            ]
         );
     }
 
     #[test]
-    fn parse_test_binary_path_ignores_non_test_artifacts() {
-        let stdout = r#"{"reason":"compiler-artifact","profile":{"test":false},"executable":"/tmp/target/debug/deps/dep-xyz"}"#;
-        assert_eq!(CargoTestRunner::parse_test_binary_path(stdout), None);
+    fn parse_test_binary_paths_ignores_non_test_artifacts() {
+        let stdout = r#"{"reason":"compiler-artifact","profile":{"test":false},"executable":"/tmp/target/debug/deps/dep-xyz"}
+{"reason":"compiler-artifact","profile":{"test":true},"executable":null}"#;
+        assert_eq!(
+            CargoTestRunner::parse_test_binary_paths(stdout),
+            Vec::<PathBuf>::new()
+        );
     }
 
     #[test]
-    fn parse_test_binary_path_none_when_no_artifact() {
+    fn parse_test_binary_paths_is_empty_when_no_test_artifact() {
         let stdout = r#"{"reason":"build-finished","success":true}"#;
-        assert_eq!(CargoTestRunner::parse_test_binary_path(stdout), None);
+        assert_eq!(
+            CargoTestRunner::parse_test_binary_paths(stdout),
+            Vec::<PathBuf>::new()
+        );
     }
 
     // Test List (parse_memory_kb — bytes on macOS vs kbytes on Linux, never
