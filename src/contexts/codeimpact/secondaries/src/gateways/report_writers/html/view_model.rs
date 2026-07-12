@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
+use super::super::humanize::format_dollars;
+
 // ── Presentation view-model (secondaries only, per ca-models / ADR-8.4) ──
 //
 // Serde DTOs live beside the adapter, never on hexagon types. Covered
@@ -425,26 +427,10 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
     ]
 }
 
-/// Temporary local copy (US7 T2 S1) — merged into the shared `humanize`
-/// module at slice R, once console_report_writer's duplicated MB/kJ
-/// branches are extracted alongside it (spec §5).
-fn format_dollars(microdollars: f64) -> String {
-    let dollars = microdollars / 1_000_000.0;
-    if dollars < 0.0001 {
-        format!("${:.6}", dollars)
-    } else if dollars < 1.0 {
-        format!("${:.4}", dollars)
-    } else {
-        format!("${:.2}", dollars)
-    }
-}
-
-/// Energy formatted for a stat-tile sub (no kWh parenthetical) — same
-/// thresholds as console_report_writer's inline branch.
+/// Energy formatted for a stat-tile sub (no kWh parenthetical, unlike the
+/// detail-pane's full `humanize::format_energy`) — mirrors the reference
+/// `fmtEnergy(...).split(' (')[0]` shape.
 fn format_energy_short(joules: f64) -> String {
-    if joules >= 1000.0 {
-        format!("{:.1} kJ", joules / 1000.0)
-    } else {
-        format!("{:.1} J", joules)
-    }
+    let full = super::super::humanize::format_energy(joules);
+    full.split(" (").next().unwrap_or(&full).to_string()
 }
