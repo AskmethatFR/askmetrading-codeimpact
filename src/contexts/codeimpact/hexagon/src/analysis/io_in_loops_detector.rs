@@ -37,10 +37,7 @@ mod tests {
     // 4. handles multiple functions — each produces its own warnings
     // 5. warning fields match the parsed data
 
-    fn make_fn(
-        name: &str,
-        calls_in_loops: Vec<(&str, usize, usize)>,
-    ) -> ParsedFunction {
+    fn make_fn(name: &str, calls_in_loops: Vec<(&str, usize, usize)>) -> ParsedFunction {
         ParsedFunction {
             name: name.to_string(),
             start_line: 1,
@@ -103,7 +100,10 @@ mod tests {
 
     #[test]
     fn warning_fields_match_parsed_data() {
-        let fns = vec![make_fn("my_func", vec![("std::fs::read_to_string", 42, 13)])];
+        let fns = vec![make_fn(
+            "my_func",
+            vec![("std::fs::read_to_string", 42, 13)],
+        )];
         let warnings = IoInLoopsDetector::detect(&fns);
 
         assert_eq!(warnings[0].function, "my_func");

@@ -111,7 +111,9 @@ fn run_stress_test_with_filter() {
     let runner = TestRunnerStub::new(Ok(make_run_with_filter()));
     let writer = SharedReportWriterStub::new();
     let use_case = RunStressTest::new(Box::new(runner), Box::new(writer.clone()));
-    use_case.handle(Some("test_foo")).expect("stress test should succeed");
+    use_case
+        .handle(Some("test_foo"))
+        .expect("stress test should succeed");
     let captured = writer.last_stress_run.lock().unwrap();
     let run = captured.as_ref().unwrap();
     assert_eq!(run.filter(), Some("test_foo".to_string()));

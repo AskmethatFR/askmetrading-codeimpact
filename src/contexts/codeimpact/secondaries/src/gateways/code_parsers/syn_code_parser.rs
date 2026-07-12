@@ -41,10 +41,7 @@ impl CodeParser for SynCodeParser {
         Ok(functions)
     }
 
-    fn parse_file_dependencies(
-        &self,
-        source: &str,
-    ) -> Result<Vec<String>, AnalysisError> {
+    fn parse_file_dependencies(&self, source: &str) -> Result<Vec<String>, AnalysisError> {
         let syntax_tree = syn::parse_file(source)
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
@@ -81,7 +78,9 @@ impl CodeParser for SynCodeParser {
 const IO_PREFIXES: &[&str] = &["std::fs::", "tokio::fs::", "std::net::", "reqwest::"];
 
 fn is_io_call(call_name: &str) -> bool {
-    IO_PREFIXES.iter().any(|prefix| call_name.starts_with(prefix))
+    IO_PREFIXES
+        .iter()
+        .any(|prefix| call_name.starts_with(prefix))
 }
 
 impl SynCodeParser {
@@ -96,11 +95,7 @@ impl SynCodeParser {
             syn::UseTree::Glob(_) => "*".to_string(),
             syn::UseTree::Rename(rename) => rename.ident.to_string(),
             syn::UseTree::Group(group) => {
-                let items: Vec<String> = group
-                    .items
-                    .iter()
-                    .map(|item| Self::format_use_tree(item))
-                    .collect();
+                let items: Vec<String> = group.items.iter().map(Self::format_use_tree).collect();
                 items.join(", ")
             }
         }
@@ -595,14 +590,18 @@ fn complex(x: i32) {
     #[test]
     fn deps_mod_with_inline_content_skipped() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("mod foo { fn bar() {} }").unwrap();
+        let deps = parser
+            .parse_file_dependencies("mod foo { fn bar() {} }")
+            .unwrap();
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_std_filtered() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("use std::collections::HashMap;").unwrap();
+        let deps = parser
+            .parse_file_dependencies("use std::collections::HashMap;")
+            .unwrap();
         assert!(deps.is_empty());
     }
 
@@ -623,28 +622,36 @@ fn complex(x: i32) {
     #[test]
     fn deps_use_crate_extracted() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("use crate::foo::bar;").unwrap();
+        let deps = parser
+            .parse_file_dependencies("use crate::foo::bar;")
+            .unwrap();
         assert_eq!(deps, vec!["use:crate::foo::bar"]);
     }
 
     #[test]
     fn deps_use_super_extracted() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("use super::foo::bar;").unwrap();
+        let deps = parser
+            .parse_file_dependencies("use super::foo::bar;")
+            .unwrap();
         assert_eq!(deps, vec!["use:super::foo::bar"]);
     }
 
     #[test]
     fn deps_use_relative_extracted() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("use foo::bar::Baz;").unwrap();
+        let deps = parser
+            .parse_file_dependencies("use foo::bar::Baz;")
+            .unwrap();
         assert_eq!(deps, vec!["use:foo::bar::Baz"]);
     }
 
     #[test]
     fn deps_use_group_expanded() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("use foo::{bar, baz};").unwrap();
+        let deps = parser
+            .parse_file_dependencies("use foo::{bar, baz};")
+            .unwrap();
         assert_eq!(deps, vec!["use:foo::bar, baz"]);
     }
 
@@ -658,7 +665,9 @@ fn complex(x: i32) {
     #[test]
     fn deps_no_mod_or_use_returns_empty() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("fn foo() { let x = 1; }").unwrap();
+        let deps = parser
+            .parse_file_dependencies("fn foo() { let x = 1; }")
+            .unwrap();
         assert!(deps.is_empty());
     }
 
@@ -672,7 +681,9 @@ fn complex(x: i32) {
     #[test]
     fn parse_use_rename_is_captured() {
         let parser = SynCodeParser::new();
-        let deps = parser.parse_file_dependencies("use foo::bar as baz;\nfn main() {}").unwrap();
+        let deps = parser
+            .parse_file_dependencies("use foo::bar as baz;\nfn main() {}")
+            .unwrap();
         assert_eq!(deps, vec!["use:foo::bar"]);
     }
 }

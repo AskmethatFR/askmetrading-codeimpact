@@ -48,7 +48,11 @@ fn cargo_test_runner_runs_tests_and_returns_metrics() {
         .current_dir(crate_dir.path())
         .output()
         .expect("build test crate");
-    assert!(build.status.success(), "build failed: {:?}", String::from_utf8_lossy(&build.stderr));
+    assert!(
+        build.status.success(),
+        "build failed: {:?}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 
     let runner = CargoTestRunner::new(crate_dir.path().to_path_buf());
     let result = runner.run_tests(None).expect("run_tests should succeed");

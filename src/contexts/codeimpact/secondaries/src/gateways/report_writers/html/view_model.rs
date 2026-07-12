@@ -281,7 +281,14 @@ fn root_name(target: &str) -> String {
 fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, usize, u32, u8) {
     if raw[id].kind == NodeKind::File {
         let n = &raw[id];
-        return (n.direct, n.transitive, n.hidden, n.depth, n.score, n.level_rank);
+        return (
+            n.direct,
+            n.transitive,
+            n.hidden,
+            n.depth,
+            n.score,
+            n.level_rank,
+        );
     }
 
     // Sorted already (spec §3: sort_children runs before aggregate), so the
@@ -331,7 +338,10 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
 
 /// Folds via the domain's own `EconomicImpact::Add` (spec §0 finding 2) —
 /// never a coefficient invented from transitive complexity.
-fn fold_economic(acc: Option<EconomicImpact>, next: Option<EconomicImpact>) -> Option<EconomicImpact> {
+fn fold_economic(
+    acc: Option<EconomicImpact>,
+    next: Option<EconomicImpact>,
+) -> Option<EconomicImpact> {
     match (acc, next) {
         (Some(a), Some(b)) => Some(a + b),
         (Some(a), None) => Some(a),
@@ -342,7 +352,10 @@ fn fold_economic(acc: Option<EconomicImpact>, next: Option<EconomicImpact>) -> O
 
 /// Folds via `EcologicalImpact::Add`, which re-derives the efficiency class
 /// from the summed CO2 — never copied from a single child's class.
-fn fold_ecological(acc: Option<EcologicalImpact>, next: Option<EcologicalImpact>) -> Option<EcologicalImpact> {
+fn fold_ecological(
+    acc: Option<EcologicalImpact>,
+    next: Option<EcologicalImpact>,
+) -> Option<EcologicalImpact> {
     match (acc, next) {
         (Some(a), Some(b)) => Some(a + b),
         (Some(a), None) => Some(a),
@@ -393,7 +406,11 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
     let mut raw: HashMap<String, RawNode> = HashMap::new();
     raw.insert(
         String::new(),
-        RawNode::empty(root_name(target), NodeKind::Project, "project root".to_string()),
+        RawNode::empty(
+            root_name(target),
+            NodeKind::Project,
+            "project root".to_string(),
+        ),
     );
 
     let mut file_entries: Vec<(String, &PathBuf, &codeimpact_hexagon::analysis::CodeMetrics)> =
@@ -466,15 +483,17 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
     sort_children(&mut raw);
     aggregate(&mut raw, "");
 
-    let scale_files = file_entries.iter().fold((0u32, 0u32, 0u32, 0usize), |acc, (id, _, _)| {
-        let n = &raw[id];
-        (
-            acc.0.max(n.direct),
-            acc.1.max(n.transitive),
-            acc.2.max(n.hidden),
-            acc.3.max(n.depth),
-        )
-    });
+    let scale_files = file_entries
+        .iter()
+        .fold((0u32, 0u32, 0u32, 0usize), |acc, (id, _, _)| {
+            let n = &raw[id];
+            (
+                acc.0.max(n.direct),
+                acc.1.max(n.transitive),
+                acc.2.max(n.hidden),
+                acc.3.max(n.depth),
+            )
+        });
     let root = &raw[""];
     let scale_folder = (root.direct, root.transitive, root.hidden);
 

@@ -54,8 +54,7 @@ impl FileConsumptionGraph {
         }
 
         let file_list: Vec<PathBuf> = files.iter().map(|(p, _)| p.clone()).collect();
-        let per_file_metrics: HashMap<PathBuf, CodeMetrics> =
-            files.iter().cloned().collect();
+        let per_file_metrics: HashMap<PathBuf, CodeMetrics> = files.iter().cloned().collect();
 
         // Build adjacency map: what each file depends on (owned)
         let mut adjacency: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
@@ -76,8 +75,7 @@ impl FileConsumptionGraph {
         } else {
             let mut max = 0usize;
             for path in &file_list {
-                let depth =
-                    Self::compute_depth(path, &adjacency, &cycle_nodes);
+                let depth = Self::compute_depth(path, &adjacency, &cycle_nodes);
                 max = max.max(depth);
             }
             max
@@ -110,14 +108,20 @@ impl FileConsumptionGraph {
         let mut chain = Vec::new();
         let mut visited = HashSet::new();
         let mut in_path = HashSet::new();
-        Self::dfs_chain(file, &self.adjacency, &mut visited, &mut in_path, &mut chain);
+        Self::dfs_chain(
+            file,
+            &self.adjacency,
+            &mut visited,
+            &mut in_path,
+            &mut chain,
+        );
         chain
     }
 
     /// Files that are part of at least one dependency cycle, sorted.
     pub fn files_with_cycles(&self) -> Vec<&PathBuf> {
         let mut result: Vec<&PathBuf> = self.cycle_nodes.iter().collect();
-        result.sort_by(|a, b| a.cmp(b));
+        result.sort();
         result
     }
 
@@ -150,8 +154,7 @@ impl FileConsumptionGraph {
             .filter_map(|m| m.ecological_impact().cloned())
             .reduce(|a, b| a + b);
 
-        let mut files_with_cycles: Vec<PathBuf> =
-            self.cycle_nodes.iter().cloned().collect();
+        let mut files_with_cycles: Vec<PathBuf> = self.cycle_nodes.iter().cloned().collect();
         files_with_cycles.sort();
 
         ProjectMetrics {
@@ -179,7 +182,7 @@ impl FileConsumptionGraph {
 
     /// DFS 3-colors cycle detection.
     const COLOR_WHITE: u8 = 0; // unvisited
-    const COLOR_GREY: u8 = 1;  // in current path
+    const COLOR_GREY: u8 = 1; // in current path
     const COLOR_BLACK: u8 = 2; // done
 
     fn detect_cycles(adjacency: &HashMap<PathBuf, Vec<PathBuf>>) -> HashSet<PathBuf> {
@@ -221,13 +224,7 @@ impl FileConsumptionGraph {
                 let callee_path: &Path = callee.as_path();
                 match color.get(callee_path).copied().unwrap_or(Self::COLOR_WHITE) {
                     Self::COLOR_WHITE => {
-                        Self::dfs_cycle(
-                            callee_path,
-                            adjacency,
-                            color,
-                            path_stack,
-                            in_cycle,
-                        );
+                        Self::dfs_cycle(callee_path, adjacency, color, path_stack, in_cycle);
                     }
                     Self::COLOR_GREY => {
                         // Back-edge: mark all nodes from callee to node as cycle
@@ -281,13 +278,7 @@ impl FileConsumptionGraph {
         // Recurse into dependencies
         if let Some(callees) = adjacency.get(node) {
             for callee in callees {
-                Self::dfs_chain(
-                    callee.as_path(),
-                    adjacency,
-                    visited,
-                    in_path,
-                    chain,
-                );
+                Self::dfs_chain(callee.as_path(), adjacency, visited, in_path, chain);
             }
         }
 
@@ -434,8 +425,14 @@ mod tests {
             (path("c.rs"), make_metrics(3, 3)),
         ];
         let deps = vec![
-            FileDependency { from: path("a.rs"), to: path("b.rs") },
-            FileDependency { from: path("b.rs"), to: path("c.rs") },
+            FileDependency {
+                from: path("a.rs"),
+                to: path("b.rs"),
+            },
+            FileDependency {
+                from: path("b.rs"),
+                to: path("c.rs"),
+            },
         ];
         let graph = FileConsumptionGraph::build(&files, deps).unwrap();
         assert_eq!(graph.total_dependencies(), 2);
@@ -449,8 +446,14 @@ mod tests {
             (path("b.rs"), make_metrics(2, 2)),
         ];
         let deps = vec![
-            FileDependency { from: path("a.rs"), to: path("b.rs") },
-            FileDependency { from: path("b.rs"), to: path("a.rs") },
+            FileDependency {
+                from: path("a.rs"),
+                to: path("b.rs"),
+            },
+            FileDependency {
+                from: path("b.rs"),
+                to: path("a.rs"),
+            },
         ];
         let graph = FileConsumptionGraph::build(&files, deps).unwrap();
         assert_eq!(graph.files_with_cycles().len(), 2);
@@ -459,7 +462,10 @@ mod tests {
     #[test]
     fn missing_node_errors() {
         let files = vec![(path("a.rs"), make_metrics(1, 1))];
-        let deps = vec![FileDependency { from: path("x.rs"), to: path("a.rs") }];
+        let deps = vec![FileDependency {
+            from: path("x.rs"),
+            to: path("a.rs"),
+        }];
         assert!(FileConsumptionGraph::build(&files, deps).is_err());
     }
 
@@ -472,13 +478,25 @@ mod tests {
         ];
         // A → B → C → A (3-node cycle)
         let deps = vec![
-            FileDependency { from: path("a.rs"), to: path("b.rs") },
-            FileDependency { from: path("b.rs"), to: path("c.rs") },
-            FileDependency { from: path("c.rs"), to: path("a.rs") },
+            FileDependency {
+                from: path("a.rs"),
+                to: path("b.rs"),
+            },
+            FileDependency {
+                from: path("b.rs"),
+                to: path("c.rs"),
+            },
+            FileDependency {
+                from: path("c.rs"),
+                to: path("a.rs"),
+            },
         ];
         let graph = FileConsumptionGraph::build(&files, deps).unwrap();
         let chain = graph.consumption_chain(&path("a.rs"));
-        assert_eq!(chain, vec![path("a.rs"), path("b.rs"), path("c.rs"), path("a.rs")]);
+        assert_eq!(
+            chain,
+            vec![path("a.rs"), path("b.rs"), path("c.rs"), path("a.rs")]
+        );
     }
 
     #[test]
@@ -489,8 +507,14 @@ mod tests {
         ];
         // A → B → A (2-node cycle)
         let deps = vec![
-            FileDependency { from: path("a.rs"), to: path("b.rs") },
-            FileDependency { from: path("b.rs"), to: path("a.rs") },
+            FileDependency {
+                from: path("a.rs"),
+                to: path("b.rs"),
+            },
+            FileDependency {
+                from: path("b.rs"),
+                to: path("a.rs"),
+            },
         ];
         let graph = FileConsumptionGraph::build(&files, deps).unwrap();
         let chain = graph.consumption_chain(&path("a.rs"));
@@ -556,12 +580,8 @@ mod tests {
         let current = path("src/main.rs");
         let root = path("src");
         let available = vec![path("src/main.rs")];
-        let result = resolve_file_dependency(
-            "use:std::collections::HashMap",
-            &current,
-            &root,
-            &available,
-        );
+        let result =
+            resolve_file_dependency("use:std::collections::HashMap", &current, &root, &available);
         assert_eq!(result, None);
     }
 
@@ -579,12 +599,7 @@ mod tests {
         let current = path("src/sub/mod.rs");
         let root = path("src");
         let available = vec![path("src/sub/foo/bar/Baz.rs")];
-        let result = resolve_file_dependency(
-            "use:foo::bar::Baz",
-            &current,
-            &root,
-            &available,
-        );
+        let result = resolve_file_dependency("use:foo::bar::Baz", &current, &root, &available);
         // Resolves relative to current file's parent: src/sub/foo/bar/Baz.rs
         assert_eq!(result, Some(path("src/sub/foo/bar/Baz.rs")));
     }

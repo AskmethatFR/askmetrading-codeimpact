@@ -77,7 +77,9 @@ fn write_html_is_self_contained() {
     let writer = HtmlReportWriter::new();
     let graph = graph_with_files(vec![("src/main.rs", 5, 8), ("src/lib.rs", 2, 2)]);
 
-    let html = writer.write_html(&graph, "my-project").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "my-project")
+        .expect("write_html should succeed");
 
     assert!(
         !html.contains("<link "),
@@ -96,15 +98,37 @@ fn write_html_shows_project_view_with_files_and_levels() {
     let writer = HtmlReportWriter::new();
     let graph = graph_with_files(vec![("src/main.rs", 5, 8), ("src/lib.rs", 2, 2)]);
 
-    let html = writer.write_html(&graph, "my-project").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "my-project")
+        .expect("write_html should succeed");
 
-    assert!(html.contains("src/main.rs"), "project view must list file paths: {}", html);
-    assert!(html.contains("src/lib.rs"), "project view must list file paths: {}", html);
+    assert!(
+        html.contains("src/main.rs"),
+        "project view must list file paths: {}",
+        html
+    );
+    assert!(
+        html.contains("src/lib.rs"),
+        "project view must list file paths: {}",
+        html
+    );
     // US7 T2 S2: FileNodeVm.level_label is replaced by NodeVm.level (the tree
     // node carries the level directly, not a flat per-file row).
-    assert!(html.contains("\"level\":\"low\""), "project view must carry a level per node: {}", html);
-    assert_eq!(html.matches("<html").count(), 1, "expected a single html root");
-    assert!(html.contains("<!DOCTYPE html>"), "expected a valid html document: {}", html);
+    assert!(
+        html.contains("\"level\":\"low\""),
+        "project view must carry a level per node: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<html").count(),
+        1,
+        "expected a single html root"
+    );
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "expected a valid html document: {}",
+        html
+    );
 }
 
 #[test]
@@ -113,7 +137,9 @@ fn write_html_neutralizes_script_breakout_payload_in_file_path() {
     let payload = "</script><script>alert(1)</script>.rs";
     let graph = graph_with_files(vec![(payload, 1, 1)]);
 
-    let html = writer.write_html(&graph, "my-project").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "my-project")
+        .expect("write_html should succeed");
 
     assert!(
         !html.contains("</script><script>alert(1)</script>"),
@@ -134,9 +160,15 @@ fn write_html_neutralizes_img_onerror_payload_in_file_path() {
     let payload = "\"><img onerror>evil.rs";
     let graph = graph_with_files(vec![(payload, 1, 1)]);
 
-    let html = writer.write_html(&graph, "my-project").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "my-project")
+        .expect("write_html should succeed");
 
-    assert!(!html.contains("<img"), "payload must not inject a literal <img> tag: {}", html);
+    assert!(
+        !html.contains("<img"),
+        "payload must not inject a literal <img> tag: {}",
+        html
+    );
 }
 
 #[test]
@@ -144,10 +176,20 @@ fn write_html_empty_graph_returns_valid_single_root_shell() {
     let writer = HtmlReportWriter::new();
     let graph = graph_with_files(vec![]);
 
-    let html = writer.write_html(&graph, "empty-project").expect("write_html should succeed on an empty project");
+    let html = writer
+        .write_html(&graph, "empty-project")
+        .expect("write_html should succeed on an empty project");
 
-    assert!(html.contains("<!DOCTYPE html>"), "missing doctype: {}", html);
-    assert_eq!(html.matches("<html").count(), 1, "expected a single html root");
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "missing doctype: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<html").count(),
+        1,
+        "expected a single html root"
+    );
 }
 
 #[test]
@@ -195,9 +237,9 @@ fn write_html_zero_complexity_file_has_zero_score_pct_no_panic() {
     // file's transitive_complexity is 0, so max_score == 0 in build_report_vm.
     let graph = graph_with_files(vec![("src/empty.rs", 0, 0)]);
 
-    let html = writer
-        .write_html(&graph, "my-project")
-        .expect("write_html should succeed for an all-zero-complexity project, not panic on div-by-zero");
+    let html = writer.write_html(&graph, "my-project").expect(
+        "write_html should succeed for an all-zero-complexity project, not panic on div-by-zero",
+    );
 
     assert!(
         html.contains("\"score\":0"),
@@ -232,9 +274,14 @@ fn write_html_zero_complexity_file_has_zero_score_pct_no_panic() {
 #[test]
 fn stat_grid_has_eight_tiles_with_aggregated_values() {
     let writer = HtmlReportWriter::new();
-    let graph = graph_from(vec![("a.rs", make_metrics(5, 8)), ("b.rs", make_metrics(3, 4))]);
+    let graph = graph_from(vec![
+        ("a.rs", make_metrics(5, 8)),
+        ("b.rs", make_metrics(3, 4)),
+    ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     // Node metrics (MetricVm) also carry a "label" field, so count `"sub":`
     // instead — that field only exists on StatVm.
@@ -259,7 +306,9 @@ fn stat_grid_counts_critical_warnings_and_io_together() {
         .with_io_in_loops(vec![io_in("f")]);
     let graph = graph_from(vec![("a.rs", file_metrics)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains("\"label\":\"Warnings\",\"value\":\"2\",\"sub\":\"2 critical\""),
@@ -273,7 +322,9 @@ fn stat_grid_shows_dash_when_no_economic_impact() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains("\"label\":\"Est. cost\",\"value\":\"\u{2014}\""),
@@ -292,7 +343,9 @@ fn rendered_js_contains_no_html_sink() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     let banned = [
         "innerHTML",
@@ -321,7 +374,9 @@ fn rendered_js_has_only_two_style_sinks() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     let total_style = html.matches(".style.").count();
     let width_sink = html.matches(".style.width").count();
@@ -354,7 +409,9 @@ fn tree_nests_files_under_their_folders() {
         ("a/b/two.rs", make_metrics(1, 1)),
     ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -369,11 +426,19 @@ fn tree_nests_files_under_their_folders() {
 fn folder_aggregates_direct_by_sum_and_depth_by_max() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![
-        ("x/f1.rs", CodeMetrics::with_call_graph(3, 3, 2, vec![], vec![])),
-        ("y/f2.rs", CodeMetrics::with_call_graph(5, 5, 7, vec![], vec![])),
+        (
+            "x/f1.rs",
+            CodeMetrics::with_call_graph(3, 3, 2, vec![], vec![]),
+        ),
+        (
+            "y/f2.rs",
+            CodeMetrics::with_call_graph(5, 5, 7, vec![], vec![]),
+        ),
     ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(r#""label":"Direct complexity","value":"8""#),
@@ -395,7 +460,9 @@ fn folder_score_is_max_of_descendant_file_scores() {
         ("a/high.rs", make_metrics(1, 9)),
     ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -417,7 +484,9 @@ fn folder_level_is_worst_descendant_level() {
         ("a/ok4.rs", make_metrics(4, 4)),
     ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -433,7 +502,9 @@ fn metric_pct_is_zero_when_scale_is_zero() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![("a.rs", make_metrics(0, 0))]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -452,7 +523,9 @@ fn metric_pct_floors_at_five_and_caps_at_hundred() {
         ("huge.rs", make_metrics(100, 100)),
     ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -478,7 +551,9 @@ fn children_sorted_folders_first_then_files_by_score_desc() {
         ("a_folder/inner.rs", make_metrics(1, 1)),
     ]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(r#""child_ids":["a_folder","z_file.rs"]"#),
@@ -493,7 +568,9 @@ fn write_html_neutralizes_payload_in_a_folder_path_segment() {
     let payload_path = "</script><script>alert(1)</script>/evil.rs".to_string();
     let graph = graph_from(vec![(payload_path.as_str(), make_metrics(1, 1))]);
 
-    let html = writer.write_html(&graph, "my-project").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "my-project")
+        .expect("write_html should succeed");
 
     assert!(
         !html.contains("</script><script>alert(1)</script>"),
@@ -542,7 +619,9 @@ fn detail_carries_functions_with_location_and_cycle_flag() {
     ]);
     let graph = graph_from(vec![("f.rs", metrics)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -560,7 +639,9 @@ fn folder_detail_collects_warnings_from_descendant_files() {
     let m2 = make_metrics(1, 1).with_warnings(vec![warning_in("f2", WarningSeverity::Critical)]);
     let graph = graph_from(vec![("a/one.rs", m1), ("a/two.rs", m2)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -578,7 +659,9 @@ fn folder_economic_impact_is_the_sum_of_children_impacts() {
     let m2 = make_metrics(1, 1).with_economic_impact(EconomicImpact::new(3.0, 512, 3.0, "low"));
     let graph = graph_from(vec![("a/one.rs", m1), ("a/two.rs", m2)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(r#""economic":{"cpu":"$0.000006","memory":"1.0 KB","total":"$0.000006","level":"low"}"#),
@@ -590,13 +673,21 @@ fn folder_economic_impact_is_the_sum_of_children_impacts() {
 #[test]
 fn folder_ecological_class_is_recomputed_from_summed_co2() {
     let writer = HtmlReportWriter::new();
-    let m1 = make_metrics(1, 1)
-        .with_ecological_impact(EcologicalImpact::new(0.6, 100.0, EfficiencyClass::A));
-    let m2 = make_metrics(1, 1)
-        .with_ecological_impact(EcologicalImpact::new(0.6, 100.0, EfficiencyClass::A));
+    let m1 = make_metrics(1, 1).with_ecological_impact(EcologicalImpact::new(
+        0.6,
+        100.0,
+        EfficiencyClass::A,
+    ));
+    let m2 = make_metrics(1, 1).with_ecological_impact(EcologicalImpact::new(
+        0.6,
+        100.0,
+        EfficiencyClass::A,
+    ));
     let graph = graph_from(vec![("a/one.rs", m1), ("a/two.rs", m2)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(
@@ -621,7 +712,9 @@ fn write_html_neutralizes_payload_in_function_name() {
     }]);
     let graph = graph_from(vec![("f.rs", metrics)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         !html.contains("</script><script>alert(1)</script>"),
@@ -650,7 +743,9 @@ fn write_html_neutralizes_payload_in_warning_message_and_suggestion() {
     }]);
     let graph = graph_from(vec![("f.rs", metrics)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         !html.contains("</script><script>alert(1)</script>"),
@@ -676,7 +771,9 @@ fn write_html_neutralizes_payload_in_io_call_name() {
     }]);
     let graph = graph_from(vec![("f.rs", metrics)]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert!(
         !html.contains("</script><script>alert(1)</script>"),
@@ -705,7 +802,9 @@ fn font_faces_are_embedded_as_data_uris() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
     assert_eq!(
         html.matches("@font-face").count(),
@@ -726,10 +825,20 @@ fn report_contains_no_remote_url() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
 
-    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
 
-    assert!(!html.contains("http://"), "report must not reference a remote http:// URL: {}", html);
-    assert!(!html.contains("https://"), "report must not reference a remote https:// URL: {}", html);
+    assert!(
+        !html.contains("http://"),
+        "report must not reference a remote http:// URL: {}",
+        html
+    );
+    assert!(
+        !html.contains("https://"),
+        "report must not reference a remote https:// URL: {}",
+        html
+    );
     let total_urls = html.matches("url(").count();
     let data_urls = html.matches("url(data:").count();
     assert_eq!(
@@ -766,7 +875,9 @@ fn tree_ids_are_relative_when_target_resolves_to_the_files_common_root() {
     let entries = vec![(file_path, make_metrics(1, 1))];
     let graph = FileConsumptionGraph::build(&entries, vec![]).unwrap();
 
-    let html = writer.write_html(&graph, &target).expect("write_html should succeed");
+    let html = writer
+        .write_html(&graph, &target)
+        .expect("write_html should succeed");
 
     assert!(
         html.contains(r#""id":"main.rs","name":"main.rs","kind":"file""#),

@@ -12,10 +12,7 @@ pub trait ReportWriter: Send + Sync {
         target: &str,
         target_type: &str,
     ) -> Result<String, AnalysisError>;
-    fn write_project_report(
-        &self,
-        graph: &FileConsumptionGraph,
-    ) -> Result<(), AnalysisError>;
+    fn write_project_report(&self, graph: &FileConsumptionGraph) -> Result<(), AnalysisError>;
     fn write_stress_test(
         &self,
         run: &StressTestRun,

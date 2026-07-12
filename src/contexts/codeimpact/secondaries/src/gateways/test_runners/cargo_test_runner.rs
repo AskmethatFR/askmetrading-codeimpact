@@ -19,7 +19,11 @@ impl CargoTestRunner {
     }
 
     fn time_flag() -> &'static str {
-        if cfg!(target_os = "macos") { "-l" } else { "-v" }
+        if cfg!(target_os = "macos") {
+            "-l"
+        } else {
+            "-v"
+        }
     }
 
     fn build_cmd(
@@ -44,9 +48,18 @@ impl CargoTestRunner {
         cmd.env_clear();
         cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
         cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
-        cmd.env("CARGO_HOME", std::env::var("CARGO_HOME").unwrap_or_default());
-        cmd.env("RUST_BACKTRACE", std::env::var("RUST_BACKTRACE").unwrap_or_default());
-        cmd.env("RUSTUP_HOME", std::env::var("RUSTUP_HOME").unwrap_or_default());
+        cmd.env(
+            "CARGO_HOME",
+            std::env::var("CARGO_HOME").unwrap_or_default(),
+        );
+        cmd.env(
+            "RUST_BACKTRACE",
+            std::env::var("RUST_BACKTRACE").unwrap_or_default(),
+        );
+        cmd.env(
+            "RUSTUP_HOME",
+            std::env::var("RUSTUP_HOME").unwrap_or_default(),
+        );
         cmd.env("TMPDIR", std::env::var("TMPDIR").unwrap_or_default());
         cmd.env("USER", std::env::var("USER").unwrap_or_default());
         cmd.env("SHELL", std::env::var("SHELL").unwrap_or_default());
@@ -81,9 +94,9 @@ impl CargoTestRunner {
         let use_time = Self::time_wrapper_available();
         let mut cmd = Self::build_cmd(project_dir, filter, use_time);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| AnalysisError::TestRunnerError(format!("impossible de lancer cargo test: {}", e)))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            AnalysisError::TestRunnerError(format!("impossible de lancer cargo test: {}", e))
+        })?;
 
         let _status = loop {
             if start.elapsed() > TEST_TIMEOUT {
@@ -107,14 +120,17 @@ impl CargoTestRunner {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| AnalysisError::TestRunnerError(format!("impossible de lire la sortie: {}", e)))?;
+        let output = child.wait_with_output().map_err(|e| {
+            AnalysisError::TestRunnerError(format!("impossible de lire la sortie: {}", e))
+        })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         let (cpu_time_ms, memory_kb) = if use_time {
-            (Self::parse_cpu_time(&stderr), Self::parse_memory_kb(&stderr))
+            (
+                Self::parse_cpu_time(&stderr),
+                Self::parse_memory_kb(&stderr),
+            )
         } else {
             (0, 0)
         };
@@ -173,7 +189,11 @@ impl CargoTestRunner {
                 };
                 if let Ok(kb) = val_str.parse::<u64>() {
                     // macOS reports bytes, Linux reports KB
-                    return if lower.contains("(kbytes)") { kb } else { kb / 1024 };
+                    return if lower.contains("(kbytes)") {
+                        kb
+                    } else {
+                        kb / 1024
+                    };
                 }
             }
         }

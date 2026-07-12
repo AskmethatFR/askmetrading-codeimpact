@@ -284,23 +284,6 @@ mod tests {
         }
     }
 
-    fn make_warning(
-        function: &str,
-        pattern: WarningPattern,
-        severity: WarningSeverity,
-        message: &str,
-        suggestion: &str,
-    ) -> ComplexityWarning {
-        ComplexityWarning {
-            pattern,
-            severity,
-            function: function.to_string(),
-            location: super::CodeLocation::new(String::new(), 1, 1),
-            message: message.to_string(),
-            suggestion: suggestion.to_string(),
-        }
-    }
-
     #[test]
     fn quadratic_loop_detected() {
         let fns = vec![

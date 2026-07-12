@@ -37,9 +37,14 @@ fn handle_project_html_returns_writer_output_for_valid_project() {
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
-    let result = use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result =
+        use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
 
-    assert!(result.is_ok(), "handle_project_html should succeed, got {:?}", result);
+    assert!(
+        result.is_ok(),
+        "handle_project_html should succeed, got {:?}",
+        result
+    );
     let html = result.unwrap();
     assert!(!html.is_empty(), "html string should not be empty");
     assert_eq!(
@@ -62,10 +67,14 @@ fn handle_project_html_empty_project_returns_error() {
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
 
-    let result = use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result =
+        use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
 
     match result {
         Err(codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed(_)) => {}
-        _ => panic!("expected AnalysisFailed for empty project, got {:?}", result),
+        _ => panic!(
+            "expected AnalysisFailed for empty project, got {:?}",
+            result
+        ),
     }
 }

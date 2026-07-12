@@ -74,8 +74,14 @@ fn chain_a_to_b_to_c() {
         (path("c.rs"), make_metrics(3, 3)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("c.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("c.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     assert_eq!(graph.total_dependencies(), 2);
@@ -83,7 +89,10 @@ fn chain_a_to_b_to_c() {
     assert!(graph.files_with_cycles().is_empty());
 
     let chain = graph.consumption_chain(&path("a.rs"));
-    let names: Vec<&str> = chain.iter().map(|p| p.file_stem().unwrap().to_str().unwrap()).collect();
+    let names: Vec<&str> = chain
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_str().unwrap())
+        .collect();
     assert_eq!(names, vec!["a", "b", "c"]);
 }
 
@@ -94,13 +103,22 @@ fn cycle_a_b_a() {
         (path("b.rs"), make_metrics(2, 2)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("a.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("a.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     let cycles = graph.files_with_cycles();
     assert_eq!(cycles.len(), 2);
-    let names: Vec<&str> = cycles.iter().map(|p| p.file_stem().unwrap().to_str().unwrap()).collect();
+    let names: Vec<&str> = cycles
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_str().unwrap())
+        .collect();
     assert!(names.contains(&"a"));
     assert!(names.contains(&"b"));
 }
@@ -113,9 +131,18 @@ fn large_cycle_three_nodes() {
         (path("c.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("c.rs") },
-        FileDependency { from: path("c.rs"), to: path("a.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("c.rs"),
+        },
+        FileDependency {
+            from: path("c.rs"),
+            to: path("a.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     assert_eq!(graph.files_with_cycles().len(), 3);
@@ -124,9 +151,10 @@ fn large_cycle_three_nodes() {
 #[test]
 fn missing_from_node_returns_error() {
     let files = vec![(path("a.rs"), make_metrics(1, 1))];
-    let deps = vec![
-        FileDependency { from: path("unknown.rs"), to: path("a.rs") },
-    ];
+    let deps = vec![FileDependency {
+        from: path("unknown.rs"),
+        to: path("a.rs"),
+    }];
     let result = FileConsumptionGraph::build(&files, deps);
     assert!(result.is_err());
 }
@@ -134,9 +162,10 @@ fn missing_from_node_returns_error() {
 #[test]
 fn missing_to_node_returns_error() {
     let files = vec![(path("a.rs"), make_metrics(1, 1))];
-    let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("unknown.rs") },
-    ];
+    let deps = vec![FileDependency {
+        from: path("a.rs"),
+        to: path("unknown.rs"),
+    }];
     let result = FileConsumptionGraph::build(&files, deps);
     assert!(result.is_err());
 }
@@ -150,10 +179,22 @@ fn diamond_graph() {
         (path("d.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("a.rs"), to: path("c.rs") },
-        FileDependency { from: path("b.rs"), to: path("d.rs") },
-        FileDependency { from: path("c.rs"), to: path("d.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("c.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("d.rs"),
+        },
+        FileDependency {
+            from: path("c.rs"),
+            to: path("d.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     assert_eq!(graph.total_dependencies(), 4);
@@ -162,7 +203,10 @@ fn diamond_graph() {
 
     let chain = graph.consumption_chain(&path("a.rs"));
     // Chain should include a, its deps, and their transitive deps
-    let names: Vec<&str> = chain.iter().map(|p| p.file_stem().unwrap().to_str().unwrap()).collect();
+    let names: Vec<&str> = chain
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_str().unwrap())
+        .collect();
     assert!(names.contains(&"a"));
     assert!(names.contains(&"b"));
     assert!(names.contains(&"c"));
@@ -178,8 +222,14 @@ fn disconnected_subgraphs() {
         (path("y.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("x.rs"), to: path("y.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("x.rs"),
+            to: path("y.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     assert_eq!(graph.total_dependencies(), 2);
@@ -198,12 +248,21 @@ fn consumption_chain_linear() {
         (path("c.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("c.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("c.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     let chain = graph.consumption_chain(&path("a.rs"));
-    let names: Vec<&str> = chain.iter().map(|p| p.file_stem().unwrap().to_str().unwrap()).collect();
+    let names: Vec<&str> = chain
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_str().unwrap())
+        .collect();
     assert_eq!(names, vec!["a", "b", "c"]);
 }
 
@@ -223,8 +282,14 @@ fn consumption_chain_cycle() {
         (path("b.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("a.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("a.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     let chain = graph.consumption_chain(&path("a.rs"));
@@ -257,14 +322,23 @@ fn files_with_cycles_one_cycle() {
         (path("a.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("a.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("a.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     let cycles = graph.files_with_cycles();
     assert_eq!(cycles.len(), 2);
     // Should be sorted
-    let names: Vec<&str> = cycles.iter().map(|p| p.file_stem().unwrap().to_str().unwrap()).collect();
+    let names: Vec<&str> = cycles
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_str().unwrap())
+        .collect();
     assert_eq!(names, vec!["a", "b"]);
 }
 
@@ -301,9 +375,18 @@ fn max_depth_chain() {
         (path("d.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("c.rs") },
-        FileDependency { from: path("c.rs"), to: path("d.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("c.rs"),
+        },
+        FileDependency {
+            from: path("c.rs"),
+            to: path("d.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     assert_eq!(graph.max_depth(), 4);
@@ -317,9 +400,18 @@ fn max_depth_with_cycle() {
         (path("c.rs"), make_metrics(1, 1)),
     ];
     let deps = vec![
-        FileDependency { from: path("a.rs"), to: path("b.rs") },
-        FileDependency { from: path("b.rs"), to: path("c.rs") },
-        FileDependency { from: path("c.rs"), to: path("a.rs") },
+        FileDependency {
+            from: path("a.rs"),
+            to: path("b.rs"),
+        },
+        FileDependency {
+            from: path("b.rs"),
+            to: path("c.rs"),
+        },
+        FileDependency {
+            from: path("c.rs"),
+            to: path("a.rs"),
+        },
     ];
     let graph = FileConsumptionGraph::build(&files, deps).unwrap();
     // Depth stops at cycle nodes
@@ -353,7 +445,9 @@ fn aggregated_economic_impact_sums_across_files() {
     ];
     let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
     let pm = graph.aggregated_metrics();
-    let economic = pm.total_economic_impact.expect("should have economic impact");
+    let economic = pm
+        .total_economic_impact
+        .expect("should have economic impact");
     assert!((economic.total_cost_microdollars() - 31.5).abs() < 1e-9);
     assert!((economic.cpu_cost_microdollars() - 30.0).abs() < 1e-9);
     assert_eq!(economic.memory_bytes(), 300);
@@ -377,7 +471,9 @@ fn aggregated_ecological_impact_sums_across_files() {
     ];
     let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
     let pm = graph.aggregated_metrics();
-    let ecological = pm.total_ecological_impact.expect("should have ecological impact");
+    let ecological = pm
+        .total_ecological_impact
+        .expect("should have ecological impact");
     assert!((ecological.co2_grams() - 3.0).abs() < 1e-9);
     assert!((ecological.energy_joules() - 27000.0).abs() < 1e-9);
 }
@@ -395,8 +491,12 @@ fn aggregated_impacts_some_missing_skips_none() {
     ];
     let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
     let pm = graph.aggregated_metrics();
-    let economic = pm.total_economic_impact.expect("should have economic impact");
-    let ecological = pm.total_ecological_impact.expect("should have ecological impact");
+    let economic = pm
+        .total_economic_impact
+        .expect("should have economic impact");
+    let ecological = pm
+        .total_ecological_impact
+        .expect("should have ecological impact");
     assert!((economic.total_cost_microdollars() - 10.5).abs() < 1e-9);
     assert!((ecological.co2_grams() - 1.0).abs() < 1e-9);
 }

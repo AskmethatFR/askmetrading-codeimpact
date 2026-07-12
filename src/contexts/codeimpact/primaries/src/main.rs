@@ -42,11 +42,18 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Analyze { file, path, format, output } => {
+        Commands::Analyze {
+            file,
+            path,
+            format,
+            output,
+        } => {
             let file_path = match (file, path) {
                 (Some(f), None) | (None, Some(f)) => f.clone(),
                 (Some(_), Some(_)) => {
-                    eprintln!("erreur: spécifiez soit un fichier en argument, soit --path, pas les deux");
+                    eprintln!(
+                        "erreur: spécifiez soit un fichier en argument, soit --path, pas les deux"
+                    );
                     std::process::exit(1);
                 }
                 (None, None) => {
@@ -60,7 +67,10 @@ fn main() {
                 "json" => OutputFormat::Json,
                 "html" => OutputFormat::Html,
                 _ => {
-                    eprintln!("erreur: format invalide '{}'. Formats supportés: console, json, html", format);
+                    eprintln!(
+                        "erreur: format invalide '{}'. Formats supportés: console, json, html",
+                        format
+                    );
                     std::process::exit(1);
                 }
             };
@@ -80,7 +90,8 @@ fn main() {
             match output_format {
                 OutputFormat::Console => {
                     let writer = ConsoleReportWriter::new();
-                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let use_case =
+                        RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     match use_case.handle(&target, rules) {
                         Ok(()) => std::process::exit(0),
                         Err(e) => {
@@ -91,7 +102,8 @@ fn main() {
                 }
                 OutputFormat::Json => {
                     let writer = JsonReportWriter::new();
-                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let use_case =
+                        RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     let result = if is_project {
                         use_case.handle_project_json(&target, rules)
                     } else {
@@ -110,14 +122,19 @@ fn main() {
                 }
                 OutputFormat::Html => {
                     if !is_project {
-                        eprintln!("erreur: le format html nécessite une cible projet (--path <dossier>)");
+                        eprintln!(
+                            "erreur: le format html nécessite une cible projet (--path <dossier>)"
+                        );
                         std::process::exit(1);
                     }
                     let writer = HtmlReportWriter::new();
-                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let use_case =
+                        RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     match use_case.handle_project_html(&target, rules) {
                         Ok(html) => {
-                            let output_path = output.clone().unwrap_or_else(|| PathBuf::from("report.html"));
+                            let output_path = output
+                                .clone()
+                                .unwrap_or_else(|| PathBuf::from("report.html"));
                             match write_html_report(&output_path, &html) {
                                 Ok(()) => {
                                     println!("Rapport HTML généré: {}", output_path.display());
@@ -165,8 +182,8 @@ fn write_html_report(output_path: &std::path::Path, html: &str) -> Result<(), St
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => std::path::Path::new("."),
     };
-    let canonical_parent = std::fs::canonicalize(parent)
-        .map_err(|_| "dossier de sortie introuvable".to_string())?;
+    let canonical_parent =
+        std::fs::canonicalize(parent).map_err(|_| "dossier de sortie introuvable".to_string())?;
     let file_name = output_path
         .file_name()
         .ok_or_else(|| "nom de fichier de sortie invalide".to_string())?;

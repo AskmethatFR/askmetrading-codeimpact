@@ -30,6 +30,12 @@ impl SharedReportWriterStub {
     }
 }
 
+impl Default for SharedReportWriterStub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReportWriter for SharedReportWriterStub {
     fn write_console(&self, metrics: &CodeMetrics) -> Result<(), AnalysisError> {
         *self.last_metrics.lock().unwrap() = Some(metrics.clone());
@@ -44,16 +50,15 @@ impl ReportWriter for SharedReportWriterStub {
     ) -> Result<String, AnalysisError> {
         let json = format!(
             r#"{{"tool":{{"name":"codeimpact","version":"0.1.0"}},"timestamp":"2026-07-11T15:30:00Z","target":"{}","target_type":"{}","metrics":{{"cyclomatic_complexity":{}}}}}"#,
-            target, target_type, metrics.cyclomatic_complexity()
+            target,
+            target_type,
+            metrics.cyclomatic_complexity()
         );
         *self.last_json.lock().unwrap() = Some(json.clone());
         Ok(json)
     }
 
-    fn write_project_report(
-        &self,
-        graph: &FileConsumptionGraph,
-    ) -> Result<(), AnalysisError> {
+    fn write_project_report(&self, graph: &FileConsumptionGraph) -> Result<(), AnalysisError> {
         *self.last_graph.lock().unwrap() = Some(graph.clone());
         Ok(())
     }
