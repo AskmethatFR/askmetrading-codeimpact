@@ -248,8 +248,18 @@ fn level_name(rank: u8) -> &'static str {
 /// of platform separator. Falls back to the file's own full path when it is
 /// not actually rooted under `target` (test fixtures use bare relative
 /// paths with an unrelated target name).
-fn node_id(path: &Path, target: &str) -> String {
-    let relative = path.strip_prefix(Path::new(target)).unwrap_or(path);
+///
+/// `target_root` should be the CANONICALIZED form of the `--path` CLI
+/// argument, not the raw string: `FileSystemCodeReader::list_rust_files`
+/// canonicalizes every file path it returns (resolving symlinks, e.g.
+/// macOS's `/tmp` -> `/private/tmp`), while `target` reaches `write_html`
+/// un-canonicalized (`run_analysis.rs`'s `target.path().to_string_lossy()`).
+/// Stripping the raw target against canonicalized files fails even when
+/// they name the SAME directory, degenerating the tree into a single-child
+/// folder chain mirroring the whole filesystem path (found dogfooding the
+/// real CLI — the tech spec did not anticipate this mismatch).
+fn node_id(path: &Path, target_root: &Path) -> String {
+    let relative = path.strip_prefix(target_root).unwrap_or(path);
     relative
         .iter()
         .map(|c| c.to_string_lossy())
@@ -374,6 +384,12 @@ fn pct(value: u64, scale: u64) -> u8 {
 fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
     let per_file = graph.per_file_metrics();
 
+    // Canonicalize once: real file paths (FileSystemCodeReader) are already
+    // canonical, so resolving `target` the same way is what makes
+    // `strip_prefix` actually match in the real CLI. Falls back to the raw
+    // string when `target` does not exist on disk (fixture-based tests).
+    let target_root = std::fs::canonicalize(target).unwrap_or_else(|_| PathBuf::from(target));
+
     let mut raw: HashMap<String, RawNode> = HashMap::new();
     raw.insert(
         String::new(),
@@ -383,7 +399,7 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
     let mut file_entries: Vec<(String, &PathBuf, &codeimpact_hexagon::analysis::CodeMetrics)> =
         per_file
             .iter()
-            .map(|(path, metrics)| (node_id(path, target), path, metrics))
+            .map(|(path, metrics)| (node_id(path, &target_root), path, metrics))
             .collect();
     file_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
