@@ -16,7 +16,11 @@
 | AnalysisReport | DTO | Regroupe les métriques, impacts, et recommandations. Sortie du use case. |
 | ProactiveAnalyzer | Domain Service | Analyse statique du code source (AST, patterns). Orchestre l'estimation d'impact économique. |
 | ReactiveAnalyzer | Domain Service | Analyse dynamique via exécution instrumentée des tests. |
-| StressTestRun | VO | Résultat d'un run de tests avec instrumentation: durée, delta CPU/mem, tests passés/échoués. |
+| StressTestRun | VO | Résultat d'un run de tests instrumenté: durée, CPU, mémoire (ces deux-là en `Measurement`), tests passés/total, filtre. Sur un workspace, c'est l'**agrégat** des N binaires de test (voir Agrégation). |
+| Measurement | VO | `Available(T)` ou `Unmeasurable(raison)`. Type somme qui rend **structurellement impossible** de confondre « mesuré à 0 » et « pas su mesurer » — un `Available(0)` honnête reste légitime (voir [[ADR-0010]]). |
+| UnmeasurableReason | Enum | Pourquoi une mesure manque. `NoSampler`: pas de sondeur (`/usr/bin/time`) sur l'hôte. `NoTestsExecuted`: aucun test n'a tourné — un run qui n'a rien exercé n'a aucun coût honnête à rapporter, si bien échantillonné que soit son processus (voir [[ADR-0011]]). |
+| Agrégation | Loi de domaine | Pliage des N `StressTestRun` d'un workspace en un seul (`StressTestRun::aggregate`). Durée et tests: **somme**. CPU: somme, mais `Unmeasurable` si **un seul** run l'est. Mémoire: **max** — un pic RSS de processus qui ne coexistent jamais n'est pas une somme. Voir [[ADR-0011]]. |
+| Ligne de résumé | Concept | La ligne `test result:` qu'un binaire libtest imprime **toujours** s'il va au bout — succès, échec, ou zéro test. Son **absence** est le discriminant d'un binaire **crashé**. Le code de sortie ne l'est pas: un binaire dont des tests échouent sort en non-zéro sur son chemin **nominal**, et les tests rouges doivent rester mesurables (voir [[ADR-0011]]). |
 | CodeReaderPort | Port | Interface pour lire le code source depuis le filesystem. |
 | ProfilerPort | Port | Interface pour mesurer l'impact réel (CPU/mem/IO). L'implémentation P0 utilise des heuristiques. |
 | TestRunnerPort | Port | Interface pour exécuter les tests avec instrumentation. |
