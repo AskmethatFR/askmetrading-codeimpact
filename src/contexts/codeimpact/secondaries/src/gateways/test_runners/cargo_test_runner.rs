@@ -16,6 +16,14 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 /// print loop or `--nocapture` (#39 follow-up, Security MEDIUM).
 const MAX_CHILD_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 
+/// How long `join_drain_thread` waits for a reader thread's result
+/// before giving up and reporting an error. Applies AFTER the child's
+/// own lifecycle already resolved (normal exit, or `kill_child_and_group`
+/// already ran) — this is purely the drain phase, so a few seconds is
+/// ample; it is not part of the 300s `TEST_TIMEOUT` budget (#39
+/// follow-up, Security HIGH).
+const DRAIN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct CargoTestRunner {
     project_dir: std::path::PathBuf,
 }
@@ -259,20 +267,34 @@ impl CargoTestRunner {
         rx
     }
 
-    /// Waits for a reader thread's result, surfacing BOTH kinds of
+    /// Waits for a reader thread's result, surfacing every kind of
     /// failure honestly instead of silently defaulting to an empty
-    /// buffer: the reader's own `Err` (cap exceeded, io error) and the
-    /// thread having panicked (dropping its sender without ever
-    /// sending — surfaced as a disconnected channel). A read error must
-    /// not silently become "the child printed nothing" (#39 follow-up,
-    /// Security LOW/MEDIUM).
+    /// buffer: the reader's own `Err` (cap exceeded, io error), the
+    /// thread having panicked (dropping its sender without ever sending
+    /// — surfaced as a disconnected channel), and the reader being
+    /// genuinely still alive but stuck (surfaced as a timeout). A read
+    /// error must not silently become "the child printed nothing" (#39
+    /// follow-up, Security LOW/MEDIUM).
+    ///
+    /// The wait is bounded: process-group kill (`kill_process_group`) is
+    /// only best effort — a grandchild that calls `setsid()` escapes it
+    /// and can keep the pipe's write end open forever, in which case the
+    /// reader thread's `read_to_end` never sees EOF and never returns.
+    /// Without a bound, `run_with_timeout_with_budget` — and the whole
+    /// `codeimpact` process — would hang indefinitely despite the 300s
+    /// `TEST_TIMEOUT`, with no watchdog anywhere above this layer (#39
+    /// follow-up, Security HIGH). Past the bound, this abandons the
+    /// reader thread (it keeps running, blocked, until the process
+    /// exits) rather than waiting on it further: one leaked, permanently
+    /// -blocked OS thread in a bounded process is an acceptable trade: a
+    /// tool that never returns is not.
     fn join_drain_thread(
         reader: Option<std::sync::mpsc::Receiver<Result<Vec<u8>, AnalysisError>>>,
     ) -> Result<Vec<u8>, AnalysisError> {
         match reader {
-            Some(rx) => rx.recv().unwrap_or_else(|_| {
+            Some(rx) => rx.recv_timeout(DRAIN_JOIN_TIMEOUT).unwrap_or_else(|_| {
                 Err(AnalysisError::TestRunnerError(
-                    "le thread de lecture de la sortie du processus a paniqué".into(),
+                    "lecture de la sortie du processus interrompue".into(),
                 ))
             }),
             None => Ok(Vec::new()),
