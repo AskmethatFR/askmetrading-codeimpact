@@ -101,3 +101,27 @@ fn cargo_test_runner_on_empty_crate_returns_zero() {
     assert_eq!(result.tests_total(), 0);
     assert_eq!(result.tests_passed(), 0);
 }
+
+// #36 bug 2 — the acceptance criterion for "build is excluded from the
+// measurement": deliberately do NOT pre-build this crate. `run_tests` must
+// still build it internally (unmeasured) before measuring, so the reported
+// `duration_ms` reflects only running two trivial assertions — not the
+// rustc compile, which alone takes far longer than this bound. A flaky
+// relative-timing comparison (build twice, compare) is avoided on purpose;
+// this is a single generous absolute bound.
+#[test]
+fn cargo_test_runner_excludes_build_time_from_measured_duration() {
+    let crate_dir = create_temp_crate("unbuilt_crate");
+    // Intentionally no pre-build here: `run_tests` must do it internally.
+
+    let runner = CargoTestRunner::new(crate_dir.path().to_path_buf());
+    let result = runner.run_tests(None).expect("run_tests should succeed");
+
+    assert_eq!(result.tests_total(), 2);
+    assert_eq!(result.tests_passed(), 2);
+    assert!(
+        result.duration_ms() < 2000,
+        "duration_ms should reflect only the measured run, not the build; got {} ms",
+        result.duration_ms()
+    );
+}
