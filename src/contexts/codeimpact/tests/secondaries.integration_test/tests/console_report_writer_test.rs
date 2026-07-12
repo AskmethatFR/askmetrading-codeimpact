@@ -7,7 +7,10 @@ use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FileDependency;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::StressTestRun;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_hexagon::analysis::WarningSeverity;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
@@ -212,6 +215,57 @@ fn write_project_report_shows_per_file_io_in_loops() {
         "expected I/O warning in output, got: {}",
         output
     );
+}
+
+// #36 — the central acceptance criterion for the whole ticket: the tool
+// must never render `0` for a metric it could not measure. `0` reads as
+// "free", which is a lie.
+#[test]
+fn write_stress_test_shows_na_not_zero_when_unmeasurable() {
+    let writer = ConsoleReportWriter::new();
+    let run = StressTestRun::new(
+        1500,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+    let impact = Measurement::Unmeasurable(UnmeasurableReason::NoSampler);
+    let mut buf = Vec::new();
+    writer.write_stress_test_to(&mut buf, &run, &impact);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains("Temps CPU: 0 ms") && !output.contains("Mémoire: 0.0 MB"),
+        "must never render a bare 0 for an unmeasured metric, got: {}",
+        output
+    );
+    assert!(
+        output.contains("Temps CPU: n/a") && output.contains("Mémoire: n/a"),
+        "expected n/a for unmeasured metrics, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_stress_test_shows_real_numbers_when_measured() {
+    let writer = ConsoleReportWriter::new();
+    let run = StressTestRun::new(
+        1500,
+        Measurement::Available(1200),
+        Measurement::Available(8192),
+        42,
+        50,
+        None,
+    );
+    let impact = Measurement::Available(EconomicImpact::new(33.3, 8192 * 1024, 34.1, "low"));
+    let mut buf = Vec::new();
+    writer.write_stress_test_to(&mut buf, &run, &impact);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(output.contains("Temps CPU: 1200 ms"), "got: {}", output);
+    assert!(!output.contains("n/a"), "got: {}", output);
 }
 
 #[test]
