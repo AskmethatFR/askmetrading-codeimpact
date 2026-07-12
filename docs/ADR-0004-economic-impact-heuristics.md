@@ -23,7 +23,7 @@ Rationale:
 - **P0 MVP constraint**: no test execution infrastructure yet. US1 (complexity analysis) is static-only. Profiling requires a running process.
 - **Zero-cost feedback**: heuristics evaluate in ~0.1ms per file vs 100ms+ for real profiling. Developer gets instant feedback on every `cargo check`.
 - **Cross-language without runtime**: heuristics work on any language the parser supports. JVMTI profiler only works on JVM code.
-- **ProfilerPort already designed**: the port exists in the hexagon. Heuristics are the first `ProfilerPort` adapter. Real profilers plug in later without changing the domain.
+- **`ProfilerPort` is not designed yet**: no such port exists in the hexagon today (verified: `grep -r ProfilerPort src/` returns zero hits in production code — only doc references, corrected by #36). Heuristics are meant to become the first `ProfilerPort` adapter once that port is actually introduced; until then, `EconomicImpactEstimator` is a plain domain service with no port behind it.
 
 ## Consequences
 

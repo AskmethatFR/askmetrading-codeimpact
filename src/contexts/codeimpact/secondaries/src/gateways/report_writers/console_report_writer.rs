@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
@@ -332,6 +333,82 @@ impl ConsoleReportWriter {
 
         writeln!(writer, "==============================").unwrap();
     }
+
+    /// Write a stress-test report to a custom writer (used for testing).
+    pub fn write_stress_test_to(
+        &self,
+        writer: &mut dyn Write,
+        run: &StressTestRun,
+        impact: &Measurement<EconomicImpact>,
+    ) {
+        writeln!(writer, "=== Stress Test ===").unwrap();
+        let filter_label = run
+            .filter()
+            .map(|f| format!(" (filtre: {})", f))
+            .unwrap_or_default();
+        writeln!(
+            writer,
+            "Tests: {}/{} passés{}",
+            run.tests_passed(),
+            run.tests_total(),
+            filter_label
+        )
+        .unwrap();
+        writeln!(writer, "Durée: {} ms", run.duration_ms()).unwrap();
+        match run.cpu_time_ms() {
+            Measurement::Available(ms) => {
+                writeln!(writer, "Temps CPU: {} ms", ms).unwrap();
+            }
+            Measurement::Unmeasurable(reason) => {
+                writeln!(writer, "Temps CPU: n/a ({})", reason).unwrap();
+            }
+        }
+        match run.memory_kb() {
+            Measurement::Available(kb) => {
+                let memory_mb = kb as f64 / KB_TO_MB;
+                if memory_mb >= MB_TO_GB {
+                    writeln!(writer, "Mémoire: {:.1} GB", memory_mb / MB_TO_GB).unwrap();
+                } else {
+                    writeln!(writer, "Mémoire: {:.1} MB", memory_mb).unwrap();
+                }
+            }
+            Measurement::Unmeasurable(reason) => {
+                writeln!(writer, "Mémoire: n/a ({})", reason).unwrap();
+            }
+        }
+        writeln!(writer).unwrap();
+        writeln!(writer, "=== Impact économique réel ===").unwrap();
+        match impact {
+            Measurement::Available(impact) => {
+                writeln!(
+                    writer,
+                    "Coût CPU: {}",
+                    format_dollars(impact.cpu_cost_microdollars())
+                )
+                .unwrap();
+                let memory_mb = impact.memory_bytes() as f64 / KB_TO_MB / KB_TO_MB;
+                if memory_mb >= MB_TO_GB {
+                    writeln!(writer, "Mémoire: {:.1} GB", memory_mb / MB_TO_GB).unwrap();
+                } else {
+                    writeln!(writer, "Mémoire: {:.1} MB", memory_mb).unwrap();
+                }
+                writeln!(
+                    writer,
+                    "Coût total: {}",
+                    format_dollars(impact.total_cost_microdollars())
+                )
+                .unwrap();
+                writeln!(writer, "Niveau: {}", impact.level()).unwrap();
+            }
+            Measurement::Unmeasurable(reason) => {
+                writeln!(writer, "Coût CPU: n/a ({})", reason).unwrap();
+                writeln!(writer, "Mémoire: n/a ({})", reason).unwrap();
+                writeln!(writer, "Coût total: n/a ({})", reason).unwrap();
+                writeln!(writer, "Niveau: n/a ({})", reason).unwrap();
+            }
+        }
+        writeln!(writer, "==============================").unwrap();
+    }
 }
 
 impl ReportWriter for ConsoleReportWriter {
@@ -359,45 +436,9 @@ impl ReportWriter for ConsoleReportWriter {
     fn write_stress_test(
         &self,
         run: &StressTestRun,
-        impact: &EconomicImpact,
+        impact: &Measurement<EconomicImpact>,
     ) -> Result<(), AnalysisError> {
-        println!("=== Stress Test ===");
-        let filter_label = run
-            .filter()
-            .map(|f| format!(" (filtre: {})", f))
-            .unwrap_or_default();
-        println!(
-            "Tests: {}/{} passés{}",
-            run.tests_passed(),
-            run.tests_total(),
-            filter_label
-        );
-        println!("Durée: {} ms", run.duration_ms());
-        println!("Temps CPU: {} ms", run.cpu_time_ms());
-        let memory_mb = run.memory_kb() as f64 / KB_TO_MB;
-        if memory_mb >= MB_TO_GB {
-            println!("Mémoire: {:.1} GB", memory_mb / MB_TO_GB);
-        } else {
-            println!("Mémoire: {:.1} MB", memory_mb);
-        }
-        println!();
-        println!("=== Impact économique réel ===");
-        println!(
-            "Coût CPU: {}",
-            format_dollars(impact.cpu_cost_microdollars())
-        );
-        let memory_mb = impact.memory_bytes() as f64 / KB_TO_MB / KB_TO_MB;
-        if memory_mb >= MB_TO_GB {
-            println!("Mémoire: {:.1} GB", memory_mb / MB_TO_GB);
-        } else {
-            println!("Mémoire: {:.1} MB", memory_mb);
-        }
-        println!(
-            "Coût total: {}",
-            format_dollars(impact.total_cost_microdollars())
-        );
-        println!("Niveau: {}", impact.level());
-        println!("==============================");
+        self.write_stress_test_to(&mut std::io::stdout().lock(), run, impact);
         Ok(())
     }
 

@@ -7,6 +7,7 @@ use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
+use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
@@ -133,7 +134,7 @@ impl ReportWriter for JsonReportWriter {
     fn write_stress_test(
         &self,
         _run: &StressTestRun,
-        _impact: &EconomicImpact,
+        _impact: &Measurement<EconomicImpact>,
     ) -> Result<(), AnalysisError> {
         Err(AnalysisError::AnalysisFailed(
             "json writer does not support stress test output".into(),

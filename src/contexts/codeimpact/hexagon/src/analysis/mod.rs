@@ -44,4 +44,4 @@ pub use reactive_analyzer::ReactiveAnalyzer;
 pub use report_writer::ReportWriter;
 pub use run_analysis::RunAnalysis;
 pub use run_stress_test::RunStressTest;
-pub use stress_test_run::{StressTestRun, TestRunnerPort};
+pub use stress_test_run::{Measurement, StressTestRun, TestRunnerPort, UnmeasurableReason};
