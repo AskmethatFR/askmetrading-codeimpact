@@ -214,15 +214,33 @@ impl CargoTestRunner {
     /// the direct child. This is defense in depth, not a hard guarantee:
     /// a grandchild that calls `setsid()` to leave the group can still
     /// evade it — closing that gap fully needs OS-level cgroup/job-object
-    /// confinement, out of scope here.
+    /// confinement, out of scope here. `join_drain_thread`'s bounded wait
+    /// is what keeps THAT residual case from hanging the caller forever.
+    ///
+    /// Uses the `libc` crate rather than a hand-rolled `extern "C"`
+    /// binding: `libc::kill`/`libc::pid_t`/`libc::SIGKILL` are generated
+    /// and tested against the real platform headers, so a wrong arg
+    /// order, wrong signal constant, or ABI drift on a new target is
+    /// caught upstream instead of only by human review of a project-
+    /// maintained FFI block (#39 follow-up, Security MEDIUM). `libc` adds
+    /// no transitive dependencies; the zero-dep rule (ADR-0001/ADR-0005)
+    /// binds the hexagon, not `secondaries`, which already depends on
+    /// `serde_json`/`tempfile`.
     #[cfg(unix)]
     fn kill_process_group(pid: u32) {
-        extern "C" {
-            fn kill(pid: i32, sig: i32) -> i32;
+        // Guard the cast: a `-0 == 0` target would signal the CALLER's
+        // own process group (i.e. kill `codeimpact` itself). `Child::id()`
+        // never actually returns 0 on unix, and no real pid reaches
+        // `i32::MAX`, but the guard is cheap insurance against either
+        // (#39 follow-up, Security LOW).
+        if pid == 0 {
+            return;
         }
-        const SIGKILL: i32 = 9;
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return;
+        };
         unsafe {
-            kill(-(pid as i32), SIGKILL);
+            libc::kill(-pid, libc::SIGKILL);
         }
     }
 

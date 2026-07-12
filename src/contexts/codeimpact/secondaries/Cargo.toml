@@ -10,6 +10,7 @@ serde_json = "1"
 syn = { version = "2", features = ["full"], optional = true }
 proc-macro2 = { version = "1", features = ["span-locations"], optional = true }
 walkdir = "2"
+libc = "0.2"
 
 [features]
 default = ["syn-parser"]
