@@ -539,6 +539,10 @@ mod tests {
     // 1. candidate inside project_dir/target -> accepted
     // 2. candidate outside project_dir/target -> rejected
     // 3. the rejection error message leaks no path (ADR-0006)
+    // 4. project_dir/target does not exist -> rejected (fail-closed; this is
+    //    exactly the state a hostile `.cargo/config.toml` target-dir redirect
+    //    produces, #36 retry P3)
+    // 5. candidate does not exist on disk -> rejected (#36 retry P3)
 
     #[test]
     fn confine_to_target_dir_accepts_path_inside_target() {
@@ -580,6 +584,35 @@ mod tests {
         let message = err.to_string();
         assert!(!message.contains(&outside_binary.to_string_lossy().to_string()));
         assert!(!message.contains(&outside.path().to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn confine_to_target_dir_rejects_when_target_dir_does_not_exist() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        // Deliberately do NOT create project/target: this is exactly the
+        // state a hostile `.cargo/config.toml` (`[build] target-dir =
+        // <outside path>`) redirect produces — the real binary was built
+        // elsewhere, so `project_dir/target` never exists. The fail-closed
+        // path must reject, not silently proceed with the raw candidate.
+        let candidate = project.path().join("some-binary");
+        std::fs::write(&candidate, b"").expect("write fake binary");
+
+        let err = CargoTestRunner::confine_to_target_dir(project.path(), &candidate)
+            .expect_err("missing target dir must be rejected");
+
+        let message = err.to_string();
+        assert!(!message.contains(&candidate.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn confine_to_target_dir_rejects_when_candidate_does_not_exist() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let missing_candidate = project.path().join("target/debug/deps/does-not-exist");
+
+        let result = CargoTestRunner::confine_to_target_dir(project.path(), &missing_candidate);
+
+        assert!(result.is_err());
     }
 
     #[test]
