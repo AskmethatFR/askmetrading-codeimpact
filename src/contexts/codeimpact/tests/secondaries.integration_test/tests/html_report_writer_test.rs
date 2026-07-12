@@ -690,3 +690,51 @@ fn write_html_neutralizes_payload_in_io_call_name() {
         html
     );
 }
+
+// ── US7 T2 slice S4: embedded base64 @font-face (ADR-8.11) ──
+//
+// Test List (S4):
+// 1. two @font-face blocks are present, each with a data:font/woff2;base64,
+//    src — the report renders in Barlow / Barlow Condensed, not the system
+//    fallback, with zero network request
+// 2. no remote URL anywhere in the document — every `url(` is `url(data:`,
+//    preserving (and strengthening) the zero-network-request invariant
+
+#[test]
+fn font_faces_are_embedded_as_data_uris() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert_eq!(
+        html.matches("@font-face").count(),
+        2,
+        "expected exactly two @font-face blocks (Barlow 400, Barlow Condensed 600): {}",
+        html
+    );
+    assert_eq!(
+        html.matches("src:url(data:font/woff2;base64,").count(),
+        2,
+        "both font faces must be embedded as base64 data URIs, not a network font: {}",
+        html
+    );
+}
+
+#[test]
+fn report_contains_no_remote_url() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(!html.contains("http://"), "report must not reference a remote http:// URL: {}", html);
+    assert!(!html.contains("https://"), "report must not reference a remote https:// URL: {}", html);
+    let total_urls = html.matches("url(").count();
+    let data_urls = html.matches("url(data:").count();
+    assert_eq!(
+        total_urls, data_urls,
+        "every url( in the report must be url(data: — no remote asset: {}",
+        html
+    );
+}
