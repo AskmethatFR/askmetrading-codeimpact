@@ -110,14 +110,21 @@ impl CargoTestRunner {
         cmd
     }
 
-    fn run_with_timeout(mut cmd: Command) -> Result<(Duration, Output), AnalysisError> {
+    fn run_with_timeout(cmd: Command) -> Result<(Duration, Output), AnalysisError> {
+        Self::run_with_timeout_with_budget(cmd, TEST_TIMEOUT)
+    }
+
+    fn run_with_timeout_with_budget(
+        mut cmd: Command,
+        budget: Duration,
+    ) -> Result<(Duration, Output), AnalysisError> {
         let start = Instant::now();
         let mut child = cmd
             .spawn()
             .map_err(|e| AnalysisError::TestRunnerError(format!("impossible de lancer: {}", e)))?;
 
         loop {
-            if start.elapsed() > TEST_TIMEOUT {
+            if start.elapsed() > budget {
                 let _ = child.kill();
                 return Err(AnalysisError::TestRunnerError(
                     "le processus a dépassé le timeout de 300s".into(),
@@ -474,6 +481,62 @@ mod tests {
         let binary = Path::new("/tmp/fake-test-binary");
         let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, true);
         assert_ne!(cmd.get_program(), "cargo");
+    }
+
+    // Test List (run_with_timeout — drain stdout/stderr concurrently while
+    // polling, #39 deadlock fix): the OS pipe buffer is ~64 KB. Polling
+    // try_wait() without ever reading the piped stdout/stderr means a
+    // child that writes more than that blocks on write() forever — it can
+    // never reach exit, so try_wait() returns None until the budget is
+    // exhausted. `--workspace` (this ticket) pushes `cargo test --no-run
+    // --message-format=json`'s stdout past that threshold on this repo's
+    // own 21 test binaries, so the "fix" for #39 would otherwise hang the
+    // tool on its own dogfood run — strictly worse than the bug it set
+    // out to fix.
+    // 1. a child writing well over 64 KB to stdout must not deadlock the
+    //    timeout loop
+    // 2. same for stderr — two independent pipes, two independent buffers
+
+    fn big_output_script(dir: &Path, name: &str, stream_redirect: &str) -> PathBuf {
+        write_executable_script(
+            dir,
+            name,
+            &format!("#!/bin/sh\nyes x | head -c 200000 {}\nexit 0\n", stream_redirect),
+        )
+    }
+
+    #[test]
+    fn run_with_timeout_does_not_deadlock_on_large_stdout() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let script = big_output_script(dir.path(), "big_stdout.sh", "");
+
+        let mut cmd = Command::new(&script);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let result =
+            CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(10));
+
+        let (_elapsed, output) =
+            result.expect("a child writing >64KB to stdout must not deadlock the timeout loop");
+        assert_eq!(output.stdout.len(), 200_000);
+    }
+
+    #[test]
+    fn run_with_timeout_does_not_deadlock_on_large_stderr() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let script = big_output_script(dir.path(), "big_stderr.sh", "1>&2");
+
+        let mut cmd = Command::new(&script);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let result =
+            CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(10));
+
+        let (_elapsed, output) =
+            result.expect("a child writing >64KB to stderr must not deadlock the timeout loop");
+        assert_eq!(output.stderr.len(), 200_000);
     }
 
     // Test List (parse_cpu_time — sum user + sys, never default to 0):
