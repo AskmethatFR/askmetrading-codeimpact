@@ -23,11 +23,12 @@
 | ADR-0008 | technical | HTML Report Format — Self-Contained Output & XSS Defense | Applied | 2026-07-12 | [[architecture-overview]], [[html-report]] | docs/ADR-0008-html-report-format.md |
 | ADR-0009 | technical | CI GitHub Actions & posture supply-chain (dépôt public) | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0006]] | docs/ADR-0009-ci-supply-chain.md |
 | ADR-0010 | technical | Honnêteté de la mesure — `Unmeasurable` plutôt que `0` | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0004]], [[ADR-0006]], [[economic-impact-estimator]] | docs/ADR-0010-measurement-honesty.md |
+| ADR-0011 | technical | Stress test — portée workspace, agrégation, 0-test honnête | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0010]], [[ADR-0006]], [[ADR-0009]] | docs/ADR-0011-stress-test-workspace-scope.md |
 | glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-11 | [[architecture-overview]] | docs/glossary.md |
 
 ## Graph Health
 
-- **Total nodes:** 16
+- **Total nodes:** 17
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅
