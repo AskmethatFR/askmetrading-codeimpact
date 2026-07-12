@@ -2,10 +2,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::ComplexityWarning;
+use codeimpact_hexagon::analysis::EcologicalImpact;
+use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
-use super::super::humanize::format_dollars;
+use super::super::humanize::{format_dollars, format_energy, format_memory};
 
 // ── Presentation view-model (secondaries only, per ca-models / ADR-8.4) ──
 //
@@ -47,6 +52,11 @@ pub struct NodeVm {
     pub score: u32,
     pub level: String,
     pub metrics: Vec<MetricVm>,
+    pub functions: Vec<FunctionVm>,
+    pub warnings: Vec<WarningVm>,
+    pub ios: Vec<IoVm>,
+    pub economic: Option<EconomicVm>,
+    pub ecological: Option<EcologicalVm>,
 }
 
 #[derive(serde::Serialize)]
@@ -54,6 +64,98 @@ pub struct MetricVm {
     pub label: String,
     pub value: String,
     pub pct: u8,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct FunctionVm {
+    pub name: String,
+    pub direct: u32,
+    pub transitive: u32,
+    pub depth: usize,
+    pub loc: String,
+    pub in_cycle: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct WarningVm {
+    pub pattern: String,
+    pub severity: String,
+    pub sev_label: String,
+    pub function: String,
+    pub loc: String,
+    pub message: String,
+    pub suggestion: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct IoVm {
+    pub function: String,
+    pub io_call: String,
+    pub loc: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct EconomicVm {
+    pub cpu: String,
+    pub memory: String,
+    pub total: String,
+    pub level: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct EcologicalVm {
+    pub co2: String,
+    pub energy: String,
+    pub class: String,
+}
+
+/// Exhaustive match (spec §4b field-map) — never `{:?}` — so a new
+/// `WarningPattern` variant fails the build here instead of silently
+/// leaking Rust's Debug spelling into the report.
+fn warning_pattern_str(pattern: &WarningPattern) -> &'static str {
+    match pattern {
+        WarningPattern::QuadraticLoop => "QuadraticLoop",
+        WarningPattern::NestedLoops => "NestedLoops",
+        WarningPattern::DeepCallChain => "DeepCallChain",
+        WarningPattern::HiddenComplexity => "HiddenComplexity",
+        WarningPattern::Recursion => "Recursion",
+        WarningPattern::LargeMatch => "LargeMatch",
+        WarningPattern::DeepConditional => "DeepConditional",
+    }
+}
+
+fn severity_key(severity: &WarningSeverity) -> &'static str {
+    match severity {
+        WarningSeverity::Warning => "warning",
+        WarningSeverity::Critical => "critical",
+    }
+}
+
+fn severity_label(severity: &WarningSeverity) -> &'static str {
+    match severity {
+        WarningSeverity::Warning => "WARNING",
+        WarningSeverity::Critical => "CRITICAL",
+    }
+}
+
+fn to_warning_vm(warning: &ComplexityWarning) -> WarningVm {
+    WarningVm {
+        pattern: warning_pattern_str(&warning.pattern).to_string(),
+        severity: severity_key(&warning.severity).to_string(),
+        sev_label: severity_label(&warning.severity).to_string(),
+        function: warning.function.clone(),
+        loc: warning.location.to_string(),
+        message: warning.message.clone(),
+        suggestion: warning.suggestion.clone(),
+    }
+}
+
+fn to_io_vm(io: &IoInLoopWarning) -> IoVm {
+    IoVm {
+        function: io.function.clone(),
+        io_call: io.io_call.clone(),
+        loc: io.location.to_string(),
+    }
 }
 
 /// Builds the project-view model: banner, 8 aggregated stat tiles (S1), and
@@ -87,6 +189,33 @@ struct RawNode {
     depth: usize,
     score: u32,
     level_rank: u8,
+    functions: Vec<FunctionVm>,
+    warnings: Vec<WarningVm>,
+    ios: Vec<IoVm>,
+    economic: Option<EconomicImpact>,
+    ecological: Option<EcologicalImpact>,
+}
+
+impl RawNode {
+    fn empty(name: String, kind: NodeKind, path: String) -> Self {
+        Self {
+            name,
+            kind,
+            path,
+            child_ids: Vec::new(),
+            direct: 0,
+            transitive: 0,
+            hidden: 0,
+            depth: 0,
+            score: 0,
+            level_rank: 0,
+            functions: Vec::new(),
+            warnings: Vec::new(),
+            ios: Vec::new(),
+            economic: None,
+            ecological: None,
+        }
+    }
 }
 
 fn kind_str(kind: NodeKind) -> &'static str {
@@ -145,6 +274,9 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
         return (n.direct, n.transitive, n.hidden, n.depth, n.score, n.level_rank);
     }
 
+    // Sorted already (spec §3: sort_children runs before aggregate), so the
+    // concat below follows the same deterministic, folders-first order the
+    // tree sidebar displays — not an arbitrary insertion order.
     let child_ids = raw[id].child_ids.clone();
     let mut direct = 0u32;
     let mut transitive = 0u32;
@@ -152,6 +284,11 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
     let mut depth = 0usize;
     let mut score = 0u32;
     let mut level_rank = 0u8;
+    let mut warnings: Vec<WarningVm> = Vec::new();
+    let mut ios: Vec<IoVm> = Vec::new();
+    let mut economic: Option<EconomicImpact> = None;
+    let mut ecological: Option<EcologicalImpact> = None;
+
     for child_id in &child_ids {
         let (cd, ct, ch, cdepth, cscore, clevel) = aggregate(raw, child_id);
         direct = direct.saturating_add(cd);
@@ -160,6 +297,12 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
         depth = depth.max(cdepth);
         score = score.max(cscore);
         level_rank = level_rank.max(clevel);
+
+        let child = &raw[child_id];
+        warnings.extend(child.warnings.iter().cloned());
+        ios.extend(child.ios.iter().cloned());
+        economic = fold_economic(economic, child.economic.clone());
+        ecological = fold_ecological(ecological, child.ecological.clone());
     }
 
     let node = raw.get_mut(id).expect("node id was just seeded");
@@ -169,7 +312,33 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
     node.depth = depth;
     node.score = score;
     node.level_rank = level_rank;
+    node.warnings = warnings;
+    node.ios = ios;
+    node.economic = economic;
+    node.ecological = ecological;
     (direct, transitive, hidden, depth, score, level_rank)
+}
+
+/// Folds via the domain's own `EconomicImpact::Add` (spec §0 finding 2) —
+/// never a coefficient invented from transitive complexity.
+fn fold_economic(acc: Option<EconomicImpact>, next: Option<EconomicImpact>) -> Option<EconomicImpact> {
+    match (acc, next) {
+        (Some(a), Some(b)) => Some(a + b),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+/// Folds via `EcologicalImpact::Add`, which re-derives the efficiency class
+/// from the summed CO2 — never copied from a single child's class.
+fn fold_ecological(acc: Option<EcologicalImpact>, next: Option<EcologicalImpact>) -> Option<EcologicalImpact> {
+    match (acc, next) {
+        (Some(a), Some(b)) => Some(a + b),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 /// Child sort order (spec §3): folders before files; folders by name asc;
@@ -208,18 +377,7 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
     let mut raw: HashMap<String, RawNode> = HashMap::new();
     raw.insert(
         String::new(),
-        RawNode {
-            name: root_name(target),
-            kind: NodeKind::Project,
-            path: "project root".to_string(),
-            child_ids: Vec::new(),
-            direct: 0,
-            transitive: 0,
-            hidden: 0,
-            depth: 0,
-            score: 0,
-            level_rank: 0,
-        },
+        RawNode::empty(root_name(target), NodeKind::Project, "project root".to_string()),
     );
 
     let mut file_entries: Vec<(String, &PathBuf, &codeimpact_hexagon::analysis::CodeMetrics)> =
@@ -237,18 +395,7 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
             if !raw.contains_key(&folder_id) {
                 raw.insert(
                     folder_id.clone(),
-                    RawNode {
-                        name: segments[i].to_string(),
-                        kind: NodeKind::Folder,
-                        path: folder_id.clone(),
-                        child_ids: Vec::new(),
-                        direct: 0,
-                        transitive: 0,
-                        hidden: 0,
-                        depth: 0,
-                        score: 0,
-                        level_rank: 0,
-                    },
+                    RawNode::empty(segments[i].to_string(), NodeKind::Folder, folder_id.clone()),
                 );
                 raw.get_mut(&parent_id)
                     .expect("parent folder/root was seeded on a prior iteration")
@@ -273,6 +420,22 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                 depth: metrics.max_call_depth(),
                 score: metrics.transitive_complexity(),
                 level_rank: level_rank(level),
+                functions: metrics
+                    .function_details()
+                    .iter()
+                    .map(|f| FunctionVm {
+                        name: f.name.clone(),
+                        direct: f.direct,
+                        transitive: f.transitive,
+                        depth: f.call_depth,
+                        loc: f.location.to_string(),
+                        in_cycle: f.in_cycle,
+                    })
+                    .collect(),
+                warnings: metrics.warnings().iter().map(to_warning_vm).collect(),
+                ios: metrics.io_in_loops().iter().map(to_io_vm).collect(),
+                economic: metrics.economic_impact().cloned(),
+                ecological: metrics.ecological_impact().cloned(),
             },
         );
         raw.get_mut(&parent_id)
@@ -281,8 +444,11 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
             .push(id.clone());
     }
 
-    aggregate(&mut raw, "");
+    // Sort BEFORE aggregating: folder aggregation concatenates warnings/ios
+    // in child_ids order (spec §3 "depth-first, deterministic order"), and
+    // that order must be the same one the tree sidebar displays.
     sort_children(&mut raw);
+    aggregate(&mut raw, "");
 
     let scale_files = file_entries.iter().fold((0u32, 0u32, 0u32, 0usize), |acc, (id, _, _)| {
         let n = &raw[id];
@@ -339,6 +505,20 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                         pct: pct(n.depth as u64, scale_depth as u64),
                     },
                 ],
+                functions: n.functions.clone(),
+                warnings: n.warnings.clone(),
+                ios: n.ios.clone(),
+                economic: n.economic.as_ref().map(|e| EconomicVm {
+                    cpu: format_dollars(e.cpu_cost_microdollars()),
+                    memory: format_memory(e.memory_bytes()),
+                    total: format_dollars(e.total_cost_microdollars()),
+                    level: e.level().to_string(),
+                }),
+                ecological: n.ecological.as_ref().map(|e| EcologicalVm {
+                    co2: format!("{:.3} g", e.co2_grams()),
+                    energy: format_energy(e.energy_joules()),
+                    class: e.efficiency_class().label().to_string(),
+                }),
             }
         })
         .collect()

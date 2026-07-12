@@ -14,6 +14,9 @@ pub const CSS: &str = r#"
 
   --color-accent-100: #eef6ff;
   --color-accent-200: #d6ebff;
+  --color-accent-300: #b5d9fd;
+  --color-accent-400: #94bce3;
+  --color-accent-500: #749dc4;
   --color-accent-600: #597ea3;
   --color-accent-700: #416180;
   --color-accent-800: #2c455d;
@@ -114,12 +117,66 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
 .detail-score-block { display: flex; align-items: center; gap: var(--space-4); flex: none; }
 .detail-score { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 36px; line-height: 0.95; }
 
-.metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 28px; }
+.metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 28px; margin-bottom: var(--space-6); }
 .metric-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; }
 .metric-label { color: color-mix(in srgb, var(--color-text) 66%, transparent); }
 .metric-value { font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
 .metric-track { height: 6px; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
 .metric-fill { height: 100%; background: var(--color-accent-600); }
+
+.section { margin-bottom: var(--space-6); }
+.section-heading {
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent); margin-bottom: var(--space-2);
+}
+
+.children-list { display: flex; flex-direction: column; }
+.child-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent); }
+.child-kind { font-size: 10px; width: 46px; color: var(--color-accent); text-transform: uppercase; letter-spacing: 0.08em; flex: none; }
+.child-name { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.child-score { width: 26px; text-align: right; font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 15px; flex: none; }
+
+.num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+.loc-cell { text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.cycle-tag { margin-left: 8px; font-size: 9px; padding: 1px 6px; }
+
+.warning-list, .io-list { display: flex; flex-direction: column; gap: 10px; }
+.warning-card { padding: 12px 14px; border-left: 3px solid var(--color-divider); }
+.warning-card.sev-warning { border-left-color: var(--color-accent-500); }
+.warning-card.sev-critical { border-left-color: var(--color-accent-900); }
+.warning-head { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+.warning-pattern { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 15px; }
+.warning-meta { margin-left: auto; font-size: 11px; font-family: ui-monospace, Menlo, monospace; color: color-mix(in srgb, var(--color-text) 52%, transparent); }
+.warning-message { font-size: 13.5px; line-height: 1.5; }
+.warning-suggestion { font-size: 12.5px; color: var(--color-accent-700); margin-top: 5px; }
+.sev-warning { background: var(--color-accent-200); color: var(--color-accent-800); }
+.sev-critical { background: var(--color-accent-900); color: #f2f2f3; }
+
+.io-card { padding: 10px 14px; border-left: 3px solid var(--color-accent-900); display: flex; align-items: center; gap: 10px; }
+.io-function, .io-call { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.io-call { color: var(--color-accent-700); }
+.io-verb { font-size: 12px; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+.io-loc { margin-left: auto; font-size: 11px; font-family: ui-monospace, Menlo, monospace; color: color-mix(in srgb, var(--color-text) 52%, transparent); }
+
+.impact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.impact-card { padding: 16px; }
+.impact-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent); margin-bottom: 10px; }
+.impact-rows { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.impact-row { display: flex; justify-content: space-between; }
+.impact-label { color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+.impact-value { font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
+.eco-body { display: flex; align-items: center; gap: 16px; }
+.env-badge {
+  width: 60px; height: 60px; flex: none; display: grid; place-items: center;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 34px; line-height: 1;
+}
+.env-a { background: var(--color-accent-100); color: var(--color-accent-900); }
+.env-b { background: var(--color-accent-200); color: var(--color-accent-900); }
+.env-c { background: var(--color-accent-300); color: var(--color-accent-900); }
+.env-d { background: var(--color-accent-400); color: var(--color-accent-900); }
+.env-e { background: var(--color-accent-500); color: #f2f2f3; }
+.env-f { background: var(--color-accent-700); color: #f2f2f3; }
+.env-g { background: var(--color-accent-900); color: #f2f2f3; }
 "#;
 
 // ── Renderer — the load-bearing part of ADR-8.5/8.6, formalised as ADR-8.10 ──
@@ -147,6 +204,8 @@ pub const JS: &str = r#"
   }
 
   var LVL = { low: "lvl-low", moderate: "lvl-moderate", high: "lvl-high", critical: "lvl-critical" };
+  var SEV = { warning: "sev-warning", critical: "sev-critical" };
+  var ENV = { A: "env-a", B: "env-b", C: "env-c", D: "env-d", E: "env-e", F: "env-f", G: "env-g" };
   function cls(map, key, fallback) {
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback;
   }
@@ -259,6 +318,132 @@ pub const JS: &str = r#"
 
   var KIND_LABEL = { project: "Project", folder: "Folder", file: "File" };
 
+  function renderChildren(node) {
+    if (node.child_ids.length === 0) return null;
+    var section = el("div", "section");
+    section.appendChild(el("div", "section-heading", "Contents · " + node.child_ids.length));
+    var list = el("div", "children-list");
+    node.child_ids.forEach(function (childId) {
+      var c = byId[childId];
+      var row = el("div", "child-row");
+      row.appendChild(el("span", "child-kind", c.kind === "file" ? "FILE" : "DIR"));
+      row.appendChild(el("span", "child-name", c.name));
+      row.appendChild(el("span", "child-score", String(c.score)));
+      row.appendChild(el("span", "swatch " + cls(LVL, c.level, "lvl-low")));
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+    return section;
+  }
+
+  function renderFunctions(node) {
+    if (node.functions.length === 0) return null;
+    var section = el("div", "section");
+    section.appendChild(el("div", "section-heading", "Functions · " + node.functions.length));
+    var table = el("table", "table");
+    var thead = el("thead");
+    var headRow = el("tr");
+    ["Function", "Direct", "Transitive", "Depth", "Location"].forEach(function (label) {
+      headRow.appendChild(el("th", null, label));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    node.functions.forEach(function (f) {
+      var row = el("tr");
+      var nameCell = el("td", null, f.name);
+      if (f.in_cycle) nameCell.appendChild(el("span", "tag tag-outline cycle-tag", "cycle"));
+      row.appendChild(nameCell);
+      row.appendChild(el("td", "num-cell", String(f.direct)));
+      row.appendChild(el("td", "num-cell", String(f.transitive)));
+      row.appendChild(el("td", "num-cell", String(f.depth)));
+      row.appendChild(el("td", "loc-cell", f.loc));
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    section.appendChild(table);
+    return section;
+  }
+
+  function renderWarnings(node) {
+    if (node.warnings.length === 0) return null;
+    var section = el("div", "section");
+    section.appendChild(el("div", "section-heading", "Pattern warnings · " + node.warnings.length));
+    var list = el("div", "warning-list");
+    node.warnings.forEach(function (w) {
+      var card = el("div", "blueprint warning-card " + cls(SEV, w.severity, "sev-warning"));
+      var head = el("div", "warning-head");
+      head.appendChild(el("span", "tag " + cls(SEV, w.severity, "sev-warning"), w.sev_label));
+      head.appendChild(el("span", "warning-pattern", w.pattern));
+      head.appendChild(el("span", "warning-meta", w.function + " · " + w.loc));
+      card.appendChild(head);
+      card.appendChild(el("div", "warning-message", w.message));
+      card.appendChild(el("div", "warning-suggestion", "→ " + w.suggestion));
+      list.appendChild(card);
+    });
+    section.appendChild(list);
+    return section;
+  }
+
+  function renderIo(node) {
+    if (node.ios.length === 0) return null;
+    var section = el("div", "section");
+    section.appendChild(el("div", "section-heading", "I/O in loops · " + node.ios.length));
+    var list = el("div", "io-list");
+    node.ios.forEach(function (io) {
+      var card = el("div", "blueprint io-card");
+      card.appendChild(el("span", "tag sev-critical", "CRITICAL"));
+      card.appendChild(el("span", "io-function", io.function));
+      card.appendChild(el("span", "io-verb", "calls"));
+      card.appendChild(el("span", "io-call", io.io_call));
+      card.appendChild(el("span", "io-loc", io.loc));
+      list.appendChild(card);
+    });
+    section.appendChild(list);
+    return section;
+  }
+
+  function impactRow(label, value) {
+    var row = el("div", "impact-row");
+    row.appendChild(el("span", "impact-label", label));
+    row.appendChild(el("span", "impact-value", value));
+    return row;
+  }
+
+  function renderImpact(node) {
+    if (!node.economic && !node.ecological) return null;
+    var grid = el("div", "impact-grid");
+
+    if (node.economic) {
+      var eco = node.economic;
+      var card = el("div", "blueprint impact-card");
+      card.appendChild(el("div", "impact-title", "Economic impact"));
+      var rows = el("div", "impact-rows");
+      rows.appendChild(impactRow("CPU cost", eco.cpu));
+      rows.appendChild(impactRow("Memory", eco.memory));
+      rows.appendChild(impactRow("Total cost", eco.total));
+      card.appendChild(rows);
+      card.appendChild(el("span", "tag " + cls(LVL, eco.level, "lvl-low"), eco.level.toUpperCase()));
+      grid.appendChild(card);
+    }
+
+    if (node.ecological) {
+      var env = node.ecological;
+      var card2 = el("div", "blueprint impact-card");
+      card2.appendChild(el("div", "impact-title", "Ecological impact"));
+      var body = el("div", "eco-body");
+      body.appendChild(el("div", "env-badge " + cls(ENV, env.class, "env-a"), env.class));
+      var rows2 = el("div", "impact-rows");
+      rows2.appendChild(impactRow("CO₂", env.co2));
+      rows2.appendChild(impactRow("Energy", env.energy));
+      body.appendChild(rows2);
+      card2.appendChild(body);
+      grid.appendChild(card2);
+    }
+
+    return grid;
+  }
+
   function renderDetail() {
     var node = byId[state.selected] || byId[""];
     var pane = el("div", "detail-pane");
@@ -277,6 +462,13 @@ pub const JS: &str = r#"
 
     pane.appendChild(header);
     pane.appendChild(renderMetrics(node));
+
+    [renderChildren(node), renderFunctions(node), renderWarnings(node), renderIo(node), renderImpact(node)].forEach(
+      function (section) {
+        if (section) pane.appendChild(section);
+      }
+    );
+
     return pane;
   }
 
