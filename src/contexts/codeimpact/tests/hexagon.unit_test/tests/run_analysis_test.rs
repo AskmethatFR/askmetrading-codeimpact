@@ -131,17 +131,23 @@ fn analyze_project_target_writes_per_file_report() {
         match_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case =
-        RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
     );
-    assert!(result.is_ok(), "project analysis should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "project analysis should succeed: {:?}",
+        result
+    );
 
     let graph = writer.last_graph.lock().unwrap();
-    assert!(graph.is_some(), "write_project_report should have been called");
+    assert!(
+        graph.is_some(),
+        "write_project_report should have been called"
+    );
     let graph = graph.as_ref().unwrap();
     let metrics = graph.per_file_metrics();
     assert_eq!(metrics.len(), 2, "should report on 2 files");
@@ -194,13 +200,21 @@ fn handle_project_continues_on_read_error() {
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
     );
-    assert!(result.is_ok(), "project analysis should continue despite read errors");
+    assert!(
+        result.is_ok(),
+        "project analysis should continue despite read errors"
+    );
 
     let graph = writer.last_graph.lock().unwrap();
-    assert!(graph.is_some(), "write_project_report should have been called");
+    assert!(
+        graph.is_some(),
+        "write_project_report should have been called"
+    );
     let graph = graph.as_ref().unwrap();
     assert!(
-        graph.per_file_metrics().contains_key(&PathBuf::from("src/good.rs")),
+        graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/good.rs")),
         "good.rs should have metrics despite bad.rs read failure"
     );
 }
@@ -221,10 +235,16 @@ fn handle_project_continues_on_parse_error() {
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
     );
-    assert!(result.is_ok(), "project analysis should continue despite parse errors");
+    assert!(
+        result.is_ok(),
+        "project analysis should continue despite parse errors"
+    );
 
     let graph = writer.last_graph.lock().unwrap();
-    assert!(graph.is_some(), "write_project_report should have been called");
+    assert!(
+        graph.is_some(),
+        "write_project_report should have been called"
+    );
     let graph = graph.as_ref().unwrap();
     assert!(
         graph.per_file_metrics().is_empty(),
@@ -258,13 +278,21 @@ fn handle_project_continues_on_deps_parse_error() {
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
     );
-    assert!(result.is_ok(), "project analysis should continue despite deps parse errors");
+    assert!(
+        result.is_ok(),
+        "project analysis should continue despite deps parse errors"
+    );
 
     let graph = writer.last_graph.lock().unwrap();
-    assert!(graph.is_some(), "write_project_report should have been called");
+    assert!(
+        graph.is_some(),
+        "write_project_report should have been called"
+    );
     let graph = graph.as_ref().unwrap();
     assert!(
-        graph.per_file_metrics().contains_key(&PathBuf::from("src/main.rs")),
+        graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/main.rs")),
         "main.rs should have metrics despite deps parse failure"
     );
 }

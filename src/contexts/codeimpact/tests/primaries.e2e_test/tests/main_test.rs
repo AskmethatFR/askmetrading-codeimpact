@@ -216,16 +216,28 @@ fn e2e_analyze_json_format_outputs_valid_json() {
     );
 
     // Parse JSON
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .expect("output should be valid JSON");
-    
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+
     // Check schema fields
-    assert_eq!(json["tool"]["name"], "codeimpact", "tool name should be codeimpact");
-    assert!(json["tool"]["version"].is_string(), "version should be present");
+    assert_eq!(
+        json["tool"]["name"], "codeimpact",
+        "tool name should be codeimpact"
+    );
+    assert!(
+        json["tool"]["version"].is_string(),
+        "version should be present"
+    );
     assert!(json["timestamp"].is_string(), "timestamp should be present");
     assert_eq!(json["target_type"], "file", "target_type should be file");
-    assert!(json["metrics"]["cyclomatic_complexity"].is_number(), "cyclomatic_complexity should be present");
-    assert!(json["metrics"]["transitive_complexity"].is_number(), "transitive_complexity should be present");
+    assert!(
+        json["metrics"]["cyclomatic_complexity"].is_number(),
+        "cyclomatic_complexity should be present"
+    );
+    assert!(
+        json["metrics"]["transitive_complexity"].is_number(),
+        "transitive_complexity should be present"
+    );
 }
 
 #[test]
@@ -257,7 +269,10 @@ fn e2e_analyze_invalid_format_errors() {
         .expect("failed to execute binary");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "exit non-zero expected for invalid format");
+    assert!(
+        !output.status.success(),
+        "exit non-zero expected for invalid format"
+    );
     assert!(
         stderr.contains("invalide") || stderr.contains("erreur"),
         "stderr should contain error about invalid format: {}",
@@ -298,12 +313,20 @@ fn e2e_analyze_html_format_writes_self_contained_project_view() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let html = std::fs::read_to_string(&output_path)
-        .expect("html output file should have been created");
+    let html =
+        std::fs::read_to_string(&output_path).expect("html output file should have been created");
     let _ = std::fs::remove_file(&output_path);
 
-    assert!(html.contains("<!DOCTYPE html>"), "missing doctype: {}", html);
-    assert_eq!(html.matches("<html").count(), 1, "expected a single html root");
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "missing doctype: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<html").count(),
+        1,
+        "expected a single html root"
+    );
     assert!(
         !html.contains("<link "),
         "self-contained report must not reference an external stylesheet: {}",
@@ -357,14 +380,22 @@ fn e2e_analyze_html_format_on_single_file_target_errors() {
 fn e2e_analyze_html_format_without_output_flag_defaults_to_report_html_in_cwd() {
     let binary = binary_path();
     let dir = fixtures_dir();
-    let isolated_cwd = std::env::temp_dir()
-        .join(format!("codeimpact_default_output_test_{}", std::process::id()));
+    let isolated_cwd = std::env::temp_dir().join(format!(
+        "codeimpact_default_output_test_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&isolated_cwd).expect("create isolated cwd");
     let expected_path = isolated_cwd.join("report.html");
     let _ = std::fs::remove_file(&expected_path);
 
     let output = Command::new(&binary)
-        .args(["analyze", "--path", dir.to_str().unwrap(), "--format", "html"])
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+        ])
         .current_dir(&isolated_cwd)
         .output()
         .expect("failed to execute binary");
@@ -421,4 +452,3 @@ fn e2e_analyze_html_format_output_to_nonexistent_dir_errors_without_path_leak() 
         stderr
     );
 }
-

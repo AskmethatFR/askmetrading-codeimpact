@@ -2,13 +2,13 @@ use std::time::SystemTime;
 
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
-use codeimpact_hexagon::analysis::EconomicImpact;
+use codeimpact_hexagon::analysis::ComplexityWarning;
 use codeimpact_hexagon::analysis::EcologicalImpact;
+use codeimpact_hexagon::analysis::EconomicImpact;
+use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
-use codeimpact_hexagon::analysis::FileConsumptionGraph;
-use codeimpact_hexagon::analysis::ComplexityWarning;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
 // ── Serde DTOs (ADR-4.2: never on hexagon types) ──
@@ -123,10 +123,7 @@ impl ReportWriter for JsonReportWriter {
         serialize_metrics(metrics, target, target_type)
     }
 
-    fn write_project_report(
-        &self,
-        _graph: &FileConsumptionGraph,
-    ) -> Result<(), AnalysisError> {
+    fn write_project_report(&self, _graph: &FileConsumptionGraph) -> Result<(), AnalysisError> {
         // Print JSON to stdout for project-level reports
         Err(AnalysisError::AnalysisFailed(
             "json writer requires explicit format selection".into(),
@@ -218,18 +215,22 @@ pub fn serialize_metrics(
         })
         .collect();
 
-    let economic = metrics.economic_impact().map(|e: &EconomicImpact| EconomicImpactDto {
-        cpu_cost_microdollars: e.cpu_cost_microdollars(),
-        memory_bytes: e.memory_bytes(),
-        total_cost_microdollars: e.total_cost_microdollars(),
-        level: e.level().to_string(),
-    });
+    let economic = metrics
+        .economic_impact()
+        .map(|e: &EconomicImpact| EconomicImpactDto {
+            cpu_cost_microdollars: e.cpu_cost_microdollars(),
+            memory_bytes: e.memory_bytes(),
+            total_cost_microdollars: e.total_cost_microdollars(),
+            level: e.level().to_string(),
+        });
 
-    let ecological = metrics.ecological_impact().map(|e: &EcologicalImpact| EcologicalImpactDto {
-        co2_grams: e.co2_grams(),
-        energy_joules: e.energy_joules(),
-        efficiency_class: e.efficiency_class().label().to_string(),
-    });
+    let ecological = metrics
+        .ecological_impact()
+        .map(|e: &EcologicalImpact| EcologicalImpactDto {
+            co2_grams: e.co2_grams(),
+            energy_joules: e.energy_joules(),
+            efficiency_class: e.efficiency_class().label().to_string(),
+        });
 
     let output = JsonOutput {
         tool: ToolInfo {
@@ -254,9 +255,8 @@ pub fn serialize_metrics(
         },
     };
 
-    serde_json::to_string_pretty(&output).map_err(|e| {
-        AnalysisError::AnalysisFailed(format!("JSON serialization error: {}", e))
-    })
+    serde_json::to_string_pretty(&output)
+        .map_err(|e| AnalysisError::AnalysisFailed(format!("JSON serialization error: {}", e)))
 }
 
 /// Format ISO8601 timestamp from SystemTime (ADR-4.7: avoid chrono dep).

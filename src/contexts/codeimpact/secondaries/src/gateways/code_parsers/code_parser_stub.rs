@@ -33,10 +33,7 @@ impl CodeParser for CodeParserStub {
         self.result.clone()
     }
 
-    fn parse_file_dependencies(
-        &self,
-        _source: &str,
-    ) -> Result<Vec<String>, AnalysisError> {
+    fn parse_file_dependencies(&self, _source: &str) -> Result<Vec<String>, AnalysisError> {
         match &self.deps_result {
             Some(result) => result.clone(),
             None => Ok(vec![]),

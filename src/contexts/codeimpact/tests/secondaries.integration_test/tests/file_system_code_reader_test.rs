@@ -49,7 +49,11 @@ fn read_nonexistent_file_returns_error() {
 fn list_rust_files_finds_rs_in_fixtures() {
     let reader = FileSystemCodeReader::new();
     let result = reader.list_rust_files(&fixtures_dir());
-    assert!(result.is_ok(), "should list fixtures dir: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "should list fixtures dir: {:?}",
+        result.err()
+    );
     let files = result.unwrap();
     assert!(
         files.iter().any(|f| f.ends_with("sample.rs")),

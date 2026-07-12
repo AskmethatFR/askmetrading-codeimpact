@@ -25,8 +25,5 @@ pub trait CodeParser: Send + Sync {
     /// - `"use:<path>"` for `use foo::bar;` declarations
     ///
     /// External crates (`std::`, `core::`, `alloc::`) are filtered out.
-    fn parse_file_dependencies(
-        &self,
-        source: &str,
-    ) -> Result<Vec<String>, AnalysisError>;
+    fn parse_file_dependencies(&self, source: &str) -> Result<Vec<String>, AnalysisError>;
 }

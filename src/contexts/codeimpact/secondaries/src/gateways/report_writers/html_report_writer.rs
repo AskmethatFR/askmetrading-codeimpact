@@ -103,7 +103,11 @@ impl ReportWriter for HtmlReportWriter {
         ))
     }
 
-    fn write_html(&self, graph: &FileConsumptionGraph, target: &str) -> Result<String, AnalysisError> {
+    fn write_html(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError> {
         let vm = build_report_vm(graph, target);
         render_html(&vm)
     }
@@ -169,8 +173,16 @@ mod tests {
     fn neutralizes_img_onerror_payload() {
         let payload = "\"><img onerror>";
         let escaped = json_island_escape(payload);
-        assert!(!escaped.contains('<'), "escaped output must not contain a literal '<': {}", escaped);
-        assert!(!escaped.contains('>'), "escaped output must not contain a literal '>': {}", escaped);
+        assert!(
+            !escaped.contains('<'),
+            "escaped output must not contain a literal '<': {}",
+            escaped
+        );
+        assert!(
+            !escaped.contains('>'),
+            "escaped output must not contain a literal '>': {}",
+            escaped
+        );
     }
 
     #[test]

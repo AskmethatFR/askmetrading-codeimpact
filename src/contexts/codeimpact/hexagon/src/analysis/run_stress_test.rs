@@ -9,10 +9,7 @@ pub struct RunStressTest {
 }
 
 impl RunStressTest {
-    pub fn new(
-        test_runner: Box<dyn TestRunnerPort>,
-        reporter: Box<dyn ReportWriter>,
-    ) -> Self {
+    pub fn new(test_runner: Box<dyn TestRunnerPort>, reporter: Box<dyn ReportWriter>) -> Self {
         Self {
             test_runner,
             reporter,

@@ -23,20 +23,27 @@ impl ConsoleReportWriter {
     }
 
     /// Write console report to a custom writer (used for testing).
-    pub fn write_console_to(
-        &self,
-        writer: &mut dyn Write,
-        metrics: &CodeMetrics,
-    ) {
+    pub fn write_console_to(&self, writer: &mut dyn Write, metrics: &CodeMetrics) {
         writeln!(writer, "=== Rapport d'analyse ===").unwrap();
-        writeln!(writer, "Complexité directe: {}", metrics.cyclomatic_complexity()).unwrap();
+        writeln!(
+            writer,
+            "Complexité directe: {}",
+            metrics.cyclomatic_complexity()
+        )
+        .unwrap();
         writeln!(
             writer,
             "Complexité transitive: {} (dont {} cachée dans les appels)",
             metrics.transitive_complexity(),
             metrics.hidden_complexity(),
-        ).unwrap();
-        writeln!(writer, "Profondeur d'appels max: {}", metrics.max_call_depth()).unwrap();
+        )
+        .unwrap();
+        writeln!(
+            writer,
+            "Profondeur d'appels max: {}",
+            metrics.max_call_depth()
+        )
+        .unwrap();
         let cycle_count = metrics.functions_with_cycles().len();
         writeln!(writer, "Fonctions avec cycle: {}", cycle_count).unwrap();
         writeln!(writer, "Niveau: {}", metrics.complexity_level()).unwrap();
@@ -56,16 +63,32 @@ impl ConsoleReportWriter {
                     writer,
                     "  {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
                     d.name, d.direct, d.transitive, d.call_depth, cycle, loc
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
 
         if let Some(economic) = metrics.economic_impact() {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact économique estimé ===").unwrap();
-            writeln!(writer, "Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars())).unwrap();
-            writeln!(writer, "Mémoire: {}", format_memory(economic.memory_bytes())).unwrap();
-            writeln!(writer, "Coût total: {}", format_dollars(economic.total_cost_microdollars())).unwrap();
+            writeln!(
+                writer,
+                "Coût CPU: {}",
+                format_dollars(economic.cpu_cost_microdollars())
+            )
+            .unwrap();
+            writeln!(
+                writer,
+                "Mémoire: {}",
+                format_memory(economic.memory_bytes())
+            )
+            .unwrap();
+            writeln!(
+                writer,
+                "Coût total: {}",
+                format_dollars(economic.total_cost_microdollars())
+            )
+            .unwrap();
             writeln!(writer, "Niveau: {}", economic.level()).unwrap();
         }
 
@@ -73,7 +96,12 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact écologique estimé ===").unwrap();
             writeln!(writer, "CO₂: {:.1} g", ecological.co2_grams()).unwrap();
-            writeln!(writer, "Énergie: {}", format_energy(ecological.energy_joules())).unwrap();
+            writeln!(
+                writer,
+                "Énergie: {}",
+                format_energy(ecological.energy_joules())
+            )
+            .unwrap();
             writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
         }
 
@@ -95,7 +123,8 @@ impl ConsoleReportWriter {
                     writer,
                     "[{}][{:?}] {} → {} ({})",
                     label, w.pattern, w.function, w.message, loc
-                ).unwrap();
+                )
+                .unwrap();
             }
             writeln!(writer, "========================").unwrap();
         } else {
@@ -116,18 +145,15 @@ impl ConsoleReportWriter {
                     writer,
                     "[CRITICAL] {} → I/O dans boucle: {} ({})",
                     w.function, w.io_call, location_str
-                ).unwrap();
+                )
+                .unwrap();
             }
             writeln!(writer, "========================").unwrap();
         }
     }
 
     /// Write project report to a custom writer (used for testing).
-    pub fn write_project_report_to(
-        &self,
-        writer: &mut dyn Write,
-        graph: &FileConsumptionGraph,
-    ) {
+    pub fn write_project_report_to(&self, writer: &mut dyn Write, graph: &FileConsumptionGraph) {
         let aggregated = graph.aggregated_metrics();
 
         writeln!(writer, "=== Métriques par fichier ===").unwrap();
@@ -150,7 +176,8 @@ impl ConsoleReportWriter {
                     metrics.cyclomatic_complexity(),
                     metrics.transitive_complexity(),
                     metrics.complexity_level(),
-                ).unwrap();
+                )
+                .unwrap();
                 for d in metrics.function_details() {
                     let loc = d.location.to_string();
                     let cycle = if d.in_cycle { " [cycle]" } else { "" };
@@ -158,14 +185,16 @@ impl ConsoleReportWriter {
                         writer,
                         "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
                         d.name, d.direct, d.transitive, d.call_depth, cycle, loc
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 // Hidden complexity per file
                 writeln!(
                     writer,
                     "    complexité cachée dans les appels: {}",
                     metrics.hidden_complexity(),
-                ).unwrap();
+                )
+                .unwrap();
                 // Warnings per file
                 let warnings = metrics.warnings();
                 if !warnings.is_empty() {
@@ -180,7 +209,8 @@ impl ConsoleReportWriter {
                             writer,
                             "      [{}][{:?}] {} → {} ({})",
                             label, w.pattern, w.function, w.message, loc_str
-                        ).unwrap();
+                        )
+                        .unwrap();
                     }
                 }
                 // I/O in loops per file
@@ -192,10 +222,9 @@ impl ConsoleReportWriter {
                         writeln!(
                             writer,
                             "      [CRITICAL] {} → I/O dans boucle: {} ({})",
-                            w.function,
-                            w.io_call,
-                            loc_str,
-                        ).unwrap();
+                            w.function, w.io_call, loc_str,
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -221,25 +250,70 @@ impl ConsoleReportWriter {
             writeln!(writer, "  (aucun cycle détecté)").unwrap();
         } else {
             for path in &cycles {
-                writeln!(writer, "  {} fait partie d'un cycle de dépendances", path.display()).unwrap();
+                writeln!(
+                    writer,
+                    "  {} fait partie d'un cycle de dépendances",
+                    path.display()
+                )
+                .unwrap();
             }
         }
         writeln!(writer).unwrap();
 
         writeln!(writer, "=== Résumé du projet ===").unwrap();
         writeln!(writer, "Fichiers analysés: {}", aggregated.total_files).unwrap();
-        writeln!(writer, "Dépendances totales: {}", graph.total_dependencies()).unwrap();
-        writeln!(writer, "Complexité directe totale: {}", aggregated.total_cyclomatic_complexity).unwrap();
-        writeln!(writer, "Complexité transitive totale: {}", aggregated.total_transitive_complexity).unwrap();
-        writeln!(writer, "Profondeur max de chaîne: {}", aggregated.max_call_depth).unwrap();
-        writeln!(writer, "Fichiers en cycle: {}", aggregated.files_with_cycles.len()).unwrap();
+        writeln!(
+            writer,
+            "Dépendances totales: {}",
+            graph.total_dependencies()
+        )
+        .unwrap();
+        writeln!(
+            writer,
+            "Complexité directe totale: {}",
+            aggregated.total_cyclomatic_complexity
+        )
+        .unwrap();
+        writeln!(
+            writer,
+            "Complexité transitive totale: {}",
+            aggregated.total_transitive_complexity
+        )
+        .unwrap();
+        writeln!(
+            writer,
+            "Profondeur max de chaîne: {}",
+            aggregated.max_call_depth
+        )
+        .unwrap();
+        writeln!(
+            writer,
+            "Fichiers en cycle: {}",
+            aggregated.files_with_cycles.len()
+        )
+        .unwrap();
 
         if let Some(economic) = &aggregated.total_economic_impact {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact économique total ===").unwrap();
-            writeln!(writer, "Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars())).unwrap();
-            writeln!(writer, "Mémoire: {}", format_memory(economic.memory_bytes())).unwrap();
-            writeln!(writer, "Coût total: {}", format_dollars(economic.total_cost_microdollars())).unwrap();
+            writeln!(
+                writer,
+                "Coût CPU: {}",
+                format_dollars(economic.cpu_cost_microdollars())
+            )
+            .unwrap();
+            writeln!(
+                writer,
+                "Mémoire: {}",
+                format_memory(economic.memory_bytes())
+            )
+            .unwrap();
+            writeln!(
+                writer,
+                "Coût total: {}",
+                format_dollars(economic.total_cost_microdollars())
+            )
+            .unwrap();
             writeln!(writer, "Niveau: {}", economic.level()).unwrap();
         }
 
@@ -247,7 +321,12 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact écologique total ===").unwrap();
             writeln!(writer, "CO₂: {:.1} g", ecological.co2_grams()).unwrap();
-            writeln!(writer, "Énergie: {}", format_energy(ecological.energy_joules())).unwrap();
+            writeln!(
+                writer,
+                "Énergie: {}",
+                format_energy(ecological.energy_joules())
+            )
+            .unwrap();
             writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
         }
 
@@ -272,10 +351,7 @@ impl ReportWriter for ConsoleReportWriter {
         json_report_writer::serialize_metrics(metrics, target, target_type)
     }
 
-    fn write_project_report(
-        &self,
-        graph: &FileConsumptionGraph,
-    ) -> Result<(), AnalysisError> {
+    fn write_project_report(&self, graph: &FileConsumptionGraph) -> Result<(), AnalysisError> {
         self.write_project_report_to(&mut std::io::stdout().lock(), graph);
         Ok(())
     }
@@ -290,7 +366,12 @@ impl ReportWriter for ConsoleReportWriter {
             .filter()
             .map(|f| format!(" (filtre: {})", f))
             .unwrap_or_default();
-        println!("Tests: {}/{} passés{}", run.tests_passed(), run.tests_total(), filter_label);
+        println!(
+            "Tests: {}/{} passés{}",
+            run.tests_passed(),
+            run.tests_total(),
+            filter_label
+        );
         println!("Durée: {} ms", run.duration_ms());
         println!("Temps CPU: {} ms", run.cpu_time_ms());
         let memory_mb = run.memory_kb() as f64 / KB_TO_MB;
@@ -301,14 +382,20 @@ impl ReportWriter for ConsoleReportWriter {
         }
         println!();
         println!("=== Impact économique réel ===");
-        println!("Coût CPU: {}", format_dollars(impact.cpu_cost_microdollars()));
+        println!(
+            "Coût CPU: {}",
+            format_dollars(impact.cpu_cost_microdollars())
+        );
         let memory_mb = impact.memory_bytes() as f64 / KB_TO_MB / KB_TO_MB;
         if memory_mb >= MB_TO_GB {
             println!("Mémoire: {:.1} GB", memory_mb / MB_TO_GB);
         } else {
             println!("Mémoire: {:.1} MB", memory_mb);
         }
-        println!("Coût total: {}", format_dollars(impact.total_cost_microdollars()));
+        println!(
+            "Coût total: {}",
+            format_dollars(impact.total_cost_microdollars())
+        );
         println!("Niveau: {}", impact.level());
         println!("==============================");
         Ok(())

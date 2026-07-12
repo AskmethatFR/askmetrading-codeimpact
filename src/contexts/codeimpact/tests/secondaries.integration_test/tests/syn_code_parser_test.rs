@@ -226,7 +226,8 @@ fn closure_inside_if_does_not_create_false_positive() {
 #[test]
 fn io_call_in_loop_is_tracked() {
     let parser = SynCodeParser::new();
-    let source = "fn test() {\n    for _ in 0..10 {\n        std::fs::read_to_string(\"f\");\n    }\n}\n";
+    let source =
+        "fn test() {\n    for _ in 0..10 {\n        std::fs::read_to_string(\"f\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     let (call_name, line, _col) = &functions[0].calls_in_loops[0];
@@ -263,16 +264,23 @@ fn multiple_io_calls_in_loop_all_tracked() {
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 2);
     assert_eq!(functions[0].calls_in_loops[0].0, "std::fs::read");
-    assert_eq!(functions[0].calls_in_loops[1].0, "std::net::TcpStream::connect");
+    assert_eq!(
+        functions[0].calls_in_loops[1].0,
+        "std::net::TcpStream::connect"
+    );
 }
 
 #[test]
 fn tokio_fs_call_in_loop_tracked() {
     let parser = SynCodeParser::new();
-    let source = "fn test() {\n    for _ in 0..10 {\n        tokio::fs::read_to_string(\"f\");\n    }\n}\n";
+    let source =
+        "fn test() {\n    for _ in 0..10 {\n        tokio::fs::read_to_string(\"f\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert_eq!(functions[0].calls_in_loops[0].0, "tokio::fs::read_to_string");
+    assert_eq!(
+        functions[0].calls_in_loops[0].0,
+        "tokio::fs::read_to_string"
+    );
 }
 
 #[test]

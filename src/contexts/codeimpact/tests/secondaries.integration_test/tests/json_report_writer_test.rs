@@ -21,25 +21,27 @@ use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonRe
 fn make_metrics_with_impacts() -> CodeMetrics {
     let economic = EconomicImpact::new(12.5, 5000, 13.0, "moderate");
     let ecological = EcologicalImpact::new(2.4, 21600.0, EfficiencyClass::B);
-    CodeMetrics::with_call_graph(5, 8, 2, vec!["foo".into()], vec![
-        codeimpact_hexagon::analysis::FunctionDetail {
+    CodeMetrics::with_call_graph(
+        5,
+        8,
+        2,
+        vec!["foo".into()],
+        vec![codeimpact_hexagon::analysis::FunctionDetail {
             name: "main".into(),
             location: codeimpact_hexagon::analysis::CodeLocation::new("src/main.rs".into(), 1, 1),
             direct: 5,
             transitive: 8,
             call_depth: 2,
             in_cycle: false,
-        },
-    ])
+        }],
+    )
     .with_economic_impact(economic)
     .with_ecological_impact(ecological)
-    .with_io_in_loops(vec![
-        IoInLoopWarning {
-            function: "read_file".into(),
-            io_call: "std::fs::read".into(),
-            location: CodeLocation::new("src/main.rs".into(), 5, 9),
-        },
-    ])
+    .with_io_in_loops(vec![IoInLoopWarning {
+        function: "read_file".into(),
+        io_call: "std::fs::read".into(),
+        location: CodeLocation::new("src/main.rs".into(), 5, 9),
+    }])
 }
 
 #[test]
@@ -51,8 +53,8 @@ fn json_writer_produces_valid_json() {
     assert!(result.is_ok(), "write_json should succeed");
     let json_str = result.unwrap();
 
-    let json: serde_json::Value = serde_json::from_str(&json_str)
-        .expect("output should be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&json_str).expect("output should be valid JSON");
 
     // Check tool metadata
     assert_eq!(json["tool"]["name"], "codeimpact");
@@ -108,7 +110,10 @@ fn json_writer_empty_metrics() {
     let metrics = CodeMetrics::new(0);
     let result = writer.write_json(&metrics, "empty.rs", "file");
 
-    assert!(result.is_ok(), "write_json with empty metrics should succeed");
+    assert!(
+        result.is_ok(),
+        "write_json with empty metrics should succeed"
+    );
     let json_str = result.unwrap();
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
 
@@ -137,8 +142,8 @@ fn console_writer_write_json_produces_valid_json() {
     assert!(result.is_ok(), "console writer write_json should succeed");
     let json_str = result.unwrap();
 
-    let json: serde_json::Value = serde_json::from_str(&json_str)
-        .expect("output should be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&json_str).expect("output should be valid JSON");
 
     // Same schema checks
     assert_eq!(json["tool"]["name"], "codeimpact");
