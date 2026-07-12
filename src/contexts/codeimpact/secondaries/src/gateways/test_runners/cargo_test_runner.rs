@@ -803,11 +803,29 @@ mod tests {
 
     #[test]
     fn run_with_timeout_with_budget_does_not_hang_when_a_grandchild_holds_the_pipe_open() {
+        if !python3_available() {
+            eprintln!(
+                "skipping: python3 not available on this host (needed to call the setsid(2) \
+                 syscall directly — the `setsid` CLI does not exist on macOS)"
+            );
+            return;
+        }
+
         let dir = tempfile::tempdir().expect("create temp dir");
+        // `(sleep 30 &)` alone does NOT reproduce the escape this test
+        // exists to catch: in a non-interactive `/bin/sh` script, job
+        // control is off, so a plain backgrounded process stays in the
+        // SAME process group as the script — the group-kill already
+        // reaches it. The real gap is a grandchild that calls setsid(2)
+        // and genuinely leaves the group. There is no `setsid` CLI on
+        // macOS, so the syscall is invoked directly via python3 (present
+        // on this host and virtually every Linux/macOS CI image) —
+        // os.setsid() is a thin wrapper over the same syscall a small
+        // libc-based helper would call.
         let script = write_executable_script(
             dir.path(),
-            "grandchild_holds_pipe.sh",
-            "#!/bin/sh\n(sleep 30 &)\nsleep 30\n",
+            "grandchild_escapes_via_setsid.sh",
+            "#!/bin/sh\npython3 -c \"import os; os.setsid(); os.execvp('sleep', ['sleep', '20'])\" &\nsleep 20\n",
         );
 
         let mut cmd = Command::new(&script);
@@ -821,8 +839,9 @@ mod tests {
         });
 
         let result = rx.recv_timeout(Duration::from_secs(15)).expect(
-            "run_with_timeout_with_budget did not return within 15s — it is blocked joining \
-             a reader thread on a pipe a grandchild process still holds open",
+            "run_with_timeout_with_budget did not return within 15s — the setsid'd grandchild \
+             escaped the process-group kill and is still holding the pipe open, and the join \
+             has no bound of its own",
         );
 
         assert!(
@@ -939,6 +958,16 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&script, perms).expect("make fake test binary executable");
         script
+    }
+
+    fn python3_available() -> bool {
+        Command::new("python3")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 
     // Test List (confine_to_target_dir — reject an executable path outside
