@@ -1,7 +1,50 @@
 // ── "Industry" design-system tokens, pruned to what the 1a (Inspector)
 // layout uses (spec §4c) — steel/mono palette, Barlow / Barlow Condensed.
 
-pub const CSS: &str = r#"
+use std::sync::OnceLock;
+
+use super::base64;
+
+const BARLOW_REGULAR_WOFF2: &[u8] = include_bytes!("fonts/Barlow-Regular.latin.woff2");
+const BARLOW_CONDENSED_SEMIBOLD_WOFF2: &[u8] =
+    include_bytes!("fonts/BarlowCondensed-SemiBold.latin.woff2");
+
+/// Unicode range shared by both faces (Latin + Latin-1 Supplement + the
+/// handful of typographic punctuation/symbol codepoints the report itself
+/// emits — arrows, em-dash range, middle dot, section punctuation).
+const LATIN_UNICODE_RANGE: &str = "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD";
+
+fn barlow_regular_base64() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| base64::encode(BARLOW_REGULAR_WOFF2))
+}
+
+fn barlow_condensed_semibold_base64() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| base64::encode(BARLOW_CONDENSED_SEMIBOLD_WOFF2))
+}
+
+/// Builds the full CSS document: two embedded base64 `@font-face` blocks
+/// (ADR-8.11 — Barlow 400 body, Barlow Condensed 600 heading, ~40 KB of
+/// base64 added to every report) ahead of the static design-token/component
+/// CSS. `include_bytes!` + a hand-rolled RFC-4648 encoder keep this at zero
+/// new dependencies; `OnceLock` means each face is base64-encoded once per
+/// process even across multiple `write_html` calls.
+pub fn css() -> String {
+    format!(
+        "@font-face{{font-family:\"Barlow\";font-style:normal;font-weight:400;font-display:swap;\
+         src:url(data:font/woff2;base64,{barlow}) format(\"woff2\");unicode-range:{range};}}\n\
+         @font-face{{font-family:\"Barlow Condensed\";font-style:normal;font-weight:600;font-display:swap;\
+         src:url(data:font/woff2;base64,{barlow_condensed}) format(\"woff2\");unicode-range:{range};}}\n\
+         {css_base}",
+        barlow = barlow_regular_base64(),
+        barlow_condensed = barlow_condensed_semibold_base64(),
+        range = LATIN_UNICODE_RANGE,
+        css_base = CSS_BASE,
+    )
+}
+
+const CSS_BASE: &str = r#"
 :root {
   --color-bg: #f2f2f3;
   --color-surface: #e9e9ea;

@@ -5,7 +5,7 @@ use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 
-use super::html::assets::{CSS, JS};
+use super::html::assets::{self, JS};
 use super::html::view_model::{build_report_vm, ReportVm};
 
 fn render_html(vm: &ReportVm) -> Result<String, AnalysisError> {
@@ -30,7 +30,7 @@ fn render_html(vm: &ReportVm) -> Result<String, AnalysisError> {
 </body>
 </html>
 "#,
-        css = CSS,
+        css = assets::css(),
         data = data_island,
         js = JS,
     ))
