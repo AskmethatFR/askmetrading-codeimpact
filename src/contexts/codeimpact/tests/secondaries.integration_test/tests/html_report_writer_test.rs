@@ -1,8 +1,13 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
+use codeimpact_hexagon::analysis::ComplexityWarning;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::WarningPattern;
+use codeimpact_hexagon::analysis::WarningSeverity;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
@@ -18,6 +23,38 @@ fn graph_with_files(files: Vec<(&str, u32, u32)>) -> FileConsumptionGraph {
         .map(|(path, cc, tc)| (PathBuf::from(path), make_metrics(cc, tc)))
         .collect();
     FileConsumptionGraph::build(&entries, vec![]).unwrap()
+}
+
+/// Builder-style helper (US7 T2): wraps pre-built `CodeMetrics` (already
+/// carrying warnings / io / functions / economic / ecological via the
+/// domain's own `with_*` builder methods) into a graph, so slice tests can
+/// attach exactly the fixtures they need without a combinatorial explosion
+/// of `graph_with_files`-style positional params.
+fn graph_from(files: Vec<(&str, CodeMetrics)>) -> FileConsumptionGraph {
+    let entries: Vec<(PathBuf, CodeMetrics)> = files
+        .into_iter()
+        .map(|(path, metrics)| (PathBuf::from(path), metrics))
+        .collect();
+    FileConsumptionGraph::build(&entries, vec![]).unwrap()
+}
+
+fn warning_in(function: &str, severity: WarningSeverity) -> ComplexityWarning {
+    ComplexityWarning {
+        pattern: WarningPattern::DeepConditional,
+        severity,
+        function: function.to_string(),
+        location: CodeLocation::new("a.rs".into(), 1, 1),
+        message: "msg".into(),
+        suggestion: "sugg".into(),
+    }
+}
+
+fn io_in(function: &str) -> IoInLoopWarning {
+    IoInLoopWarning {
+        function: function.to_string(),
+        io_call: "std::fs::read_to_string".into(),
+        location: CodeLocation::new("a.rs".into(), 2, 1),
+    }
 }
 
 // Test List:
@@ -164,6 +201,119 @@ fn write_html_zero_complexity_file_has_zero_score_pct_no_panic() {
     assert!(
         html.contains("\"score_pct\":0"),
         "max_score == 0 branch must yield score_pct 0, not divide by zero: {}",
+        html
+    );
+}
+
+// ── US7 T2 slice S1: Industry banner + 8-tile aggregated stat grid ──
+//
+// Test List (S1):
+// 1. exactly 8 stat tiles are emitted, Direct Σ is the SUM of files' cyclomatic
+//    complexity (a max/first-file bug must fail this)
+// 2. the Warnings tile counts warnings + io together; critical sub sums
+//    critical-severity warnings AND io-in-loop count
+// 3. the Est. cost tile shows "—" (never "$0", never a panic) when no file
+//    carries an economic impact
+
+#[test]
+fn stat_grid_has_eight_tiles_with_aggregated_values() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(5, 8)), ("b.rs", make_metrics(3, 4))]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert_eq!(
+        html.matches("\"label\":").count(),
+        8,
+        "expected exactly 8 stat tiles: {}",
+        html
+    );
+    assert!(
+        html.contains("\"label\":\"Direct \u{3a3}\",\"value\":\"8\""),
+        "Direct \u{3a3} must be the SUM of files' cyclomatic complexity (5+3=8), not a max/first-file value: {}",
+        html
+    );
+}
+
+#[test]
+fn stat_grid_counts_critical_warnings_and_io_together() {
+    let writer = HtmlReportWriter::new();
+    let file_metrics = make_metrics(5, 5)
+        .with_warnings(vec![warning_in("f", WarningSeverity::Critical)])
+        .with_io_in_loops(vec![io_in("f")]);
+    let graph = graph_from(vec![("a.rs", file_metrics)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        html.contains("\"label\":\"Warnings\",\"value\":\"2\",\"sub\":\"2 critical\""),
+        "1 critical warning + 1 io-in-loop must total 2 warnings and 2 critical: {}",
+        html
+    );
+}
+
+#[test]
+fn stat_grid_shows_dash_when_no_economic_impact() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        html.contains("\"label\":\"Est. cost\",\"value\":\"\u{2014}\""),
+        "no economic impact anywhere must render a dash, not $0 nor a panic: {}",
+        html
+    );
+}
+
+// ── Rendering discipline — structural tests (spec §4, ADR-8.10) ──
+//
+// These fail the BUILD (not merely production) the moment a banned sink or
+// a third `.style` access is introduced anywhere in the emitted JS.
+
+#[test]
+fn rendered_js_contains_no_html_sink() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    let banned = [
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "setAttribute",
+        "eval(",
+        "new Function",
+        "javascript:",
+        "srcdoc",
+        "cssText",
+    ];
+    for pattern in banned {
+        assert!(
+            !html.contains(pattern),
+            "emitted JS must never contain the banned sink '{}': {}",
+            pattern,
+            html
+        );
+    }
+}
+
+#[test]
+fn rendered_js_has_only_two_style_sinks() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    let total_style = html.matches(".style.").count();
+    let width_sink = html.matches(".style.width").count();
+    let padding_sink = html.matches(".style.paddingLeft").count();
+    assert_eq!(
+        total_style,
+        width_sink + padding_sink,
+        "exactly two clamped numeric style sinks are allowed in the whole file (width, paddingLeft): {}",
         html
     );
 }
