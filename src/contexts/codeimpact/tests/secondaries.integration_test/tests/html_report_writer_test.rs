@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ComplexityWarning;
+use codeimpact_hexagon::analysis::EcologicalImpact;
+use codeimpact_hexagon::analysis::EconomicImpact;
+use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::WarningPattern;
@@ -500,6 +504,189 @@ fn write_html_neutralizes_payload_in_a_folder_path_segment() {
         html.matches("<script").count(),
         2,
         "a malicious folder segment must not add a third <script> tag: {}",
+        html
+    );
+}
+
+// ── US7 T2 slice S3: full node detail (children/functions/warnings/io/impact) ──
+//
+// Test List (S3):
+// 1. functions carry location + BOTH true/false in_cycle flags
+// 2. a folder's warnings are the CONCAT of its descendant files' warnings
+// 3. a folder's economic impact is the domain SUM (EconomicImpact::Add) of
+//    children — never a coefficient recomputed from transitive complexity
+//    (the anti-dc_script.js check, spec §0 finding 2)
+// 4. a folder's ecological class is RECOMPUTED from the summed CO2, not
+//    copied from any single child's class
+
+#[test]
+fn detail_carries_functions_with_location_and_cycle_flag() {
+    let writer = HtmlReportWriter::new();
+    let metrics = make_metrics(5, 5).with_function_details(vec![
+        FunctionDetail {
+            name: "a".to_string(),
+            location: CodeLocation::new("f.rs".into(), 10, 1),
+            direct: 1,
+            transitive: 2,
+            call_depth: 1,
+            in_cycle: false,
+        },
+        FunctionDetail {
+            name: "b".to_string(),
+            location: CodeLocation::new("f.rs".into(), 20, 1),
+            direct: 3,
+            transitive: 4,
+            call_depth: 2,
+            in_cycle: true,
+        },
+    ]);
+    let graph = graph_from(vec![("f.rs", metrics)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        html.contains(
+            r#""functions":[{"name":"a","direct":1,"transitive":2,"depth":1,"loc":"f.rs:10:1","in_cycle":false},{"name":"b","direct":3,"transitive":4,"depth":2,"loc":"f.rs:20:1","in_cycle":true}]"#
+        ),
+        "functions must carry their location and BOTH true/false in_cycle flags: {}",
+        html
+    );
+}
+
+#[test]
+fn folder_detail_collects_warnings_from_descendant_files() {
+    let writer = HtmlReportWriter::new();
+    let m1 = make_metrics(1, 1).with_warnings(vec![warning_in("f1", WarningSeverity::Warning)]);
+    let m2 = make_metrics(1, 1).with_warnings(vec![warning_in("f2", WarningSeverity::Critical)]);
+    let graph = graph_from(vec![("a/one.rs", m1), ("a/two.rs", m2)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        html.contains(
+            r#""warnings":[{"pattern":"DeepConditional","severity":"warning","sev_label":"WARNING","function":"f1","loc":"a.rs:1:1","message":"msg","suggestion":"sugg"},{"pattern":"DeepConditional","severity":"critical","sev_label":"CRITICAL","function":"f2","loc":"a.rs:1:1","message":"msg","suggestion":"sugg"}]"#
+        ),
+        "folder warnings must be the CONCAT of both descendant files' warnings, not just one: {}",
+        html
+    );
+}
+
+#[test]
+fn folder_economic_impact_is_the_sum_of_children_impacts() {
+    let writer = HtmlReportWriter::new();
+    let m1 = make_metrics(1, 1).with_economic_impact(EconomicImpact::new(3.0, 512, 3.0, "low"));
+    let m2 = make_metrics(1, 1).with_economic_impact(EconomicImpact::new(3.0, 512, 3.0, "low"));
+    let graph = graph_from(vec![("a/one.rs", m1), ("a/two.rs", m2)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""economic":{"cpu":"$0.000006","memory":"1.0 KB","total":"$0.000006","level":"low"}"#),
+        "folder economic must be the domain SUM (fold via EconomicImpact::Add) of its children — never a coefficient recomputed from transitive complexity: {}",
+        html
+    );
+}
+
+#[test]
+fn folder_ecological_class_is_recomputed_from_summed_co2() {
+    let writer = HtmlReportWriter::new();
+    let m1 = make_metrics(1, 1)
+        .with_ecological_impact(EcologicalImpact::new(0.6, 100.0, EfficiencyClass::A));
+    let m2 = make_metrics(1, 1)
+        .with_ecological_impact(EcologicalImpact::new(0.6, 100.0, EfficiencyClass::A));
+    let graph = graph_from(vec![("a/one.rs", m1), ("a/two.rs", m2)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        html.contains(
+            r#""ecological":{"co2":"1.200 g","energy":"200.0 J (0.000056 kWh)","class":"B"}"#
+        ),
+        "folder ecological class must be RECOMPUTED from the summed CO2 (0.6+0.6=1.2g -> class B), not copied from either child's class A: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_neutralizes_payload_in_function_name() {
+    let writer = HtmlReportWriter::new();
+    let payload = "</script><script>alert(1)</script>";
+    let metrics = make_metrics(1, 1).with_function_details(vec![FunctionDetail {
+        name: payload.to_string(),
+        location: CodeLocation::new("f.rs".into(), 1, 1),
+        direct: 1,
+        transitive: 1,
+        call_depth: 1,
+        in_cycle: false,
+    }]);
+    let graph = graph_from(vec![("f.rs", metrics)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        !html.contains("</script><script>alert(1)</script>"),
+        "function name payload must not appear as a literal script breakout: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<script").count(),
+        2,
+        "function name payload must not add a third <script> tag: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_neutralizes_payload_in_warning_message_and_suggestion() {
+    let writer = HtmlReportWriter::new();
+    let payload = "</script><script>alert(1)</script>";
+    let metrics = make_metrics(1, 1).with_warnings(vec![ComplexityWarning {
+        pattern: WarningPattern::DeepConditional,
+        severity: WarningSeverity::Warning,
+        function: "f".to_string(),
+        location: CodeLocation::new("f.rs".into(), 1, 1),
+        message: payload.to_string(),
+        suggestion: payload.to_string(),
+    }]);
+    let graph = graph_from(vec![("f.rs", metrics)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        !html.contains("</script><script>alert(1)</script>"),
+        "warning message/suggestion payload must not appear as a literal script breakout: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<script").count(),
+        2,
+        "warning message/suggestion payload must not add a third <script> tag: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_neutralizes_payload_in_io_call_name() {
+    let writer = HtmlReportWriter::new();
+    let payload = "</script><script>alert(1)</script>";
+    let metrics = make_metrics(1, 1).with_io_in_loops(vec![IoInLoopWarning {
+        function: "f".to_string(),
+        io_call: payload.to_string(),
+        location: CodeLocation::new("f.rs".into(), 1, 1),
+    }]);
+    let graph = graph_from(vec![("f.rs", metrics)]);
+
+    let html = writer.write_html(&graph, "proj").expect("write_html should succeed");
+
+    assert!(
+        !html.contains("</script><script>alert(1)</script>"),
+        "io_call payload must not appear as a literal script breakout: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<script").count(),
+        2,
+        "io_call payload must not add a third <script> tag: {}",
         html
     );
 }
