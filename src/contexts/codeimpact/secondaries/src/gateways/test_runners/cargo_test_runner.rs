@@ -155,11 +155,13 @@ impl CargoTestRunner {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Self::parse_test_binary_path(&stdout).ok_or_else(|| {
+        let candidate = Self::parse_test_binary_path(&stdout).ok_or_else(|| {
             AnalysisError::TestRunnerError(
                 "impossible de localiser le binaire de test compilé".into(),
             )
-        })
+        })?;
+
+        Self::confine_to_target_dir(project_dir, &candidate)
     }
 
     /// Parses `cargo ... --message-format=json` output to find the
@@ -200,10 +202,26 @@ impl CargoTestRunner {
     /// already applies to mere reads (ADR-0006) — executing is strictly more
     /// dangerous than reading, so it gets the same discipline.
     fn confine_to_target_dir(
-        _project_dir: &Path,
+        project_dir: &Path,
         candidate: &Path,
     ) -> Result<PathBuf, AnalysisError> {
-        Ok(candidate.to_path_buf())
+        let locate_err = || {
+            AnalysisError::TestRunnerError(
+                "impossible de localiser le binaire de test compilé".into(),
+            )
+        };
+
+        let canonical_target =
+            std::fs::canonicalize(project_dir.join("target")).map_err(|_| locate_err())?;
+        let canonical_candidate = std::fs::canonicalize(candidate).map_err(|_| locate_err())?;
+
+        if !canonical_candidate.starts_with(&canonical_target) {
+            return Err(AnalysisError::TestRunnerError(
+                "binaire de test hors du répertoire de build".into(),
+            ));
+        }
+
+        Ok(canonical_candidate)
     }
 
     /// Thin wrapper: probes for `/usr/bin/time` on the real filesystem and
