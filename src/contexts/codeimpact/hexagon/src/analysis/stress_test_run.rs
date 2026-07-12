@@ -9,12 +9,16 @@ pub enum UnmeasurableReason {
     /// No sampler (e.g. `/usr/bin/time`) was available, or the one that
     /// ran produced output that could not be parsed into a reading.
     NoSampler,
+    /// The run exercised zero tests. A run with nothing executed has no
+    /// honest cost to report, however well-sampled its process was (#39).
+    NoTestsExecuted,
 }
 
 impl std::fmt::Display for UnmeasurableReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoSampler => write!(f, "aucun outil de mesure disponible"),
+            Self::NoTestsExecuted => write!(f, "aucun test exécuté"),
         }
     }
 }

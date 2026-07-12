@@ -268,6 +268,40 @@ fn write_stress_test_shows_real_numbers_when_measured() {
     assert!(!output.contains("n/a"), "got: {}", output);
 }
 
+// #39 — a 0-test run must render the reason, never a confident cost
+// figure. This is the console-writer mirror of
+// reactive_analyzer_zero_tests_yields_unmeasurable_no_tests_executed:
+// the writer already renders Unmeasurable(reason) as "n/a (reason)" for
+// every field (#36 machinery), so it needs zero code changes once the
+// hexagon returns NoTestsExecuted — this test proves that.
+#[test]
+fn write_stress_test_shows_no_tests_executed_instead_of_a_cost() {
+    let writer = ConsoleReportWriter::new();
+    let run = StressTestRun::new(
+        1500,
+        Measurement::Available(1200),
+        Measurement::Available(8192),
+        0,
+        0,
+        None,
+    );
+    let impact = Measurement::Unmeasurable(UnmeasurableReason::NoTestsExecuted);
+    let mut buf = Vec::new();
+    writer.write_stress_test_to(&mut buf, &run, &impact);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("aucun test exécuté"),
+        "expected the no-tests-executed reason in output, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("Coût total: $") && !output.contains("Coût total: 0"),
+        "must never render a confident cost figure for a 0-test run, got: {}",
+        output
+    );
+}
+
 #[test]
 fn write_project_report_no_warnings_does_not_show_section() {
     let writer = ConsoleReportWriter::new();
