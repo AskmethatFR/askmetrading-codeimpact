@@ -829,8 +829,11 @@ mod tests {
     #[test]
     fn measure_test_binary_with_sampler_no_sampler_yields_unmeasurable() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let binary =
-            write_executable_script(dir.path(), "fake_test_binary.sh", "#!/bin/sh\nexit 0\n");
+        let binary = write_executable_script(
+            dir.path(),
+            "fake_test_binary.sh",
+            "#!/bin/sh\necho 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s'\nexit 0\n",
+        );
 
         let result =
             CargoTestRunner::measure_test_binary_with_sampler(dir.path(), &binary, None, false)
@@ -838,5 +841,60 @@ mod tests {
 
         assert_eq!(result.cpu_time_ms().available(), None);
         assert_eq!(result.memory_kb().available(), None);
+    }
+
+    // Test List (measure_test_binary_with_sampler — crash detection, #39
+    // follow-up / Dev B blocking finding): a crashed test binary (SIGSEGV,
+    // abort(), a panic that kills the harness before the summary line)
+    // prints some "test <name> ... ok" lines and then NOTHING — no "test
+    // result:" summary. Without a completeness check, that is
+    // indistinguishable from "this binary legitimately has 0 remaining
+    // tests" and silently dilutes into a healthy-looking aggregate
+    // (exactly #39 regenerated). The discriminator is the summary line,
+    // NOT the exit status — a binary with FAILING tests exits non-zero on
+    // the nominal path and must stay measurable.
+    // 1. no "test result:" line in stdout -> Err (the binary never
+    //    finished, whatever its exit code)
+    // 2. a "test result: FAILED. ..." line present, exit code non-zero
+    //    (the ordinary failing-tests path) -> still Ok, with the parsed
+    //    counts — this is what stops a naive `status.success()` "fix"
+
+    #[test]
+    fn measure_test_binary_with_sampler_errors_when_binary_crashes_without_summary_line() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let binary = write_executable_script(
+            dir.path(),
+            "crashes_mid_run.sh",
+            "#!/bin/sh\necho 'test foo ... ok'\necho 'test bar ... ok'\nexit 134\n",
+        );
+
+        let result =
+            CargoTestRunner::measure_test_binary_with_sampler(dir.path(), &binary, None, false);
+
+        assert!(
+            result.is_err(),
+            "a binary with no 'test result:' summary line must not be trusted, \
+             even though it printed some 'test ... ok' lines before dying"
+        );
+    }
+
+    #[test]
+    fn measure_test_binary_with_sampler_still_succeeds_when_tests_fail_but_complete() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let binary = write_executable_script(
+            dir.path(),
+            "fails_but_completes.sh",
+            "#!/bin/sh\necho 'test foo ... ok'\necho 'test bar ... FAILED'\necho 'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\nexit 1\n",
+        );
+
+        let result =
+            CargoTestRunner::measure_test_binary_with_sampler(dir.path(), &binary, None, false)
+                .expect(
+                    "a binary that completes with failing tests (non-zero exit, summary \
+                     line present) must still be measurable",
+                );
+
+        assert_eq!(result.tests_passed(), 1);
+        assert_eq!(result.tests_total(), 2);
     }
 }
