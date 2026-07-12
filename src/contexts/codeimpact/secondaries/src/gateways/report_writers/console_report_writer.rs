@@ -355,17 +355,26 @@ impl ConsoleReportWriter {
         )
         .unwrap();
         writeln!(writer, "Durée: {} ms", run.duration_ms()).unwrap();
-        writeln!(
-            writer,
-            "Temps CPU: {} ms",
-            run.cpu_time_ms().available().unwrap_or(0)
-        )
-        .unwrap();
-        let memory_mb = run.memory_kb().available().unwrap_or(0) as f64 / KB_TO_MB;
-        if memory_mb >= MB_TO_GB {
-            writeln!(writer, "Mémoire: {:.1} GB", memory_mb / MB_TO_GB).unwrap();
-        } else {
-            writeln!(writer, "Mémoire: {:.1} MB", memory_mb).unwrap();
+        match run.cpu_time_ms() {
+            Measurement::Available(ms) => {
+                writeln!(writer, "Temps CPU: {} ms", ms).unwrap();
+            }
+            Measurement::Unmeasurable(reason) => {
+                writeln!(writer, "Temps CPU: n/a ({})", reason).unwrap();
+            }
+        }
+        match run.memory_kb() {
+            Measurement::Available(kb) => {
+                let memory_mb = kb as f64 / KB_TO_MB;
+                if memory_mb >= MB_TO_GB {
+                    writeln!(writer, "Mémoire: {:.1} GB", memory_mb / MB_TO_GB).unwrap();
+                } else {
+                    writeln!(writer, "Mémoire: {:.1} MB", memory_mb).unwrap();
+                }
+            }
+            Measurement::Unmeasurable(reason) => {
+                writeln!(writer, "Mémoire: n/a ({})", reason).unwrap();
+            }
         }
         writeln!(writer).unwrap();
         writeln!(writer, "=== Impact économique réel ===").unwrap();
