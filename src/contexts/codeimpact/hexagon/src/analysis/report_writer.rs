@@ -21,4 +21,9 @@ pub trait ReportWriter: Send + Sync {
         run: &StressTestRun,
         impact: &EconomicImpact,
     ) -> Result<(), AnalysisError>;
+    fn write_html(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError>;
 }

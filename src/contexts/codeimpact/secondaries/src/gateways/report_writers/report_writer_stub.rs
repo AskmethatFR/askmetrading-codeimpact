@@ -14,6 +14,7 @@ pub struct SharedReportWriterStub {
     pub last_stress_run: Arc<Mutex<Option<StressTestRun>>>,
     pub last_stress_impact: Arc<Mutex<Option<EconomicImpact>>>,
     pub last_json: Arc<Mutex<Option<String>>>,
+    pub last_html: Arc<Mutex<Option<String>>>,
 }
 
 impl SharedReportWriterStub {
@@ -24,6 +25,7 @@ impl SharedReportWriterStub {
             last_stress_run: Arc::new(Mutex::new(None)),
             last_stress_impact: Arc::new(Mutex::new(None)),
             last_json: Arc::new(Mutex::new(None)),
+            last_html: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -64,5 +66,20 @@ impl ReportWriter for SharedReportWriterStub {
         *self.last_stress_run.lock().unwrap() = Some(run.clone());
         *self.last_stress_impact.lock().unwrap() = Some(impact.clone());
         Ok(())
+    }
+
+    fn write_html(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError> {
+        *self.last_graph.lock().unwrap() = Some(graph.clone());
+        let html = format!(
+            "<!DOCTYPE html><html><body>stub html for {} ({} files)</body></html>",
+            target,
+            graph.files().len()
+        );
+        *self.last_html.lock().unwrap() = Some(html.clone());
+        Ok(html)
     }
 }

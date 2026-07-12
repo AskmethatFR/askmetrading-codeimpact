@@ -142,6 +142,16 @@ impl ReportWriter for JsonReportWriter {
             "json writer does not support stress test output".into(),
         ))
     }
+
+    fn write_html(
+        &self,
+        _graph: &FileConsumptionGraph,
+        _target: &str,
+    ) -> Result<String, AnalysisError> {
+        Err(AnalysisError::AnalysisFailed(
+            "json writer does not support html output".into(),
+        ))
+    }
 }
 
 // ── Shared serialization function (used by both JsonReportWriter and ConsoleReportWriter) ──

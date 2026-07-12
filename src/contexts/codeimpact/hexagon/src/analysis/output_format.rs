@@ -5,4 +5,5 @@
 pub enum OutputFormat {
     Console,
     Json,
+    Html,
 }

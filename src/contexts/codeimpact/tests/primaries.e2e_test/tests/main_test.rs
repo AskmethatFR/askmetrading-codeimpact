@@ -264,3 +264,161 @@ fn e2e_analyze_invalid_format_errors() {
         stderr
     );
 }
+
+// US7 T1 — HTML report walking skeleton.
+// Test List:
+// 1. --format html -o <path> on a project dir writes a self-contained HTML file showing the project view (RED first — behavioral, pins the user-observable outcome)
+// 2. --format html on a single-file target errors (T1 scope: project view only)
+
+#[test]
+fn e2e_analyze_html_format_writes_self_contained_project_view() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output_path =
+        std::env::temp_dir().join(format!("codeimpact_report_{}.html", std::process::id()));
+    let _ = std::fs::remove_file(&output_path);
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected for --format html. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let html = std::fs::read_to_string(&output_path)
+        .expect("html output file should have been created");
+    let _ = std::fs::remove_file(&output_path);
+
+    assert!(html.contains("<!DOCTYPE html>"), "missing doctype: {}", html);
+    assert_eq!(html.matches("<html").count(), 1, "expected a single html root");
+    assert!(
+        !html.contains("<link "),
+        "self-contained report must not reference an external stylesheet: {}",
+        html
+    );
+    assert!(
+        !html.contains("<script src="),
+        "self-contained report must not reference an external script: {}",
+        html
+    );
+    assert!(
+        html.contains("sample.rs"),
+        "project view should list the analyzed files: {}",
+        html
+    );
+}
+
+#[test]
+fn e2e_analyze_html_format_on_single_file_target_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "html"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "html format on a single-file target should fail (T1 scope: project view only). stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains(fixture.to_str().unwrap()),
+        "error message must not leak the absolute path (ADR-0006): {}",
+        stderr
+    );
+}
+
+// QA branch-coverage gap fixes (US7 T1, still T1 — no new behavior):
+// 3. --format html without -o defaults the output path to ./report.html (relative to cwd)
+// 4. -o pointing at a nonexistent parent directory fails cleanly, no absolute path leak (ADR-0006)
+
+#[test]
+fn e2e_analyze_html_format_without_output_flag_defaults_to_report_html_in_cwd() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let isolated_cwd = std::env::temp_dir()
+        .join(format!("codeimpact_default_output_test_{}", std::process::id()));
+    std::fs::create_dir_all(&isolated_cwd).expect("create isolated cwd");
+    let expected_path = isolated_cwd.join("report.html");
+    let _ = std::fs::remove_file(&expected_path);
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--format", "html"])
+        .current_dir(&isolated_cwd)
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected without -o. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        expected_path.exists(),
+        "default output path ./report.html should exist in cwd {:?}",
+        isolated_cwd
+    );
+
+    let _ = std::fs::remove_file(&expected_path);
+    let _ = std::fs::remove_dir(&isolated_cwd);
+}
+
+#[test]
+fn e2e_analyze_html_format_output_to_nonexistent_dir_errors_without_path_leak() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let bogus_output = "/nonexistent_dir_xyz/report.html";
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+            "-o",
+            bogus_output,
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "exit non-zero expected when the output directory does not exist. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("/nonexistent_dir_xyz"),
+        "error message must not leak the requested absolute path (ADR-0006): {}",
+        stderr
+    );
+}
+

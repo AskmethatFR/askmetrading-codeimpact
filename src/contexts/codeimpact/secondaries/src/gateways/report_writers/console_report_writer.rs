@@ -3,27 +3,16 @@ use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
-use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
-const MICRODOLLARS_TO_DOLLARS: f64 = 1_000_000.0;
+use super::humanize::{format_dollars, format_energy, format_memory};
+
 const KB_TO_MB: f64 = 1024.0;
 const MB_TO_GB: f64 = 1024.0;
-
-fn format_dollars(microdollars: f64) -> String {
-    let dollars = microdollars / MICRODOLLARS_TO_DOLLARS;
-    if dollars < 0.0001 {
-        format!("${:.6}", dollars)
-    } else if dollars < 1.0 {
-        format!("${:.4}", dollars)
-    } else {
-        format!("${:.2}", dollars)
-    }
-}
 
 #[derive(Default)]
 pub struct ConsoleReportWriter;
@@ -75,12 +64,7 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact économique estimé ===").unwrap();
             writeln!(writer, "Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars())).unwrap();
-            let memory_kb = economic.memory_bytes() as f64 / 1024.0;
-            if memory_kb >= 1024.0 {
-                writeln!(writer, "Mémoire: {:.1} MB", memory_kb / 1024.0).unwrap();
-            } else {
-                writeln!(writer, "Mémoire: {:.1} KB", memory_kb).unwrap();
-            }
+            writeln!(writer, "Mémoire: {}", format_memory(economic.memory_bytes())).unwrap();
             writeln!(writer, "Coût total: {}", format_dollars(economic.total_cost_microdollars())).unwrap();
             writeln!(writer, "Niveau: {}", economic.level()).unwrap();
         }
@@ -89,13 +73,7 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact écologique estimé ===").unwrap();
             writeln!(writer, "CO₂: {:.1} g", ecological.co2_grams()).unwrap();
-            let energy_joules = ecological.energy_joules();
-            let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
-            if energy_joules >= 1000.0 {
-                writeln!(writer, "Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh).unwrap();
-            } else {
-                writeln!(writer, "Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh).unwrap();
-            }
+            writeln!(writer, "Énergie: {}", format_energy(ecological.energy_joules())).unwrap();
             writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
         }
 
@@ -260,12 +238,7 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact économique total ===").unwrap();
             writeln!(writer, "Coût CPU: {}", format_dollars(economic.cpu_cost_microdollars())).unwrap();
-            let memory_kb = economic.memory_bytes() as f64 / 1024.0;
-            if memory_kb >= 1024.0 {
-                writeln!(writer, "Mémoire: {:.1} MB", memory_kb / 1024.0).unwrap();
-            } else {
-                writeln!(writer, "Mémoire: {:.1} KB", memory_kb).unwrap();
-            }
+            writeln!(writer, "Mémoire: {}", format_memory(economic.memory_bytes())).unwrap();
             writeln!(writer, "Coût total: {}", format_dollars(economic.total_cost_microdollars())).unwrap();
             writeln!(writer, "Niveau: {}", economic.level()).unwrap();
         }
@@ -274,13 +247,7 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Impact écologique total ===").unwrap();
             writeln!(writer, "CO₂: {:.1} g", ecological.co2_grams()).unwrap();
-            let energy_joules = ecological.energy_joules();
-            let energy_kwh = energy_joules / EcologicalImpactEstimator::KWH_TO_JOULES;
-            if energy_joules >= 1000.0 {
-                writeln!(writer, "Énergie: {:.1} kJ ({:.4} kWh)", energy_joules / 1000.0, energy_kwh).unwrap();
-            } else {
-                writeln!(writer, "Énergie: {:.1} J ({:.6} kWh)", energy_joules, energy_kwh).unwrap();
-            }
+            writeln!(writer, "Énergie: {}", format_energy(ecological.energy_joules())).unwrap();
             writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
         }
 
@@ -345,5 +312,15 @@ impl ReportWriter for ConsoleReportWriter {
         println!("Niveau: {}", impact.level());
         println!("==============================");
         Ok(())
+    }
+
+    fn write_html(
+        &self,
+        _graph: &FileConsumptionGraph,
+        _target: &str,
+    ) -> Result<String, AnalysisError> {
+        Err(AnalysisError::AnalysisFailed(
+            "console writer does not support html output".into(),
+        ))
     }
 }

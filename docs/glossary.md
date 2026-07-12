@@ -20,7 +20,10 @@
 | CodeReaderPort | Port | Interface pour lire le code source depuis le filesystem. |
 | ProfilerPort | Port | Interface pour mesurer l'impact réel (CPU/mem/IO). L'implémentation P0 utilise des heuristiques. |
 | TestRunnerPort | Port | Interface pour exécuter les tests avec instrumentation. |
-| ReportWriterPort | Port | Interface pour produire le rapport (console, JSON). |
+| ReportWriterPort | Port | Interface pour produire le rapport (console, JSON, HTML). Méthode `write_html` retourne le document HTML en `String`; l'écriture fichier vit dans les primaries. |
+| HtmlReport | Concept | Rapport visuel self-contained: un seul `.html` (CSS/JS/data JSON inline, fonts système, zéro asset externe) ouvrable en `file://`. Produit par `HtmlReportWriter`. Vue projet (liste fichiers) en T1; vue node détail en T2. |
+| ImpactScore | Concept | Score d'impact affiché dans le rapport HTML = `transitive_complexity()`. Heuristique de présentation, PAS une métrique domaine (voir [[html-report]] ADR-8.8). Barres normalisées au max du projet. |
+| DataIsland | Concept | Bloc `<script id="ci-data" type="application/json">` portant le view-model sérialisé. Échappé via `json_island_escape` (breakout `</script>`); rendu côté client par `textContent`/`createElement` (défense XSS structurelle). |
 | CallGraph | VO | Graphe d'appels entre fonctions, dérivé du parsing AST. Utilisé pour la complexité transitive et la profondeur. |
 | CyclomaticComplexity | Concept | Nombre de chemins linéairement indépendants dans le code. Mesure statique de complexité structurelle. |
 | TransitiveComplexity | Concept | Somme des complexités de toutes les fonctions appelées (directement ou indirectement). |
