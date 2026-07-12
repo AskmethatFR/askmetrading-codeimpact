@@ -2,6 +2,7 @@ use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 
@@ -96,7 +97,7 @@ impl ReportWriter for HtmlReportWriter {
     fn write_stress_test(
         &self,
         _run: &StressTestRun,
-        _impact: &EconomicImpact,
+        _impact: &Measurement<EconomicImpact>,
     ) -> Result<(), AnalysisError> {
         Err(AnalysisError::AnalysisFailed(
             "html writer does not support stress test output".into(),

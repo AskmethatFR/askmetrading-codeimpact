@@ -1,37 +1,51 @@
 use codeimpact_hexagon::analysis::AnalysisError;
+use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReactiveAnalyzer;
 use codeimpact_hexagon::analysis::RunStressTest;
 use codeimpact_hexagon::analysis::StressTestRun;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::report_writers::report_writer_stub::SharedReportWriterStub;
 use codeimpact_secondaries::gateways::test_runners::test_runner_stub::TestRunnerStub;
 
 // Test List:
 // 1. stress_test_run_constructs
 // 2. stress_test_run_passed_never_exceeds_total
-// 3. stress_test_run_duration_must_be_positive
-// 4. reactive_analyzer_converts_run_to_economic_impact
-// 5. reactive_analyzer_high_cpu_time_gives_moderate_level
-// 6. reactive_analyzer_zero_cpu_time_gives_low_level
-// 7. reactive_analyzer_high_memory_gives_high_level
-// 8. reactive_analyzer_extreme_memory_gives_critical_level
-// 9. run_stress_test_invokes_runner_and_writer
-// 10. run_stress_test_with_filter
-// 11. run_stress_test_propagates_runner_error
+// 3. stress_test_run_duration_can_be_zero (a genuinely instant run is not "unmeasured")
+// 4. stress_test_run_reports_unmeasurable_cpu_and_memory (#36)
+// 5. reactive_analyzer_converts_run_to_economic_impact
+// 6. reactive_analyzer_high_cpu_time_gives_moderate_level
+// 7. reactive_analyzer_zero_cpu_time_gives_low_level
+// 8. reactive_analyzer_high_memory_gives_high_level
+// 9. reactive_analyzer_extreme_memory_gives_critical_level
+// 10. run_stress_test_invokes_runner_and_writer
+// 11. run_stress_test_with_filter
+// 12. run_stress_test_propagates_runner_error
+
+fn available(value: u64) -> Measurement<u64> {
+    Measurement::Available(value)
+}
 
 fn make_run() -> StressTestRun {
-    StressTestRun::new(1500, 1200, 8192, 42, 50, None)
+    StressTestRun::new(1500, available(1200), available(8192), 42, 50, None)
 }
 
 fn make_run_with_filter() -> StressTestRun {
-    StressTestRun::new(500, 400, 2048, 10, 10, Some("test_foo".into()))
+    StressTestRun::new(
+        500,
+        available(400),
+        available(2048),
+        10,
+        10,
+        Some("test_foo".into()),
+    )
 }
 
 #[test]
 fn stress_test_run_constructs() {
     let run = make_run();
     assert_eq!(run.duration_ms(), 1500);
-    assert_eq!(run.cpu_time_ms(), 1200);
-    assert_eq!(run.memory_kb(), 8192);
+    assert_eq!(run.cpu_time_ms(), available(1200));
+    assert_eq!(run.memory_kb(), available(8192));
     assert_eq!(run.tests_passed(), 42);
     assert_eq!(run.tests_total(), 50);
     assert_eq!(run.filter(), None);
@@ -39,20 +53,44 @@ fn stress_test_run_constructs() {
 
 #[test]
 fn stress_test_run_passed_never_exceeds_total() {
-    let run = StressTestRun::new(100, 50, 1024, 55, 50, None);
+    let run = StressTestRun::new(100, available(50), available(1024), 55, 50, None);
     assert_eq!(run.tests_passed(), 50);
 }
 
 #[test]
-fn stress_test_run_duration_must_be_positive() {
-    let run = StressTestRun::new(0, 0, 0, 0, 0, None);
-    assert_eq!(run.duration_ms(), 1);
+fn stress_test_run_duration_can_be_zero() {
+    // A run that legitimately completes in under a millisecond is not the
+    // same thing as an unmeasured run — it must report the real 0, not a
+    // fudged 1 (#36 bonus smell: silently inflating a measured value is the
+    // same disease as defaulting an unmeasured one to 0).
+    let run = StressTestRun::new(0, available(0), available(0), 0, 0, None);
+    assert_eq!(run.duration_ms(), 0);
+}
+
+#[test]
+fn stress_test_run_reports_unmeasurable_cpu_and_memory() {
+    let run = StressTestRun::new(
+        10,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+    assert_eq!(
+        run.cpu_time_ms(),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler)
+    );
+    assert_eq!(
+        run.memory_kb(),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler)
+    );
 }
 
 #[test]
 fn reactive_analyzer_converts_run_to_economic_impact() {
     let run = make_run();
-    let impact = ReactiveAnalyzer::analyze(&run);
+    let impact = ReactiveAnalyzer::analyze(&run).available().unwrap();
     // 1200 ms CPU = 1.2 CPU-seconds
     // ~$0.10/CPU-heure = $0.10/3600 CPU-seconds = 27.78 μ$/CPU-second
     // 1.2 * 27.78 ≈ 33.33 μ$
@@ -65,32 +103,32 @@ fn reactive_analyzer_converts_run_to_economic_impact() {
 
 #[test]
 fn reactive_analyzer_high_cpu_time_gives_moderate_level() {
-    let run = StressTestRun::new(60000, 50000, 1024, 1, 1, None);
-    let impact = ReactiveAnalyzer::analyze(&run);
+    let run = StressTestRun::new(60000, available(50000), available(1024), 1, 1, None);
+    let impact = ReactiveAnalyzer::analyze(&run).available().unwrap();
     // 50s CPU = 1389 μ$ + 1 MB mem = 105 μ$ → total ≈ 1494 μ$ → moderate
     assert_eq!(impact.level(), "moderate");
 }
 
 #[test]
 fn reactive_analyzer_zero_cpu_time_gives_low_level() {
-    let run = StressTestRun::new(10, 0, 0, 1, 1, None);
-    let impact = ReactiveAnalyzer::analyze(&run);
+    let run = StressTestRun::new(10, available(0), available(0), 1, 1, None);
+    let impact = ReactiveAnalyzer::analyze(&run).available().unwrap();
     assert_eq!(impact.level(), "low");
 }
 
 #[test]
 fn reactive_analyzer_high_memory_gives_high_level() {
     // 500 MB memory → 500*1024*1024*0.0001 = 52428 μ$ → high
-    let run = StressTestRun::new(1000, 1000, 512_000, 1, 1, None);
-    let impact = ReactiveAnalyzer::analyze(&run);
+    let run = StressTestRun::new(1000, available(1000), available(512_000), 1, 1, None);
+    let impact = ReactiveAnalyzer::analyze(&run).available().unwrap();
     assert_eq!(impact.level(), "high");
 }
 
 #[test]
 fn reactive_analyzer_extreme_memory_gives_critical_level() {
     // 10 GB memory → 10*1024*1024*1024*0.0001 = 1_073_741 μ$ → critical
-    let run = StressTestRun::new(1000, 1000, 10_485_760, 1, 1, None);
-    let impact = ReactiveAnalyzer::analyze(&run);
+    let run = StressTestRun::new(1000, available(1000), available(10_485_760), 1, 1, None);
+    let impact = ReactiveAnalyzer::analyze(&run).available().unwrap();
     assert_eq!(impact.level(), "critical");
 }
 

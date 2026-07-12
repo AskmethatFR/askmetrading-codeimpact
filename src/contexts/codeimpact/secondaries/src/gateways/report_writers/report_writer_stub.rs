@@ -4,6 +4,7 @@ use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 
@@ -12,7 +13,7 @@ pub struct SharedReportWriterStub {
     pub last_metrics: Arc<Mutex<Option<CodeMetrics>>>,
     pub last_graph: Arc<Mutex<Option<FileConsumptionGraph>>>,
     pub last_stress_run: Arc<Mutex<Option<StressTestRun>>>,
-    pub last_stress_impact: Arc<Mutex<Option<EconomicImpact>>>,
+    pub last_stress_impact: Arc<Mutex<Option<Measurement<EconomicImpact>>>>,
     pub last_json: Arc<Mutex<Option<String>>>,
     pub last_html: Arc<Mutex<Option<String>>>,
 }
@@ -66,7 +67,7 @@ impl ReportWriter for SharedReportWriterStub {
     fn write_stress_test(
         &self,
         run: &StressTestRun,
-        impact: &EconomicImpact,
+        impact: &Measurement<EconomicImpact>,
     ) -> Result<(), AnalysisError> {
         *self.last_stress_run.lock().unwrap() = Some(run.clone());
         *self.last_stress_impact.lock().unwrap() = Some(impact.clone());
