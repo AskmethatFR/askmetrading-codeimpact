@@ -190,3 +190,69 @@ fn cargo_test_runner_with_sampler_available_reports_measured_cpu_and_memory() {
         result.memory_kb()
     );
 }
+
+fn write_package(dir: &std::path::Path, name: &str, lib_rs: &str) {
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "{}"
+version = "0.1.0"
+edition = "2021"
+"#,
+            name
+        ),
+    )
+    .expect("write Cargo.toml");
+    std::fs::write(src.join("lib.rs"), lib_rs).expect("write lib.rs");
+}
+
+// #36 retry N3 (P2, QA blocking) — `build_test_binary`'s `if
+// !output.status.success()` check is genuinely new logic: the pre-#36 code
+// never inspected the build's exit status at all. It ships realistic
+// coverage here: a workspace with ONE package that compiles fine (and
+// therefore DOES emit a valid `compiler-artifact` line with a real
+// `executable` path for its test binary) alongside a SIBLING package that
+// fails to compile. Cargo's overall exit status is still failure (101), but
+// stdout legitimately contains a usable test-binary path for the healthy
+// package. Without the exit-status check, `parse_test_binary_path` would
+// happily pick that path and `run_tests` would return `Ok(..)` with a
+// passing measurement for `good` — a bogus success hiding the real compile
+// error in `bad`. This is exactly the "silent success" / "bogus
+// measurement" scenario the check exists to prevent.
+#[test]
+fn cargo_test_runner_returns_error_when_a_workspace_member_fails_to_compile() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["good", "bad"]
+resolver = "2"
+"#,
+    )
+    .expect("write workspace Cargo.toml");
+
+    write_package(
+        &dir.path().join("good"),
+        "good",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\n#[test]\nfn test_add() { assert_eq!(add(2, 2), 4); }\n",
+    );
+    // Deliberately invalid Rust: unclosed delimiter.
+    write_package(
+        &dir.path().join("bad"),
+        "bad",
+        "pub fn broken(a: i32, b: i32 -> i32 { a + b }\n",
+    );
+
+    let runner = CargoTestRunner::new(dir.path().to_path_buf());
+    let result = runner.run_tests(None);
+
+    assert!(
+        result.is_err(),
+        "expected run_tests to fail when a workspace member has a compile \
+         error, even though a sibling member built a valid test binary; got {:?}",
+        result
+    );
+}
