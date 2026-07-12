@@ -768,6 +768,51 @@ mod tests {
         assert_eq!(output.stderr.len(), 200_000);
     }
 
+    // Test List (run_with_timeout_with_budget — a grandchild holding the
+    // pipe open must not hang the join, #39 follow-up / Security MEDIUM):
+    // killing only the direct child on timeout is not enough if a
+    // grandchild inherited the same stdout/stderr pipe and is still
+    // alive — its write end stays open, so the reader thread's read
+    // blocks forever waiting for an EOF that never comes. Since every
+    // exit path now unconditionally joins the reader threads, THIS
+    // exact scenario would hang the whole function forever without a
+    // process-group-wide kill. Bounded via a channel + recv_timeout so
+    // the test itself can never hang the suite even if the fix regresses.
+    // 1. a child that backgrounds a grandchild sharing its pipe, then
+    //    itself outlives the budget -> the call still returns (as an
+    //    Err, since the budget was exceeded) within a sane wall-clock
+    //    bound, not "never"
+
+    #[test]
+    fn run_with_timeout_with_budget_does_not_hang_when_a_grandchild_holds_the_pipe_open() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let script = write_executable_script(
+            dir.path(),
+            "grandchild_holds_pipe.sh",
+            "#!/bin/sh\n(sleep 30 &)\nsleep 30\n",
+        );
+
+        let mut cmd = Command::new(&script);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(1));
+            let _ = tx.send(result);
+        });
+
+        let result = rx.recv_timeout(Duration::from_secs(15)).expect(
+            "run_with_timeout_with_budget did not return within 15s — it is blocked joining \
+             a reader thread on a pipe a grandchild process still holds open",
+        );
+
+        assert!(
+            result.is_err(),
+            "expected the 1s budget to be exceeded and reported as an error"
+        );
+    }
+
     // Test List (parse_cpu_time — sum user + sys, never default to 0):
     // 1. macOS format: user + sys both present -> summed
     // 2. Linux format: user + sys both present -> summed
