@@ -130,6 +130,13 @@ fn type_last_segment(ty: &syn::Type) -> Option<String> {
     }
 }
 
+/// Whether a method-call receiver is the bare identifier `self` — not
+/// `self.field` or any other expression. Only this exact shape is eligible
+/// for `self`-call resolution (D2, #50).
+fn is_bare_self_receiver(receiver: &syn::Expr) -> bool {
+    matches!(receiver, syn::Expr::Path(path) if path.path.is_ident("self"))
+}
+
 /// Recursively walks top-level items — including `impl` blocks — collecting
 /// every function/method declaration as a [`PendingFn`], per the D1
 /// qualification scheme (ADR-0013 / #50). Name uniqueness is enforced by
@@ -392,7 +399,19 @@ impl FunctionVisitor {
                 }
             }
             syn::Expr::MethodCall(method_call) => {
-                self.record_call(method_call.method.to_string(), &method_call.method);
+                let method_name = method_call.method.to_string();
+                // Only a bare `self.m()` — receiver is exactly `self`, no
+                // field/deref in between — is resolved to the enclosing
+                // type's declaration. `self.field.m()` or `x.m()` stay bare:
+                // resolving those by short-name homonym would fabricate an
+                // edge to code that may never actually be called (D2, #50).
+                let name = match &self.enclosing_type {
+                    Some(qualifier) if is_bare_self_receiver(&method_call.receiver) => {
+                        format!("{}::{}", qualifier, method_name)
+                    }
+                    _ => method_name,
+                };
+                self.record_call(name, &method_call.method);
                 self.visit_expr(&method_call.receiver);
                 for arg in &method_call.args {
                     self.visit_expr(arg);
