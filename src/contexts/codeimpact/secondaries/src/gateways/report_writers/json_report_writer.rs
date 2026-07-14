@@ -11,6 +11,7 @@ use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
+use codeimpact_hexagon::analysis::UnmeasurableFile;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
 // ── Serde DTOs (ADR-4.2: never on hexagon types) ──
@@ -47,6 +48,21 @@ struct MetricsDto {
     warnings: Vec<WarningDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     io_in_loops: Vec<IoInLoopDto>,
+    /// Files that could not be measured — omitted when empty, consistent
+    /// with `warnings`/`io_in_loops` above; always empty for a single-file
+    /// report, which has no notion of other files (D3, #50).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unmeasurable_files: Vec<UnmeasurableFileDto>,
+    /// The count is never skipped — `0` is an honest, meaningful answer
+    /// ("no file failed"), unlike an omitted array which would leave the
+    /// count implicit.
+    unmeasurable_files_count: usize,
+}
+
+#[derive(serde::Serialize)]
+struct UnmeasurableFileDto {
+    path: String,
+    reason: String,
 }
 
 #[derive(serde::Serialize)]
@@ -262,6 +278,10 @@ pub fn serialize_metrics(
             ecological_impact: ecological,
             warnings,
             io_in_loops,
+            // A single file has no notion of other files failing to
+            // measure — that is a project-level concept (D3, #50).
+            unmeasurable_files: vec![],
+            unmeasurable_files_count: 0,
         },
     };
 
@@ -281,6 +301,15 @@ pub fn serialize_project_metrics(
 ) -> Result<String, AnalysisError> {
     let aggregated = graph.aggregated_metrics();
     let timestamp = format_timestamp();
+
+    let unmeasurable_files: Vec<UnmeasurableFileDto> = graph
+        .unmeasurable_files()
+        .iter()
+        .map(|f: &UnmeasurableFile| UnmeasurableFileDto {
+            path: f.path.to_string_lossy().to_string(),
+            reason: format!("{:?}", f.reason),
+        })
+        .collect();
 
     let output = JsonOutput {
         tool: ToolInfo {
@@ -307,6 +336,8 @@ pub fn serialize_project_metrics(
             ecological_impact: None,
             warnings: vec![],
             io_in_loops: vec![],
+            unmeasurable_files_count: unmeasurable_files.len(),
+            unmeasurable_files,
         },
     };
 
