@@ -226,20 +226,35 @@ fn kind_str(kind: NodeKind) -> &'static str {
     }
 }
 
+/// Ranks `CodeMetrics::complexity_level()`'s five states for the folder
+/// "worst descendant wins" aggregation (`max` in `aggregate()`). `"none"`
+/// ("nothing to measure" — zero functions) ranks LOWEST, not highest: a
+/// function-less file (trait declaration, re-export `mod.rs`, pure data
+/// type) carries no risk signal and must never outrank — let alone be
+/// silently promoted above — an actually-measured `"critical"` file (D3,
+/// #50 slice S4). The previous catch-all (`_ => 3`) mapped every unknown
+/// string, including the newly-introduced `"none"`, straight into the
+/// `"critical"` bucket — a function-less file would have rendered as the
+/// reddest possible tag. Explicit arms for all five known states so that
+/// trap cannot recur silently; `_` only guards a value `complexity_level()`
+/// is not documented to produce.
 fn level_rank(level: &str) -> u8 {
     match level {
-        "low" => 0,
-        "moderate" => 1,
-        "high" => 2,
-        _ => 3,
+        "none" => 0,
+        "low" => 1,
+        "moderate" => 2,
+        "high" => 3,
+        "critical" => 4,
+        _ => 4,
     }
 }
 
 fn level_name(rank: u8) -> &'static str {
     match rank {
-        0 => "low",
-        1 => "moderate",
-        2 => "high",
+        0 => "none",
+        1 => "low",
+        2 => "moderate",
+        3 => "high",
         _ => "critical",
     }
 }

@@ -99,6 +99,7 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
   letter-spacing: 0.02em; padding: 3px 10px; border-radius: calc(var(--radius-md) * 0.75);
 }
 .tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
+.lvl-none { background: var(--color-neutral-100); color: var(--color-neutral-800); }
 .lvl-low { background: var(--color-accent-100); color: var(--color-accent-800); }
 .lvl-moderate { background: var(--color-accent-200); color: var(--color-accent-800); }
 .lvl-high { background: var(--color-accent-700); color: #f2f2f3; }
@@ -246,7 +247,7 @@ pub const JS: &str = r#"
     return n;
   }
 
-  var LVL = { low: "lvl-low", moderate: "lvl-moderate", high: "lvl-high", critical: "lvl-critical" };
+  var LVL = { none: "lvl-none", low: "lvl-low", moderate: "lvl-moderate", high: "lvl-high", critical: "lvl-critical" };
   var SEV = { warning: "sev-warning", critical: "sev-critical" };
   var ENV = { A: "env-a", B: "env-b", C: "env-c", D: "env-d", E: "env-e", F: "env-f", G: "env-g" };
   function cls(map, key, fallback) {
