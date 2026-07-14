@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::{
-    CodeLocation, FunctionDetail,
-    CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass, FileConsumptionGraph,
-    FileDependency,
+    CodeLocation, CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass,
+    FileConsumptionGraph, FileDependency, FunctionDetail,
 };
 
 // ── Test List ──────────────────────────────────────────────────────────

@@ -57,9 +57,12 @@ impl CallGraph {
             .keys()
             .map(|name| {
                 let reachable = Self::reachable_from(name, &edges);
-                let hidden = reachable.iter().filter(|g| *g != name).fold(0u32, |acc, g| {
-                    acc.saturating_add(direct_complexity.get(g).copied().unwrap_or(0))
-                });
+                let hidden = reachable
+                    .iter()
+                    .filter(|g| *g != name)
+                    .fold(0u32, |acc, g| {
+                        acc.saturating_add(direct_complexity.get(g).copied().unwrap_or(0))
+                    });
                 (name.clone(), hidden)
             })
             .collect();
@@ -123,9 +126,9 @@ impl CallGraph {
 
     /// Sum of all transitive complexities.
     pub fn transitive_total(&self) -> u32 {
-        self.edges
-            .keys()
-            .fold(0u32, |acc, name| acc.saturating_add(self.transitive_of(name)))
+        self.edges.keys().fold(0u32, |acc, name| {
+            acc.saturating_add(self.transitive_of(name))
+        })
     }
 
     /// Returns list of functions in cycles.
@@ -238,7 +241,11 @@ impl CallGraph {
         visited
     }
 
-    fn dfs_reachable(name: &str, edges: &HashMap<String, Vec<String>>, visited: &mut HashSet<String>) {
+    fn dfs_reachable(
+        name: &str,
+        edges: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+    ) {
         if !visited.insert(name.to_string()) {
             return;
         }

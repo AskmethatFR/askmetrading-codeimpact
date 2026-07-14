@@ -262,10 +262,10 @@ fn diamond_graph_computes_correctly() {
     assert_eq!(graph.transitive_of("d"), 4); // leaf, unaffected
     assert_eq!(graph.transitive_of("b"), 6); // 2 + 4, single path, unaffected
     assert_eq!(graph.transitive_of("c"), 7); // 3 + 4, single path, unaffected
-                                              // reachable(a) \ {a} = {b, c, d} — `d` counted ONCE, not twice:
-                                              // 1 + (direct(b)=2 + direct(c)=3 + direct(d)=4) = 1 + 9 = 10.
-                                              // The OLD formula gave 14 (= 1 + transitive(b) + transitive(c),
-                                              // double-charging `d`'s complexity once per incoming path).
+                                             // reachable(a) \ {a} = {b, c, d} — `d` counted ONCE, not twice:
+                                             // 1 + (direct(b)=2 + direct(c)=3 + direct(d)=4) = 1 + 9 = 10.
+                                             // The OLD formula gave 14 (= 1 + transitive(b) + transitive(c),
+                                             // double-charging `d`'s complexity once per incoming path).
     assert_eq!(graph.transitive_of("a"), 10);
     assert_eq!(graph.max_call_depth(), 3);
 }
