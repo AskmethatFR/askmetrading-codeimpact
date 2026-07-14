@@ -669,3 +669,35 @@ fn inherent_impl_for_non_nameable_type_falls_back_to_bare_name() {
         functions
     );
 }
+
+// NON-BLOCKING (#50 QA retry 1) — is_bare_self_receiver only accepts
+// syn::Expr::Path("self"); `self.field.m()`'s receiver is an
+// syn::Expr::Field, not a bare path, so it stays unresolved by direct trace
+// of the code. But no test pinned it: mutating is_bare_self_receiver to
+// also accept a syn::Expr::Field with a `self` base kept the whole suite
+// green. Resolving self.field.m() would fabricate an edge to whatever
+// method happens to share that short name (D2 forbids exactly this).
+#[test]
+fn self_field_method_call_stays_bare_not_resolved_to_enclosing_type() {
+    let parser = SynCodeParser::new();
+    let source =
+        "struct S { inner: T } impl S { fn a(&self) { self.inner.m(); } fn m(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    let a = functions.iter().find(|f| f.name == "S::a").unwrap();
+    assert!(
+        a.calls.contains(&"m".to_string()),
+        "self.inner.m() must stay bare \"m\", got {:?}",
+        a.calls
+    );
+    assert!(
+        !a.calls.contains(&"S::m".to_string()),
+        "self.inner.m() must NOT be fabricated into S::m, got {:?}",
+        a.calls
+    );
+    let graph = CallGraph::build(&functions);
+    assert_eq!(
+        graph.hidden_of("S::a"),
+        0,
+        "no fabricated edge means no hidden complexity from S::m"
+    );
+}
