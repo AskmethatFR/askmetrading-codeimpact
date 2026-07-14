@@ -433,6 +433,16 @@ impl ReportWriter for ConsoleReportWriter {
         Ok(())
     }
 
+    fn write_project_json(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError> {
+        // ConsoleReportWriter uses the same DTOs as JsonReportWriter (ADR-4.4)
+        use super::json_report_writer;
+        json_report_writer::serialize_project_metrics(graph, target)
+    }
+
     fn write_stress_test(
         &self,
         run: &StressTestRun,

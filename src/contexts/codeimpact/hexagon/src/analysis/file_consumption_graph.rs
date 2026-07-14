@@ -134,11 +134,13 @@ impl FileConsumptionGraph {
     pub fn aggregated_metrics(&self) -> ProjectMetrics {
         let mut total_cc = 0u32;
         let mut total_tc = 0u32;
+        let mut total_hidden = 0u32;
         let mut max_call_depth = 0usize;
 
         for metrics in self.per_file_metrics.values() {
             total_cc = total_cc.saturating_add(metrics.cyclomatic_complexity());
             total_tc = total_tc.saturating_add(metrics.transitive_complexity());
+            total_hidden = total_hidden.saturating_add(metrics.hidden_complexity());
             max_call_depth = max_call_depth.max(metrics.max_call_depth());
         }
 
@@ -161,6 +163,7 @@ impl FileConsumptionGraph {
             total_files: self.files.len(),
             total_cyclomatic_complexity: total_cc,
             total_transitive_complexity: total_tc,
+            total_hidden_complexity: total_hidden,
             max_call_depth,
             files_with_cycles,
             total_economic_impact,
@@ -318,6 +321,10 @@ pub struct ProjectMetrics {
     pub total_files: usize,
     pub total_cyclomatic_complexity: u32,
     pub total_transitive_complexity: u32,
+    /// Sum of each file's `CodeMetrics::hidden_complexity()` (itself the sum
+    /// of its functions' per-function hidden complexity) — additive at the
+    /// atom, never `max(0, ΣT - ΣC)` nor `Σ max(0, Tᵢ - Cᵢ)` (ADR-0012).
+    pub total_hidden_complexity: u32,
     pub max_call_depth: usize,
     pub files_with_cycles: Vec<PathBuf>,
     pub total_economic_impact: Option<EconomicImpact>,

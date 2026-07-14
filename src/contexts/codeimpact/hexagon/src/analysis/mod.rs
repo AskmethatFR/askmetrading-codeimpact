@@ -24,7 +24,7 @@ pub use analysis_rule::AnalysisRule;
 pub use analysis_target::{AnalysisTarget, TargetType};
 pub use call_graph::CallGraph;
 pub use code_location::CodeLocation;
-pub use code_metrics::{CodeMetrics, FunctionDetail};
+pub use code_metrics::{complexity_level_for, CodeMetrics, FunctionDetail};
 pub use code_parser::{CodeParser, LoopCall, ParsedFunction};
 pub use code_reader::CodeReader;
 pub use complexity_detector::{

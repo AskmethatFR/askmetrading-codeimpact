@@ -64,6 +64,21 @@ impl ReportWriter for SharedReportWriterStub {
         Ok(())
     }
 
+    fn write_project_json(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError> {
+        *self.last_graph.lock().unwrap() = Some(graph.clone());
+        let aggregated = graph.aggregated_metrics();
+        let json = format!(
+            r#"{{"tool":{{"name":"codeimpact","version":"0.1.0"}},"timestamp":"2026-07-11T15:30:00Z","target":"{}","target_type":"project","metrics":{{"cyclomatic_complexity":{}}}}}"#,
+            target, aggregated.total_cyclomatic_complexity
+        );
+        *self.last_json.lock().unwrap() = Some(json.clone());
+        Ok(json)
+    }
+
     fn write_stress_test(
         &self,
         run: &StressTestRun,

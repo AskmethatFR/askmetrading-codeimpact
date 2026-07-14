@@ -14,6 +14,36 @@ pub struct FunctionDetail {
     pub in_cycle: bool,
 }
 
+impl FunctionDetail {
+    /// Complexity hidden in this function's calls: transitive - direct.
+    ///
+    /// `transitive >= direct` holds by construction (`CallGraph::compute_transitive`
+    /// sums non-negative `u32` contributions), so this is measured at the
+    /// atom and never re-derived by subtracting two aggregates (ADR-0012).
+    pub fn hidden(&self) -> u32 {
+        debug_assert!(
+            self.transitive >= self.direct,
+            "call-graph invariant broken: transitive({}) < direct({}) for {}",
+            self.transitive,
+            self.direct,
+            self.name
+        );
+        self.transitive.saturating_sub(self.direct)
+    }
+}
+
+/// Complexity level thresholds, shared by `CodeMetrics::complexity_level()`
+/// and the project-level JSON writer (`ProjectMetrics` carries no
+/// `CodeMetrics` of its own, so it cannot call the method — see ADR-0012).
+pub fn complexity_level_for(cyclomatic_complexity: u32) -> &'static str {
+    match cyclomatic_complexity {
+        0..=10 => "low",
+        11..=20 => "moderate",
+        21..=40 => "high",
+        _ => "critical",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodeMetrics {
     cyclomatic_complexity: u32,
@@ -82,19 +112,27 @@ impl CodeMetrics {
         &self.function_details
     }
 
-    /// Hidden complexity = transitive - direct (complexity hidden in calls).
+    /// Hidden complexity = the SUM of each measured function's hidden
+    /// complexity (`FunctionDetail::hidden()`), never a subtraction of the
+    /// two file-level aggregates.
+    ///
+    /// `cyclomatic_complexity` counts a `+1` per FILE (`1 + Σ decision_points`)
+    /// while `transitive_complexity` carries no such `+1` — they are not the
+    /// same unit, so `transitive_complexity - cyclomatic_complexity` silently
+    /// fabricates (or, worse, `saturating_sub`s away) a wrong number. Measuring
+    /// at the function (where `transitive >= direct` holds by construction)
+    /// and summing is the only formula that is correct by construction
+    /// (ADR-0012).
+    ///
+    /// A `CodeMetrics` with no `function_details` (nothing was ever measured
+    /// at the function level) reports `0`, never a fabricated non-zero value
+    /// derived from the file-level aggregates (ADR-0010).
     pub fn hidden_complexity(&self) -> u32 {
-        self.transitive_complexity
-            .saturating_sub(self.cyclomatic_complexity)
+        self.function_details.iter().map(FunctionDetail::hidden).sum()
     }
 
     pub fn complexity_level(&self) -> &'static str {
-        match self.cyclomatic_complexity {
-            0..=10 => "low",
-            11..=20 => "moderate",
-            21..=40 => "high",
-            _ => "critical",
-        }
+        complexity_level_for(self.cyclomatic_complexity)
     }
 
     pub fn warnings(&self) -> &[ComplexityWarning] {

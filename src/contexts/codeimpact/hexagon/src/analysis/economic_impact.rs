@@ -145,7 +145,7 @@ impl EconomicImpactEstimator {
 mod tests {
     use super::super::call_graph::CallGraph;
     use super::super::code_location::CodeLocation;
-    use super::super::code_metrics::CodeMetrics;
+    use super::super::code_metrics::{CodeMetrics, FunctionDetail};
     use super::super::code_parser::ParsedFunction;
     use super::*;
 
@@ -265,7 +265,25 @@ mod tests {
     #[test]
     fn estimate_hidden_complexity() {
         // direct=5, transitive=20 → hidden=15 → 15*200 = 3000
-        let metrics = CodeMetrics::with_call_graph(5, 20, 1, vec![], vec![]);
+        // hidden_complexity() is the sum of per-function hidden (#46/#49,
+        // ADR-0012), so the fixture carries the one function it represents
+        // (main: direct=5, transitive=20) instead of an empty
+        // function_details that would now — correctly, per ADR-0010 — report
+        // hidden=0 for data nobody measured.
+        let metrics = CodeMetrics::with_call_graph(
+            5,
+            20,
+            1,
+            vec![],
+            vec![FunctionDetail {
+                name: "main".to_string(),
+                location: CodeLocation::new(String::new(), 1, 1),
+                direct: 5,
+                transitive: 20,
+                call_depth: 1,
+                in_cycle: false,
+            }],
+        );
         let fns = vec![make_fn("main", 5, false, vec![])];
         let graph = CallGraph::build(&fns);
         let impact = EconomicImpactEstimator::estimate(&metrics, &fns, &graph);

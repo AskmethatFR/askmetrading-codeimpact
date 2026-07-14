@@ -94,6 +94,16 @@ impl ReportWriter for HtmlReportWriter {
         ))
     }
 
+    fn write_project_json(
+        &self,
+        _graph: &FileConsumptionGraph,
+        _target: &str,
+    ) -> Result<String, AnalysisError> {
+        Err(AnalysisError::AnalysisFailed(
+            "html writer does not support json output".into(),
+        ))
+    }
+
     fn write_stress_test(
         &self,
         _run: &StressTestRun,
