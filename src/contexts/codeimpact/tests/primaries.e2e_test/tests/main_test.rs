@@ -605,8 +605,8 @@ fn e2e_analyze_json_format_with_output_writes_file() {
         stdout
     );
 
-    let content = std::fs::read_to_string(&output_path)
-        .expect("json output file should have been created");
+    let content =
+        std::fs::read_to_string(&output_path).expect("json output file should have been created");
     let _ = std::fs::remove_file(&output_path);
 
     let json: serde_json::Value =
