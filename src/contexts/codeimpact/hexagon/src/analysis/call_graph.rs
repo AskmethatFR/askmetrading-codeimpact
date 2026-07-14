@@ -4,13 +4,27 @@ use super::code_parser::ParsedFunction;
 
 /// Builds and queries a call graph from parsed functions.
 ///
-/// Computes transitive complexity (direct + sum of callees' transitive).
-/// Detects call cycles to prevent infinite recursion.
+/// `transitive(f)` is a comprehension metric, not an execution-cost metric:
+/// it is `direct(f)` plus the direct complexity of every OTHER function
+/// reachable from `f`, each counted exactly ONCE regardless of how many call
+/// paths reach it (#46/#49 arbitration §1). Reading a function twice — a
+/// call in a loop, a diamond, two branches calling the same callee — is not
+/// twice the work for a human reading the code, so a comprehension metric
+/// counts the reachable SET, not the multiset of paths.
+///
+/// This bounds `transitive(f)` by the file's total direct complexity by
+/// construction: it can never exceed `Σ direct(g)` over all functions, so it
+/// can never overflow `u32` on any real file (Security HIGH-2 — the old
+/// sum-over-paths formula grew as 2^levels and overflowed well below that).
+///
+/// Detects call cycles: an SCC's members are mutually reachable, so they are
+/// naturally counted as each other's dependents (the `visited` set below
+/// terminates the DFS on a cycle without any special-casing).
 #[derive(Clone, Debug)]
 pub struct CallGraph {
     edges: HashMap<String, Vec<String>>,
     direct_complexity: HashMap<String, u32>,
-    transitive_complexity: HashMap<String, u32>,
+    hidden_complexity: HashMap<String, u32>,
     cycle_nodes: HashSet<String>,
     max_depth: usize,
 }
@@ -38,18 +52,17 @@ impl CallGraph {
         }
 
         let cycle_nodes = Self::detect_cycles(&edges);
-        let mut transitive_complexity: HashMap<String, u32> = HashMap::new();
 
-        for name in edges.keys() {
-            let tc = Self::compute_transitive(
-                name,
-                &edges,
-                &direct_complexity,
-                &cycle_nodes,
-                &mut transitive_complexity,
-            );
-            transitive_complexity.insert(name.clone(), tc);
-        }
+        let hidden_complexity: HashMap<String, u32> = edges
+            .keys()
+            .map(|name| {
+                let reachable = Self::reachable_from(name, &edges);
+                let hidden = reachable.iter().filter(|g| *g != name).fold(0u32, |acc, g| {
+                    acc.saturating_add(direct_complexity.get(g).copied().unwrap_or(0))
+                });
+                (name.clone(), hidden)
+            })
+            .collect();
 
         let max_depth = if edges.is_empty() {
             0
@@ -66,7 +79,7 @@ impl CallGraph {
         Self {
             edges,
             direct_complexity,
-            transitive_complexity,
+            hidden_complexity,
             cycle_nodes,
             max_depth,
         }
@@ -77,9 +90,16 @@ impl CallGraph {
         self.direct_complexity.get(name).copied().unwrap_or(0)
     }
 
-    /// Returns the transitive complexity of a function (direct + callees).
+    /// Returns the hidden complexity of a function: the direct complexity of
+    /// every OTHER function reachable from it, each counted once.
+    pub fn hidden_of(&self, name: &str) -> u32 {
+        self.hidden_complexity.get(name).copied().unwrap_or(0)
+    }
+
+    /// Returns the transitive complexity of a function: direct + hidden,
+    /// derived (never stored), so it is bounded by construction.
     pub fn transitive_of(&self, name: &str) -> u32 {
-        self.transitive_complexity.get(name).copied().unwrap_or(0)
+        self.direct_of(name).saturating_add(self.hidden_of(name))
     }
 
     /// Whether the function is part of a call cycle.
@@ -103,7 +123,9 @@ impl CallGraph {
 
     /// Sum of all transitive complexities.
     pub fn transitive_total(&self) -> u32 {
-        self.transitive_complexity.values().sum()
+        self.edges
+            .keys()
+            .fold(0u32, |acc, name| acc.saturating_add(self.transitive_of(name)))
     }
 
     /// Returns list of functions in cycles.
@@ -204,43 +226,27 @@ impl CallGraph {
         }
     }
 
-    fn compute_transitive(
-        name: &str,
-        edges: &HashMap<String, Vec<String>>,
-        direct: &HashMap<String, u32>,
-        cycle_nodes: &HashSet<String>,
-        cache: &mut HashMap<String, u32>,
-    ) -> u32 {
-        if let Some(&cached) = cache.get(name) {
-            return cached;
+    /// The set of functions reachable from `name` via zero or more calls,
+    /// INCLUDING `name` itself. A plain DFS with a `visited` set: it
+    /// terminates naturally on a cycle (a back-edge revisits an already-
+    /// visited node and stops), and it counts each reachable function
+    /// exactly once regardless of how many distinct paths reach it — the
+    /// property that makes `hidden_of` bounded by construction.
+    fn reachable_from(name: &str, edges: &HashMap<String, Vec<String>>) -> HashSet<String> {
+        let mut visited = HashSet::new();
+        Self::dfs_reachable(name, edges, &mut visited);
+        visited
+    }
+
+    fn dfs_reachable(name: &str, edges: &HashMap<String, Vec<String>>, visited: &mut HashSet<String>) {
+        if !visited.insert(name.to_string()) {
+            return;
         }
-
-        let direct_val = direct.get(name).copied().unwrap_or(0);
-
-        // If in cycle, transitive = direct + non-cycle callees only
-        if cycle_nodes.contains(name) {
-            let mut total = direct_val;
-            if let Some(callees) = edges.get(name) {
-                for callee in callees {
-                    if !cycle_nodes.contains(callee.as_str()) {
-                        total +=
-                            Self::compute_transitive(callee, edges, direct, cycle_nodes, cache);
-                    }
-                }
-            }
-            cache.insert(name.to_string(), total);
-            return total;
-        }
-
-        let mut total = direct_val;
         if let Some(callees) = edges.get(name) {
             for callee in callees {
-                total += Self::compute_transitive(callee, edges, direct, cycle_nodes, cache);
+                Self::dfs_reachable(callee, edges, visited);
             }
         }
-
-        cache.insert(name.to_string(), total);
-        total
     }
 
     fn compute_depth(
