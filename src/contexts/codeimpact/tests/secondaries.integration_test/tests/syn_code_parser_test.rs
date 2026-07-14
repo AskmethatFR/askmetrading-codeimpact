@@ -413,3 +413,13 @@ fn inline_mod_impl_method_is_qualified_by_mod_and_type_path() {
     assert_eq!(functions.len(), 1);
     assert_eq!(functions[0].name, "inner::S::m");
 }
+
+#[test]
+fn duplicate_qualified_names_are_suffixed_not_clobbered() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl S { fn f() { } } impl Default for S { fn f() { } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 2);
+    let names: Vec<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["S::f", "S::f#2"]);
+}
