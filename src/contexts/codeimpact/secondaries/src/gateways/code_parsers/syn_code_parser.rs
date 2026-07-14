@@ -20,6 +20,7 @@ impl CodeParser for SynCodeParser {
 
         let mut pending = Vec::new();
         collect_functions(&syntax_tree.items, "", &mut pending);
+        dedupe_names(&mut pending);
 
         let mut functions = Vec::new();
         for pf in pending {
@@ -184,6 +185,23 @@ fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec
                 let new_prefix = format!("{}{}::", mod_prefix, item_mod.ident);
                 collect_functions(sub_items, &new_prefix, out);
             }
+        }
+    }
+}
+
+/// Enforces uniqueness of qualified names in source-collection order: the
+/// first declaration keeps its bare name, every later collision is
+/// suffixed `#2`, `#3`, … A duplicate that clobbered another (e.g. an
+/// inherent `S::f` and a trait-impl `S::f`) would otherwise be dropped by
+/// `CallGraph::build`'s `edges.insert(f.name, …)` — losing a whole
+/// function's complexity and edges (D1, #50).
+fn dedupe_names(pending: &mut [PendingFn]) {
+    let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for pf in pending.iter_mut() {
+        let count = seen.entry(pf.name.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            pf.name = format!("{}#{}", pf.name, count);
         }
     }
 }
