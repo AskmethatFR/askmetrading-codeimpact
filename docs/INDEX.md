@@ -25,11 +25,12 @@
 | ADR-0010 | technical | Honnêteté de la mesure — `Unmeasurable` plutôt que `0` | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0004]], [[ADR-0006]], [[economic-impact-estimator]] | docs/ADR-0010-measurement-honesty.md |
 | ADR-0011 | technical | Stress test — portée workspace, agrégation, 0-test honnête | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0010]], [[ADR-0006]], [[ADR-0009]] | docs/ADR-0011-stress-test-workspace-scope.md |
 | ADR-0012 | technical | `hidden_complexity` — mesurée à l'atome, jamais dérivée d'agrégats | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0007]], [[glossary]], [[json-report-schema]], [[console-report-enriched]] | docs/ADR-0012-hidden-complexity-single-source.md |
-| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]] | docs/glossary.md |
+| ADR-0013 | technical | Contrat parser ↔ hexagone — le domaine nomme le concept, l'adaptateur nomme la syntaxe | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0012]], [[ADR-0001]], [[glossary]] | docs/ADR-0013-parser-hexagon-loop-call-contract.md |
+| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]] | docs/glossary.md |
 
 ## Graph Health
 
-- **Total nodes:** 18
+- **Total nodes:** 19
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅
