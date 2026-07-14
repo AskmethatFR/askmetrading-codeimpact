@@ -230,9 +230,9 @@ fn io_call_in_loop_is_tracked() {
         "fn test() {\n    for _ in 0..10 {\n        std::fs::read_to_string(\"f\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    let (call_name, line, _col) = &functions[0].calls_in_loops[0];
-    assert_eq!(call_name, "std::fs::read_to_string");
-    assert_eq!(*line, 3);
+    let call = &functions[0].calls_in_loops[0];
+    assert_eq!(call.name, "std::fs::read_to_string");
+    assert_eq!(call.line, 3);
 }
 
 #[test]
@@ -263,9 +263,9 @@ fn multiple_io_calls_in_loop_all_tracked() {
     let source = "fn test() {\n    for _ in 0..10 {\n        std::fs::read(\"a\");\n        std::net::TcpStream::connect(\"b\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 2);
-    assert_eq!(functions[0].calls_in_loops[0].0, "std::fs::read");
+    assert_eq!(functions[0].calls_in_loops[0].name, "std::fs::read");
     assert_eq!(
-        functions[0].calls_in_loops[1].0,
+        functions[0].calls_in_loops[1].name,
         "std::net::TcpStream::connect"
     );
 }
@@ -278,7 +278,7 @@ fn tokio_fs_call_in_loop_tracked() {
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     assert_eq!(
-        functions[0].calls_in_loops[0].0,
+        functions[0].calls_in_loops[0].name,
         "tokio::fs::read_to_string"
     );
 }
@@ -289,5 +289,54 @@ fn reqwest_call_in_loop_tracked() {
     let source = "fn test() {\n    for _ in 0..10 {\n        reqwest::get(\"url\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert_eq!(functions[0].calls_in_loops[0].0, "reqwest::get");
+    assert_eq!(functions[0].calls_in_loops[0].name, "reqwest::get");
+}
+
+// #47 retry 2 — calls_in_loops must record EVERY call nested in a loop as a
+// fact (is_io classifies, it does not filter), not just I/O calls. Two gaps
+// in the prior behavior:
+//   (a) a plain, non-I/O `Expr::Call` was silently dropped (gated on
+//       is_io_call before being pushed at all) — this is the actual root
+//       cause of #47: QuadraticLoop reads calls_in_loops and could never see
+//       a nested call to a plain, non-I/O helper function.
+//   (b) `Expr::MethodCall` never touched calls_in_loops at all, regardless
+//       of loop nesting or is_io — most intra-type calls in Rust are method
+//       calls.
+// Test List:
+// 1. non_io_plain_call_in_loop_is_tracked_with_is_io_false — (a) above
+// 2. method_call_in_loop_is_tracked_with_is_io_false — (b) above
+// 3. non_io_call_after_loop_is_not_tracked — sequential (non-nested) call
+//    stays absent regardless of is_io (regression pin, already true today)
+
+#[test]
+fn non_io_plain_call_in_loop_is_tracked_with_is_io_false() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 {\n        validate();\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    let call = &functions[0].calls_in_loops[0];
+    assert_eq!(call.name, "validate");
+    assert!(!call.is_io);
+}
+
+#[test]
+fn method_call_in_loop_is_tracked_with_is_io_false() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for x in &xs {\n        x.helper();\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    let call = &functions[0].calls_in_loops[0];
+    assert_eq!(call.name, "helper");
+    assert!(!call.is_io);
+}
+
+#[test]
+fn non_io_call_after_loop_is_not_tracked() {
+    let parser = SynCodeParser::new();
+    let source = "fn test() {\n    for _ in 0..10 { }\n    validate();\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert!(
+        functions[0].calls_in_loops.is_empty(),
+        "a sequential call after the loop must not be recorded"
+    );
 }

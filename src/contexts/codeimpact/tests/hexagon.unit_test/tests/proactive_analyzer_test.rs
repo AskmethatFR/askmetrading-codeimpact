@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::proactive_analyzer;
 use codeimpact_hexagon::analysis::AnalysisRule;
+use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_secondaries::gateways::code_parsers::code_parser_stub::CodeParserStub;
 
@@ -293,7 +294,12 @@ fn io_in_loops_rule_detects_io_in_loops() {
         decision_points: 0,
         depth: 0,
         match_arms: 0,
-        calls_in_loops: vec![("std::fs::read".to_string(), 5, 9)],
+        calls_in_loops: vec![LoopCall {
+            name: "std::fs::read".to_string(),
+            line: 5,
+            col: 9,
+            is_io: true,
+        }],
     }]);
     let metrics = proactive_analyzer::analyze(
         "fn read_file() { for _ in 0..10 { std::fs::read(\"file\"); } }",
@@ -319,7 +325,12 @@ fn io_in_loops_rule_not_in_rules_returns_empty() {
         decision_points: 0,
         depth: 0,
         match_arms: 0,
-        calls_in_loops: vec![("std::fs::read".to_string(), 5, 9)],
+        calls_in_loops: vec![LoopCall {
+            name: "std::fs::read".to_string(),
+            line: 5,
+            col: 9,
+            is_io: true,
+        }],
     }]);
     let metrics = proactive_analyzer::analyze(
         "fn read_file() { for _ in 0..10 { std::fs::read(\"file\"); } }",
