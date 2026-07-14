@@ -261,18 +261,38 @@ fn write_html_zero_complexity_file_has_zero_score_pct_no_panic() {
     );
 }
 
-// ── US7 T2 slice S1: Industry banner + 8-tile aggregated stat grid ──
+// ── #46/#49 T2: build_stats() is a pure render — 9-tile aggregated stat
+// grid, everything sourced from ProjectMetrics (zero local calculation) ──
 //
-// Test List (S1):
-// 1. exactly 8 stat tiles are emitted, Direct Σ is the SUM of files' cyclomatic
-//    complexity (a max/first-file bug must fail this)
-// 2. the Warnings tile counts warnings + io together; critical sub sums
-//    critical-severity warnings AND io-in-loop count
-// 3. the Est. cost tile shows "—" (never "$0", never a panic) when no file
-//    carries an economic impact
+// Test List (T2):
+// 1. exactly 9 stat tiles are emitted, Direct Σ is the SUM of files'
+//    cyclomatic complexity (a max/first-file bug must fail this)
+// 2. the Warnings tile counts ComplexityWarning ONLY — critical sub counts
+//    critical-severity warnings ONLY. IoInLoopWarning has no severity (it
+//    is not a "critical warning" by ubiquitous language) and must never be
+//    folded into either count.
+// 3. I/O in loops gets its OWN tile, separate from Warnings.
+// 4. the Est. cost tile shows "—" (never "$0", never a panic) when no file
+//    carries an economic impact.
+// 5. every_stat_tile_matches_the_tree_root — the structural guard: no tile
+//    may report a number that diverges from the root node detail it
+//    summarizes (the #46/#49 anti-recidive guard).
+
+fn extract_data_island(html: &str) -> serde_json::Value {
+    let start_marker = r#"<script id="ci-data" type="application/json">"#;
+    let start = html
+        .find(start_marker)
+        .expect("data island should be present")
+        + start_marker.len();
+    let end = html[start..]
+        .find("</script>")
+        .expect("data island should be closed")
+        + start;
+    serde_json::from_str(&html[start..end]).expect("data island should be valid JSON")
+}
 
 #[test]
-fn stat_grid_has_eight_tiles_with_aggregated_values() {
+fn stat_grid_has_nine_tiles_with_aggregated_values() {
     let writer = HtmlReportWriter::new();
     let graph = graph_from(vec![
         ("a.rs", make_metrics(5, 8)),
@@ -287,8 +307,8 @@ fn stat_grid_has_eight_tiles_with_aggregated_values() {
     // instead — that field only exists on StatVm.
     assert_eq!(
         html.matches("\"sub\":").count(),
-        8,
-        "expected exactly 8 stat tiles: {}",
+        9,
+        "expected exactly 9 stat tiles (Warnings and I/O in loops are now separate): {}",
         html
     );
     assert!(
@@ -299,10 +319,13 @@ fn stat_grid_has_eight_tiles_with_aggregated_values() {
 }
 
 #[test]
-fn stat_grid_counts_critical_warnings_and_io_together() {
+fn stat_grid_warnings_tile_counts_warnings_only_io_excluded() {
     let writer = HtmlReportWriter::new();
     let file_metrics = make_metrics(5, 5)
-        .with_warnings(vec![warning_in("f", WarningSeverity::Critical)])
+        .with_warnings(vec![
+            warning_in("f", WarningSeverity::Critical),
+            warning_in("f", WarningSeverity::Warning),
+        ])
         .with_io_in_loops(vec![io_in("f")]);
     let graph = graph_from(vec![("a.rs", file_metrics)]);
 
@@ -311,9 +334,105 @@ fn stat_grid_counts_critical_warnings_and_io_together() {
         .expect("write_html should succeed");
 
     assert!(
-        html.contains("\"label\":\"Warnings\",\"value\":\"2\",\"sub\":\"2 critical\""),
-        "1 critical warning + 1 io-in-loop must total 2 warnings and 2 critical: {}",
+        html.contains("\"label\":\"Warnings\",\"value\":\"2\",\"sub\":\"1 critical\""),
+        "Warnings must count the 2 ComplexityWarning only (1 critical); \
+         IoInLoopWarning has no severity and must never inflate either count: {}",
         html
+    );
+}
+
+#[test]
+fn stat_grid_io_tile_counts_io_in_loops() {
+    let writer = HtmlReportWriter::new();
+    let file_metrics = make_metrics(5, 5).with_io_in_loops(vec![io_in("f"), io_in("g")]);
+    let graph = graph_from(vec![("a.rs", file_metrics)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("\"label\":\"I/O in loops\",\"value\":\"2\",\"sub\":\"in loops\""),
+        "I/O in loops must have its own tile, separate from Warnings: {}",
+        html
+    );
+}
+
+#[test]
+fn every_stat_tile_matches_the_tree_root() {
+    let writer = HtmlReportWriter::new();
+    let a = make_metrics(5, 9).with_warnings(vec![warning_in("f", WarningSeverity::Critical)]);
+    let b = make_metrics(3, 4);
+    let graph = graph_from(vec![("a.rs", a), ("b.rs", b)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+
+    let stats = data["stats"].as_array().expect("stats array");
+    let root = data["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .find(|n| n["id"] == "")
+        .expect("root node with id \"\"");
+
+    let root_metric = |label: &str| -> String {
+        root["metrics"]
+            .as_array()
+            .expect("root metrics array")
+            .iter()
+            .find(|m| m["label"] == label)
+            .unwrap_or_else(|| panic!("root metric '{}' not found", label))["value"]
+            .as_str()
+            .expect("metric value is a string")
+            .to_string()
+    };
+    let stat_value = |label: &str| -> String {
+        stats
+            .iter()
+            .find(|s| s["label"] == label)
+            .unwrap_or_else(|| panic!("stat tile '{}' not found", label))["value"]
+            .as_str()
+            .expect("stat value is a string")
+            .to_string()
+    };
+    let stat_sub = |label: &str| -> String {
+        stats
+            .iter()
+            .find(|s| s["label"] == label)
+            .unwrap_or_else(|| panic!("stat tile '{}' not found", label))["sub"]
+            .as_str()
+            .expect("stat sub is a string")
+            .to_string()
+    };
+
+    assert_eq!(
+        stat_value("Direct \u{3a3}"),
+        root_metric("Direct complexity"),
+        "Direct \u{3a3} tile must match the root node detail"
+    );
+    assert_eq!(
+        stat_value("Transitive \u{3a3}"),
+        root_metric("Transitive complexity"),
+        "Transitive \u{3a3} tile must match the root node detail"
+    );
+    assert_eq!(
+        stat_value("Max depth"),
+        root_metric("Max call depth"),
+        "Max depth tile must match the root node detail"
+    );
+
+    let hidden_from_sub = stat_sub("Transitive \u{3a3}")
+        .split(' ')
+        .next()
+        .expect("sub is \"{n} hidden\"")
+        .to_string();
+    assert_eq!(
+        hidden_from_sub,
+        root_metric("Hidden complexity"),
+        "the \"N hidden\" sub must match the root node's Hidden complexity detail"
     );
 }
 
