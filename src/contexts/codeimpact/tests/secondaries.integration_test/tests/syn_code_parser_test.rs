@@ -445,3 +445,16 @@ fn nested_fn_stays_folded_into_parent() {
     assert_eq!(functions[0].name, "outer");
     assert_eq!(functions[0].decision_points, 1);
 }
+
+#[test]
+fn self_method_call_resolves_to_qualified_callee() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl S { fn a(&self) { self.b(); } fn b(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    let a = functions.iter().find(|f| f.name == "S::a").unwrap();
+    assert!(
+        a.calls.contains(&"S::b".to_string()),
+        "self.b() must resolve to S::b, got {:?}",
+        a.calls
+    );
+}
