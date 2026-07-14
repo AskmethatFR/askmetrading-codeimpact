@@ -484,8 +484,7 @@ fn self_colon_colon_method_call_resolves_to_qualified_callee() {
 #[test]
 fn mutual_self_recursion_is_detected_as_a_cycle() {
     let parser = SynCodeParser::new();
-    let source =
-        "struct S; impl S { fn a(&self) { self.b(); } fn b(&self) { self.a(); } }";
+    let source = "struct S; impl S { fn a(&self) { self.b(); } fn b(&self) { self.a(); } }";
     let functions = parser.parse(source).unwrap();
     let graph = CallGraph::build(&functions);
     assert!(graph.has_cycle("S::a"), "S::a must be reported in_cycle");
@@ -495,7 +494,8 @@ fn mutual_self_recursion_is_detected_as_a_cycle() {
 #[test]
 fn non_self_receiver_method_call_stays_bare() {
     let parser = SynCodeParser::new();
-    let source = "struct S; impl S { fn a(&self, v: Vec<u8>) { v.len(); } fn len(&self) { if x { } } }";
+    let source =
+        "struct S; impl S { fn a(&self, v: Vec<u8>) { v.len(); } fn len(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
     let a = functions.iter().find(|f| f.name == "S::a").unwrap();
     assert!(
@@ -525,8 +525,7 @@ fn quadratic_loop_detected_through_resolved_self_call() {
     }";
     let functions = parser.parse(source).unwrap();
     let graph = CallGraph::build(&functions);
-    let warnings =
-        ComplexityDetector::detect(&functions, &graph, &DetectionConfig::default());
+    let warnings = ComplexityDetector::detect(&functions, &graph, &DetectionConfig::default());
     let quadratic: Vec<_> = warnings
         .iter()
         .filter(|w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "S::a")

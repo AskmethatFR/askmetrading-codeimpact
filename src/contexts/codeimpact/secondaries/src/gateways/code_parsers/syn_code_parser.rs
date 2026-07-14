@@ -118,11 +118,7 @@ struct PendingFn<'a> {
 /// through `&Type` / `(Type)` so `impl Trait for &Type` still yields `Type`.
 fn type_last_segment(ty: &syn::Type) -> Option<String> {
     match ty {
-        syn::Type::Path(type_path) => type_path
-            .path
-            .segments
-            .last()
-            .map(|s| s.ident.to_string()),
+        syn::Type::Path(type_path) => type_path.path.segments.last().map(|s| s.ident.to_string()),
         syn::Type::Reference(reference) => type_last_segment(&reference.elem),
         syn::Type::Paren(paren) => type_last_segment(&paren.elem),
         syn::Type::Group(group) => type_last_segment(&group.elem),
