@@ -7,6 +7,7 @@ use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::TargetType;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::code_parsers::code_parser_stub::CodeParserStub;
 use codeimpact_secondaries::gateways::code_readers::code_reader_stub::CodeReaderStub;
 use codeimpact_secondaries::gateways::report_writers::report_writer_stub::SharedReportWriterStub;
@@ -295,4 +296,99 @@ fn handle_project_continues_on_deps_parse_error() {
             .contains_key(&PathBuf::from("src/main.rs")),
         "main.rs should have metrics despite deps parse failure"
     );
+}
+
+// D3 (#50 slice S4) — handle_project used to silently DROP a file that
+// failed to read or parse (eprintln! then nothing), undercounting
+// total_files and hiding the failure from the report entirely (the exact
+// ADR-0010 lie, one layer up: 0 files reported wrong is no better than 0
+// cost reported wrong). It must now record an UnmeasurableFile instead.
+
+#[test]
+fn handle_project_records_unreadable_file_as_unmeasurable() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_rust_file(PathBuf::from("src/good.rs"));
+    reader.add_rust_file(PathBuf::from("src/bad.rs")); // no source configured — read_source fails
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![],
+    }]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+    );
+    assert!(result.is_ok());
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph.as_ref().expect("write_project_report should have been called");
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/bad.rs"));
+    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceUnreadable);
+    assert_eq!(
+        graph.aggregated_metrics().unmeasurable_files,
+        1,
+        "aggregated_metrics must count it too"
+    );
+}
+
+#[test]
+fn handle_project_records_unparseable_file_as_unmeasurable() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/bad.rs"), "@@@ not rust".into());
+    reader.add_rust_file(PathBuf::from("src/good.rs"));
+    reader.add_rust_file(PathBuf::from("src/bad.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![],
+    }])
+    .failing_when_source_contains(
+        "@@@",
+        AnalysisError::AnalysisFailed("parse error".to_string()),
+    );
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+    );
+    assert!(result.is_ok());
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph.as_ref().expect("write_project_report should have been called");
+    assert!(
+        graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/good.rs")),
+        "good.rs should still be measured"
+    );
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/bad.rs"));
+    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceUnparseable);
+    let pm = graph.aggregated_metrics();
+    assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
+    assert_eq!(pm.unmeasurable_files, 1);
 }
