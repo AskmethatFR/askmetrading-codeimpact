@@ -404,3 +404,12 @@ fn inline_mod_free_fn_is_qualified_by_mod_path() {
     assert_eq!(functions.len(), 1);
     assert_eq!(functions[0].name, "inner::helper");
 }
+
+#[test]
+fn inline_mod_impl_method_is_qualified_by_mod_and_type_path() {
+    let parser = SynCodeParser::new();
+    let source = "mod inner { struct S; impl S { fn m() { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "inner::S::m");
+}
