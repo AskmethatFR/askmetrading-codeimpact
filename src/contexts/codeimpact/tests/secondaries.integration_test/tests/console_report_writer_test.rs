@@ -10,6 +10,7 @@ use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
+use codeimpact_hexagon::analysis::UnmeasurableFile;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_hexagon::analysis::WarningSeverity;
@@ -320,6 +321,56 @@ fn write_project_report_no_warnings_does_not_show_section() {
     assert!(
         !output.contains("I/O dans boucles:"),
         "should not show I/O section when no io_in_loops, got: {}",
+        output
+    );
+}
+
+// D3 (#50 slice S4), test case 21 — console project report must surface
+// unmeasurable files as their own section, with path and reason, not
+// silently omit them.
+#[test]
+fn write_project_report_shows_non_mesures_section_with_path_and_reason() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unmeasurable_files(vec![UnmeasurableFile {
+            path: path("src/bad.rs"),
+            reason: UnmeasurableReason::SourceUnparseable,
+        }]);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("=== Fichiers NON MESURÉS (1) ==="),
+        "expected a NON MESURÉS section header with the count, got: {}",
+        output
+    );
+    assert!(
+        output.contains("src/bad.rs"),
+        "expected the unmeasurable file's path in the section, got: {}",
+        output
+    );
+    assert!(
+        output.contains("code source non analysable"),
+        "expected the human-readable reason in the section, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_no_unmeasurable_files_does_not_show_section() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains("NON MESURÉS"),
+        "should not show the NON MESURÉS section when there are no unmeasurable files, got: {}",
         output
     );
 }
