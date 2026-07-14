@@ -15,6 +15,18 @@ pub struct CallGraph {
     max_depth: usize,
 }
 
+/// Working state for Tarjan's strongly-connected-components algorithm,
+/// threaded through the recursive traversal in [`CallGraph::tarjan_scc`].
+#[derive(Default)]
+struct TarjanState<'a> {
+    next_index: usize,
+    index: HashMap<&'a str, usize>,
+    lowlink: HashMap<&'a str, usize>,
+    on_stack: HashSet<&'a str>,
+    stack: Vec<&'a str>,
+    in_cycle: HashSet<String>,
+}
+
 impl CallGraph {
     pub fn build(functions: &[ParsedFunction]) -> Self {
         let mut edges: HashMap<String, Vec<String>> = HashMap::new();
@@ -103,62 +115,89 @@ impl CallGraph {
 
     // --- Private helpers ---
 
+    /// Computes which functions are part of a call cycle (self-recursion,
+    /// mutual recursion, or a longer cycle) using Tarjan's strongly-connected
+    /// components algorithm.
+    ///
+    /// A prior DFS-back-edge implementation walked `edges.keys()` — whose
+    /// iteration order is randomized per process by `HashMap`'s `RandomState`
+    /// — as the set of DFS roots. For a "confluence" graph (two distinct
+    /// paths through different direct successors of a common ancestor that
+    /// both converge on the same node before closing a cycle back to that
+    /// ancestor), that DFS only follows the FIRST path to completion —
+    /// coloring the shared node "done" — before starting the second path.
+    /// The second path's back edge then targets an already-"done" node and
+    /// is never observed, silently dropping that path's nodes from the
+    /// result depending on which root ran first. Tarjan's SCC decomposition
+    /// is a graph invariant: which nodes end up in the same
+    /// strongly-connected component does not depend on where the traversal
+    /// starts, so the result is correct and reproducible regardless of
+    /// `HashMap` iteration order. Root iteration is still sorted below —
+    /// not required for correctness, but it keeps the traversal itself
+    /// reproducible for anyone stepping through it.
     fn detect_cycles(edges: &HashMap<String, Vec<String>>) -> HashSet<String> {
-        // 0 = white (unvisited), 1 = grey (in current path), 2 = black (done)
-        let mut color: HashMap<&str, u8> = HashMap::new();
-        let mut in_cycle: HashSet<String> = HashSet::new();
+        let mut names: Vec<&str> = edges.keys().map(String::as_str).collect();
+        names.sort_unstable();
 
-        for name in edges.keys() {
-            color.entry(name.as_str()).or_insert(0);
-        }
-
-        for name in edges.keys() {
-            let name_str: &str = name;
-            if color.get(name_str) == Some(&0) {
-                let mut path: Vec<&str> = Vec::new();
-                Self::dfs_cycle(name_str, edges, &mut color, &mut path, &mut in_cycle);
+        let mut state = TarjanState::default();
+        for name in names {
+            if !state.index.contains_key(name) {
+                Self::tarjan_scc(name, edges, &mut state);
             }
         }
-
-        in_cycle
+        state.in_cycle
     }
 
-    fn dfs_cycle<'a>(
-        node: &'a str,
-        edges: &'a HashMap<String, Vec<String>>,
-        color: &mut HashMap<&'a str, u8>,
-        path: &mut Vec<&'a str>,
-        in_cycle: &mut HashSet<String>,
-    ) {
-        color.insert(node, 1); // grey
-        path.push(node);
+    fn tarjan_scc<'a>(node: &'a str, edges: &'a HashMap<String, Vec<String>>, state: &mut TarjanState<'a>) {
+        let node_index = state.next_index;
+        state.index.insert(node, node_index);
+        state.lowlink.insert(node, node_index);
+        state.next_index += 1;
+        state.stack.push(node);
+        state.on_stack.insert(node);
+
+        let mut self_loop = false;
 
         if let Some(callees) = edges.get(node) {
             for callee in callees {
                 let callee: &str = callee.as_str();
-                match color.get(callee).copied().unwrap_or(0) {
-                    0 => {
-                        Self::dfs_cycle(callee, edges, color, path, in_cycle);
+                if callee == node {
+                    self_loop = true;
+                }
+                if !state.index.contains_key(callee) {
+                    Self::tarjan_scc(callee, edges, state);
+                    let callee_lowlink = state.lowlink[callee];
+                    let node_lowlink = state.lowlink[node];
+                    if callee_lowlink < node_lowlink {
+                        state.lowlink.insert(node, callee_lowlink);
                     }
-                    1 => {
-                        // Back-edge detected: mark all nodes from callee to node as cycle
-                        let mut in_cycle_range = false;
-                        for &n in path.iter() {
-                            if n == callee {
-                                in_cycle_range = true;
-                            }
-                            if in_cycle_range {
-                                in_cycle.insert(n.to_string());
-                            }
-                        }
+                } else if state.on_stack.contains(callee) {
+                    let callee_index = state.index[callee];
+                    let node_lowlink = state.lowlink[node];
+                    if callee_index < node_lowlink {
+                        state.lowlink.insert(node, callee_index);
                     }
-                    _ => {}
                 }
             }
         }
 
-        path.pop();
-        color.insert(node, 2); // black
+        if state.lowlink[node] == state.index[node] {
+            let mut component: Vec<&str> = Vec::new();
+            loop {
+                let member = state.stack.pop().expect("SCC root must be on the stack");
+                state.on_stack.remove(member);
+                let is_root = member == node;
+                component.push(member);
+                if is_root {
+                    break;
+                }
+            }
+            if component.len() > 1 || self_loop {
+                for member in component {
+                    state.in_cycle.insert(member.to_string());
+                }
+            }
+        }
     }
 
     fn compute_transitive(

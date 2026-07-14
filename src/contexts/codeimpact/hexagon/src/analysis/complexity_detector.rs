@@ -89,16 +89,19 @@ impl ComplexityDetector {
             if !f.has_loop {
                 continue;
             }
-            // A function that calls a recursive one (has_cycle — the same
-            // signal detect_recursion relies on) is coordinating a tree/graph
-            // descent, not nesting a second pass over the same collection:
-            // each node is visited once, O(n) not O(n²). This covers both
-            // self-recursion and an orchestrator that also calls an unrelated
-            // loop-having helper alongside its recursive one.
-            if f.calls.iter().any(|c| call_graph.has_cycle(c.as_str())) {
-                continue;
-            }
-            for callee in &f.calls {
+            // Only calls actually NESTED inside f's loop can make it O(n²) —
+            // a call after the loop (sequential) never re-iterates anything.
+            // Within those nested calls, a callee that is itself recursive
+            // (has_cycle — the same signal detect_recursion relies on) is a
+            // bounded tree/graph descent, not a second pass over the same
+            // collection: each node is visited once, O(n) not O(n²). Scoping
+            // the cycle exclusion to the specific nested callee (not "any
+            // call anywhere") means an unrelated recursive helper nested
+            // alongside a genuine quadratic partner no longer masks it.
+            for (callee, _line, _col) in &f.calls_in_loops {
+                if call_graph.has_cycle(callee.as_str()) {
+                    continue;
+                }
                 if loop_fns.contains(callee.as_str()) {
                     warnings.push(ComplexityWarning {
                         pattern: WarningPattern::QuadraticLoop,
