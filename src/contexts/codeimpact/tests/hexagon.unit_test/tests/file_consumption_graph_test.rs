@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::{
+    CodeLocation, FunctionDetail,
     CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass, FileConsumptionGraph,
     FileDependency,
 };
@@ -511,4 +512,63 @@ fn aggregated_impacts_all_missing_returns_none() {
     let pm = graph.aggregated_metrics();
     assert!(pm.total_economic_impact.is_none());
     assert!(pm.total_ecological_impact.is_none());
+}
+
+// #46/#49 (ADR-0012): total_hidden_complexity is additive across files/
+// functions, never re-derived by subtracting the two file-level aggregates
+// (ΣT - ΣC, which would give max(0, 9-8) = 1 on this fixture instead of 3).
+#[test]
+fn project_hidden_equals_sum_of_file_hidden() {
+    let files = vec![
+        (
+            path("a.rs"),
+            CodeMetrics::with_call_graph(
+                6,
+                8,
+                1,
+                vec![],
+                vec![
+                    FunctionDetail {
+                        name: "f1".into(),
+                        location: CodeLocation::new("a.rs".into(), 1, 1),
+                        direct: 2,
+                        transitive: 5,
+                        call_depth: 1,
+                        in_cycle: false,
+                    },
+                    FunctionDetail {
+                        name: "f2".into(),
+                        location: CodeLocation::new("a.rs".into(), 2, 1),
+                        direct: 3,
+                        transitive: 3,
+                        call_depth: 0,
+                        in_cycle: false,
+                    },
+                ],
+            ),
+        ),
+        (
+            path("b.rs"),
+            CodeMetrics::with_call_graph(
+                2,
+                1,
+                0,
+                vec![],
+                vec![FunctionDetail {
+                    name: "g".into(),
+                    location: CodeLocation::new("b.rs".into(), 1, 1),
+                    direct: 1,
+                    transitive: 1,
+                    call_depth: 0,
+                    in_cycle: false,
+                }],
+            ),
+        ),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let pm = graph.aggregated_metrics();
+
+    assert_eq!(pm.total_cyclomatic_complexity, 8);
+    assert_eq!(pm.total_transitive_complexity, 9);
+    assert_eq!(pm.total_hidden_complexity, 3);
 }
