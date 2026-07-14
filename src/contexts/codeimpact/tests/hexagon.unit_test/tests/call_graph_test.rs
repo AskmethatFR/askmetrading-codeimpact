@@ -6,9 +6,14 @@ use codeimpact_hexagon::analysis::ParsedFunction;
 // 2. single_function_no_calls → transitive = direct
 // 3. a_calls_b → transitive(A) = direct(A) + direct(B)
 // 4. chain_a_b_c → transitive(A) = direct(A) + direct(B) + direct(C)
-// 5. cycle_a_b → A and B in cycle, no infinite loop
-// 6. three_node_cycle → all in cycle
-// 7. cycle_with_shared_noncycle → cycle nodes + non-cycle node
+// 5. cycle_a_b → each cycle member's transitive = SUM of the whole SCC's
+//    direct (comprehension semantics: to understand either member you read
+//    both — #46/#49 arbitration §1, corrected from the old "direct only"
+//    special case)
+// 6. three_node_cycle → same: all three members' transitive = SUM of the
+//    cycle's direct (3-way SCC)
+// 7. cycle_with_shared_noncycle → cycle nodes + non-cycle node, non-cycle
+//    node's transitive unaffected
 // 8. unknown_function → returns 0
 // 9. max_call_depth_empty → 0
 // 10. max_call_depth_single → 1
@@ -18,8 +23,24 @@ use codeimpact_hexagon::analysis::ParsedFunction;
 // 14. call_chain_depth → depth from specific function
 // 15. self_cycle_detected → function calling itself
 // 16. transitive_total → sum of all transitive complexities
-// 17. diamond_graph → shared callee computed correctly
-// 18. cycle_with_branch → cycle node transitive includes non-cycle callees
+// 17. diamond_graph → shared callee `d` counted ONCE in transitive(a), not
+//     once per incoming path (#46/#49 arbitration §0: the finding that
+//     changes everything — dedup does not require a cycle, a plain diamond
+//     with all-distinct names already double-counts under sum-over-paths)
+// 18. cycle_with_branch → cycle node transitive is the reachable-set sum
+//     (SCC members + non-cycle callees), not "direct + non-cycle callees
+//     only" (the old special case, deleted)
+// 19. double_call_counts_callee_once → f calls g TWICE in its `calls` list;
+//     hidden(f) == direct(g), not 2×direct(g) (#46/#49 arbitration §0: the
+//     "calls g twice" factor is only a special case of the general
+//     reachable-set fix, not a separate bug requiring separate dedup code)
+// 20. deep_diamond_chain_transitive_stays_bounded_by_total_direct →
+//     non-regression: a diamond stacked 32 levels deep grows as 2^levels
+//     under the OLD sum-over-paths formula and overflows u32 (Security
+//     HIGH-2); the NEW reachable-set formula is bounded by the fixture's
+//     total direct complexity BY CONSTRUCTION, so it can never overflow.
+//     Must hold in `--release` too (Security HIGH-1's whole point: no
+//     runtime guard survives release, so the metric itself must be honest).
 
 fn make_fn(name: &str, decision_points: u32, calls: Vec<&str>) -> ParsedFunction {
     ParsedFunction {
@@ -87,11 +108,12 @@ fn chain_transitive_sums_all() {
 fn cycle_detected_no_infinite_loop() {
     let fns = vec![make_fn("a", 1, vec!["b"]), make_fn("b", 2, vec!["a"])];
     let graph = CallGraph::build(&fns);
-    // Both in cycle → transitive = direct only
+    // Both in cycle → to understand EITHER member you must read the whole
+    // SCC: transitive(a) = transitive(b) = direct(a) + direct(b) = 1 + 2 = 3.
     assert!(graph.has_cycle("a"));
     assert!(graph.has_cycle("b"));
-    assert_eq!(graph.transitive_of("a"), 1);
-    assert_eq!(graph.transitive_of("b"), 2);
+    assert_eq!(graph.transitive_of("a"), 3);
+    assert_eq!(graph.transitive_of("b"), 3);
 }
 
 // === 6. Three-node cycle A→B→C→A ===
@@ -106,9 +128,10 @@ fn three_node_cycle_all_marked() {
     assert!(graph.has_cycle("a"));
     assert!(graph.has_cycle("b"));
     assert!(graph.has_cycle("c"));
-    assert_eq!(graph.transitive_of("a"), 1);
-    assert_eq!(graph.transitive_of("b"), 2);
-    assert_eq!(graph.transitive_of("c"), 3);
+    // All three members share the same SCC: transitive = 1 + 2 + 3 = 6.
+    assert_eq!(graph.transitive_of("a"), 6);
+    assert_eq!(graph.transitive_of("b"), 6);
+    assert_eq!(graph.transitive_of("c"), 6);
 }
 
 // === 7. Cycle with shared non-cycle node ===
@@ -120,13 +143,14 @@ fn cycle_with_noncycle_callee_still_has_transitive() {
         make_fn("c", 4, vec![]),
     ];
     let graph = CallGraph::build(&fns);
-    // A and B in cycle, C not
+    // A and B in cycle, C not, and C is unreachable from the cycle (nobody
+    // calls it) — so C's transitive is untouched by the cycle fix.
     assert!(graph.has_cycle("a"));
     assert!(graph.has_cycle("b"));
     assert!(!graph.has_cycle("c"));
-    assert_eq!(graph.transitive_of("a"), 1);
-    assert_eq!(graph.transitive_of("b"), 2);
-    assert_eq!(graph.transitive_of("c"), 4);
+    assert_eq!(graph.transitive_of("a"), 3); // 1 + 2 (whole SCC)
+    assert_eq!(graph.transitive_of("b"), 3); // 2 + 1 (whole SCC)
+    assert_eq!(graph.transitive_of("c"), 4); // leaf, unreachable from a/b
 }
 
 // === 8. Unknown function ===
@@ -222,7 +246,10 @@ fn transitive_total_sums_all() {
     assert_eq!(graph.transitive_total(), 14);
 }
 
-// === 17. Diamond: A→B, A→C, B→D, C→D ===
+// === 17. Diamond: A→B, A→C, B→D, C→D — `d` reached via TWO paths, must be
+//         counted ONCE (#46/#49 arbitration §0: this is the finding that
+//         changes everything — no cycle, no repeated name, and it STILL
+//         double-counts under the old sum-over-paths formula) ===
 #[test]
 fn diamond_graph_computes_correctly() {
     let fns = vec![
@@ -232,14 +259,20 @@ fn diamond_graph_computes_correctly() {
         make_fn("d", 4, vec![]),
     ];
     let graph = CallGraph::build(&fns);
-    assert_eq!(graph.transitive_of("d"), 4);
-    assert_eq!(graph.transitive_of("b"), 6); // 2 + 4
-    assert_eq!(graph.transitive_of("c"), 7); // 3 + 4
-    assert_eq!(graph.transitive_of("a"), 14); // 1 + 6 + 7
+    assert_eq!(graph.transitive_of("d"), 4); // leaf, unaffected
+    assert_eq!(graph.transitive_of("b"), 6); // 2 + 4, single path, unaffected
+    assert_eq!(graph.transitive_of("c"), 7); // 3 + 4, single path, unaffected
+                                              // reachable(a) \ {a} = {b, c, d} — `d` counted ONCE, not twice:
+                                              // 1 + (direct(b)=2 + direct(c)=3 + direct(d)=4) = 1 + 9 = 10.
+                                              // The OLD formula gave 14 (= 1 + transitive(b) + transitive(c),
+                                              // double-charging `d`'s complexity once per incoming path).
+    assert_eq!(graph.transitive_of("a"), 10);
     assert_eq!(graph.max_call_depth(), 3);
 }
 
-// === 18. Cycle with non-cycle branch: A→B, B→A, A→C ===
+// === 18. Cycle with non-cycle branch: A→B, B→A, A→C — the cycle members'
+//         transitive is the reachable-SET sum, not "direct + non-cycle
+//         callees only" (the old ad-hoc special case) ===
 #[test]
 fn cycle_with_branch_has_partial_transitive() {
     let fns = vec![
@@ -251,9 +284,61 @@ fn cycle_with_branch_has_partial_transitive() {
     assert!(graph.has_cycle("a"));
     assert!(graph.has_cycle("b"));
     assert!(!graph.has_cycle("c"));
-    // A in cycle → transitive = direct + non-cycle callees
-    assert_eq!(graph.transitive_of("a"), 5); // 1 direct + 4 from c
-    assert_eq!(graph.transitive_of("b"), 2); // 2 direct + 0 (a is cycle, skipped)
-                                             // C not in cycle → transitive = direct
+    // reachable(a) \ {a} = {b, c}: 1 + (2 + 4) = 7.
+    assert_eq!(graph.transitive_of("a"), 7);
+    // reachable(b) \ {b} = {a, c} (b -> a -> c): 2 + (1 + 4) = 7.
+    assert_eq!(graph.transitive_of("b"), 7);
+    // C not in cycle, not reachable from anything reaching it → direct only.
     assert_eq!(graph.transitive_of("c"), 4);
+}
+
+// === 19. Double call: f calls g TWICE — g counted ONCE ===
+#[test]
+fn double_call_counts_callee_once() {
+    let fns = vec![make_fn("f", 1, vec!["g", "g"]), make_fn("g", 4, vec![])];
+    let graph = CallGraph::build(&fns);
+    // hidden(f) must be direct(g) = 4, not 2 * direct(g) = 8.
+    assert_eq!(graph.transitive_of("f"), 5); // 1 + 4, not 1 + 4 + 4 = 9
+    assert_eq!(graph.transitive_of("g"), 4);
+}
+
+// === 20. Deep diamond chain — bounded by construction, never overflows ===
+fn diamond_chain(levels: usize) -> Vec<ParsedFunction> {
+    let mut fns = vec![make_fn("f0", 1, vec![])];
+    for i in 1..=levels {
+        let prev = format!("f{}", i - 1);
+        let a = format!("a{}", i);
+        let b = format!("b{}", i);
+        let f = format!("f{}", i);
+        fns.push(make_fn(&a, 1, vec![prev.as_str()]));
+        fns.push(make_fn(&b, 1, vec![prev.as_str()]));
+        fns.push(make_fn(&f, 1, vec![a.as_str(), b.as_str()]));
+    }
+    fns
+}
+
+#[test]
+fn deep_diamond_chain_transitive_stays_bounded_by_total_direct() {
+    // 32 stacked diamonds: under the OLD sum-over-paths formula, transitive
+    // of the top function is 2^(levels+1) - 3, which exceeds u32::MAX
+    // (4_294_967_295) at levels=32 (2^33 - 3) — a debug build panics on the
+    // overflow, a release build wraps silently (Security HIGH-2). Under the
+    // NEW reachable-set formula every function has direct=1 and the top
+    // function reaches every other function exactly once, so its
+    // transitive is exactly the fixture's function count — bounded by
+    // construction, in debug AND in release.
+    let levels = 32;
+    let fns = diamond_chain(levels);
+    let total_functions = fns.len() as u32;
+    let graph = CallGraph::build(&fns);
+    let top = format!("f{}", levels);
+
+    assert_eq!(
+        graph.transitive_of(&top),
+        total_functions,
+        "transitive({}) must equal the fixture's total function count ({}) — \
+         every function is reachable exactly once, never per incoming path",
+        top,
+        total_functions
+    );
 }
