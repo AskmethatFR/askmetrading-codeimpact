@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 
@@ -18,9 +19,9 @@ use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonRe
 //    same way — it asserts the VALUE, not just the cross-writer equality.
 // 2. direct/transitive/max_call_depth also agree across writers (they
 //    already did before the fix — this pins the regression guard).
-//
-// The console writer joins this same fixture/assertion set in T3 (#46/#49
-// tech spec §9) once it gains a "Complexité cachée totale" line.
+// 3. console_project_summary_reports_hidden_total (T3) — the console's
+//    "=== Résumé du projet ===" gains a "Complexité cachée totale" line
+//    reporting the SAME value (3) as JSON and HTML, on the SAME graph.
 
 /// Fixture (tech spec §5): two files whose functions do NOT call each other
 /// within the same file except a.rs's f1 -> f2, discriminating the three
@@ -112,5 +113,32 @@ fn json_and_html_report_the_same_hidden_complexity() {
         html.contains("\"label\":\"Hidden complexity\",\"value\":\"3\""),
         "root node detail must report hidden complexity = 3, matching the stat tile and JSON: {}",
         html
+    );
+}
+
+#[test]
+fn console_project_summary_reports_hidden_total() {
+    let graph = a_project_graph();
+
+    let console_writer = ConsoleReportWriter::new();
+    let mut buf: Vec<u8> = Vec::new();
+    console_writer.write_project_report_to(&mut buf, &graph);
+    let console = String::from_utf8(buf).expect("console output should be valid UTF-8");
+
+    assert!(
+        console.contains("Complexité directe totale: 8"),
+        "console must report the same direct total as JSON/HTML: {}",
+        console
+    );
+    assert!(
+        console.contains("Complexité transitive totale: 9"),
+        "console must report the same transitive total as JSON/HTML: {}",
+        console
+    );
+    assert!(
+        console.contains("Complexité cachée totale: 3"),
+        "console must report the SAME hidden total (3) as JSON and HTML, in \
+         the project summary section: {}",
+        console
     );
 }
