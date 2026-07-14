@@ -332,8 +332,7 @@ mod tests {
 
     #[test]
     fn quadratic_loop_detected_with_nested_call() {
-        let mut process_items =
-            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
+        let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
         process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
         let fns = vec![
             process_items,
@@ -522,8 +521,7 @@ mod tests {
 
     #[test]
     fn quadratic_loop_skipped_when_nested_callee_has_no_loop() {
-        let mut process_items =
-            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
+        let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
         process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
         let fns = vec![
             process_items,
@@ -598,9 +596,9 @@ mod tests {
         assert!(!warnings
             .iter()
             .any(|w| matches!(w.pattern, WarningPattern::QuadraticLoop)));
-        assert!(warnings.iter().any(
-            |w| matches!(w.pattern, WarningPattern::Recursion) && w.function == "aggregate"
-        ));
+        assert!(warnings
+            .iter()
+            .any(|w| matches!(w.pattern, WarningPattern::Recursion) && w.function == "aggregate"));
     }
 
     #[test]
@@ -622,9 +620,10 @@ mod tests {
         let config = DetectionConfig::default();
         let warnings = ComplexityDetector::detect(&fns, &graph, &config);
 
-        assert!(!warnings.iter().any(
-            |w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "build_tree"
-        ));
+        assert!(!warnings
+            .iter()
+            .any(|w| matches!(w.pattern, WarningPattern::QuadraticLoop)
+                && w.function == "build_tree"));
     }
 
     #[test]
@@ -679,8 +678,7 @@ mod tests {
 
     #[test]
     fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
-        let mut process_items =
-            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
+        let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
         process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
         let fns = vec![
             process_items,

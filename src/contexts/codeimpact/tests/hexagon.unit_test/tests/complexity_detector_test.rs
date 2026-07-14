@@ -65,7 +65,10 @@ fn make_fn(
 fn quadratic_loop_detected_with_nested_call() {
     let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
     process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
-    let fns = vec![process_items, make_fn("validate", 1, vec![], true, false, 0, 0)];
+    let fns = vec![
+        process_items,
+        make_fn("validate", 1, vec![], true, false, 0, 0),
+    ];
     let graph = CallGraph::build(&fns);
     let config = DetectionConfig::default();
     let warnings = ComplexityDetector::detect(&fns, &graph, &config);
@@ -263,7 +266,10 @@ fn detection_config_defaults() {
 fn quadratic_loop_skipped_when_nested_callee_has_no_loop() {
     let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
     process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
-    let fns = vec![process_items, make_fn("validate", 1, vec![], false, false, 0, 0)];
+    let fns = vec![
+        process_items,
+        make_fn("validate", 1, vec![], false, false, 0, 0),
+    ];
     let graph = CallGraph::build(&fns);
     let config = DetectionConfig::default();
     let warnings = ComplexityDetector::detect(&fns, &graph, &config);
@@ -371,9 +377,9 @@ fn quadratic_loop_not_flagged_when_caller_also_calls_recursive_helper() {
     let config = DetectionConfig::default();
     let warnings = ComplexityDetector::detect(&fns, &graph, &config);
 
-    assert!(!warnings.iter().any(
-        |w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "build_tree"
-    ));
+    assert!(!warnings
+        .iter()
+        .any(|w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "build_tree"));
 }
 
 // === 15. Genuine quadratic loop still detected despite unrelated recursion elsewhere (#47) ===

@@ -148,7 +148,11 @@ impl CallGraph {
         state.in_cycle
     }
 
-    fn tarjan_scc<'a>(node: &'a str, edges: &'a HashMap<String, Vec<String>>, state: &mut TarjanState<'a>) {
+    fn tarjan_scc<'a>(
+        node: &'a str,
+        edges: &'a HashMap<String, Vec<String>>,
+        state: &mut TarjanState<'a>,
+    ) {
         let node_index = state.next_index;
         state.index.insert(node, node_index);
         state.lowlink.insert(node, node_index);
