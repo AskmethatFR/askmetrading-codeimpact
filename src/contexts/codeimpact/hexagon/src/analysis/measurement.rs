@@ -11,6 +11,12 @@ pub enum UnmeasurableReason {
     /// The run exercised zero tests. A run with nothing executed has no
     /// honest cost to report, however well-sampled its process was (#39).
     NoTestsExecuted,
+    /// The parser could not read the file's syntax (D3, #50): distinct from
+    /// `complexity_level() == "none"` (parsed OK, zero functions) — this
+    /// file was never even looked at successfully.
+    SourceUnparseable,
+    /// The file could not be read from disk at all (D3, #50).
+    SourceUnreadable,
 }
 
 impl std::fmt::Display for UnmeasurableReason {
@@ -18,6 +24,8 @@ impl std::fmt::Display for UnmeasurableReason {
         match self {
             Self::NoSampler => write!(f, "aucun outil de mesure disponible"),
             Self::NoTestsExecuted => write!(f, "aucun test exécuté"),
+            Self::SourceUnparseable => write!(f, "code source non analysable"),
+            Self::SourceUnreadable => write!(f, "fichier illisible"),
         }
     }
 }

@@ -36,6 +36,7 @@ pub use economic_impact::{EconomicImpact, EconomicImpactEstimator};
 pub use errors::AnalysisError;
 pub use file_consumption_graph::{
     resolve_file_dependency, FileConsumptionGraph, FileDependency, ProjectMetrics,
+    UnmeasurableFile,
 };
 pub use io_in_loop_warning::IoInLoopWarning;
 pub use io_in_loops_detector::IoInLoopsDetector;
