@@ -452,3 +452,105 @@ fn e2e_analyze_html_format_output_to_nonexistent_dir_errors_without_path_leak() 
         stderr
     );
 }
+
+// #47 retry 2 — the parser was blind to non-I/O calls nested in a loop
+// (`calls_in_loops` only ever held I/O calls, despite its name), so
+// QuadraticLoop could never fire on the actual bug it targets: a loop
+// calling another loop-having function. Both checks below must hold, or
+// the fix is only half done (retry 1 satisfied the first and silently
+// broke the second — the false positive was closed by making the
+// detector blind to true positives too).
+// Test List:
+// 1. process_items/validate fixture (regular, non-I/O nested call) -> 1
+//    CRITICAL QuadraticLoop, function process_items.
+// 2. the real view_model.rs source (aggregate is a self-recursive tree
+//    descent, build_tree's calls to sort_children/aggregate are
+//    sequential, not nested in its own loop) -> 0 QuadraticLoop warnings.
+
+#[test]
+fn e2e_analyze_quadratic_loop_fixture_reports_one_critical_quadratic_loop() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("quadratic_loop.rs");
+    let output = Command::new(&binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let warnings = json["metrics"]["warnings"]
+        .as_array()
+        .expect("warnings should be an array");
+    let quadratic: Vec<&serde_json::Value> = warnings
+        .iter()
+        .filter(|w| w["pattern"] == "QuadraticLoop")
+        .collect();
+
+    assert_eq!(
+        quadratic.len(),
+        1,
+        "expected exactly 1 QuadraticLoop warning, got: {:#?}",
+        warnings
+    );
+    assert_eq!(quadratic[0]["severity"], "Critical");
+    assert_eq!(quadratic[0]["function"], "process_items");
+}
+
+#[test]
+fn e2e_analyze_view_model_reports_no_quadratic_loop_warnings() {
+    let binary = binary_path();
+    let view_model = workspace_root()
+        .join("src")
+        .join("contexts")
+        .join("codeimpact")
+        .join("secondaries")
+        .join("src")
+        .join("gateways")
+        .join("report_writers")
+        .join("html")
+        .join("view_model.rs");
+    assert!(
+        view_model.exists(),
+        "expected view_model.rs to exist at {:?}",
+        view_model
+    );
+
+    let output = Command::new(&binary)
+        .args(["analyze", view_model.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let warnings = json["metrics"]["warnings"]
+        .as_array()
+        .expect("warnings should be an array");
+    let quadratic: Vec<&serde_json::Value> = warnings
+        .iter()
+        .filter(|w| w["pattern"] == "QuadraticLoop")
+        .collect();
+
+    assert!(
+        quadratic.is_empty(),
+        "view_model.rs's aggregate (self-recursive tree descent) and \
+         build_tree (sequential, non-nested calls to sort_children/aggregate) \
+         must not trigger QuadraticLoop: {:#?}",
+        quadratic
+    );
+}

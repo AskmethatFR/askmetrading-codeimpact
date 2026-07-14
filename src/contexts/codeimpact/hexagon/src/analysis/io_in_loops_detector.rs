@@ -123,4 +123,19 @@ mod tests {
         assert_eq!(warnings[0].location.line(), 42);
         assert_eq!(warnings[0].location.col(), 13);
     }
+
+    #[test]
+    fn non_io_call_in_loop_produces_zero_warnings() {
+        // (#47 retry 2) The parser now records EVERY nested call, IO or
+        // not — calls_in_loops is no longer IO-only despite its name. The
+        // detector must filter on is_io itself; trusting the field to hold
+        // only IO entries (as it did before) would leak every plain nested
+        // call as a fabricated I/O warning.
+        let fns = vec![make_fn("process", vec![("validate", 2, 5, false)])];
+        let warnings = IoInLoopsDetector::detect(&fns);
+        assert!(
+            warnings.is_empty(),
+            "a non-I/O call recorded in calls_in_loops must not surface as an IoInLoopWarning"
+        );
+    }
 }
