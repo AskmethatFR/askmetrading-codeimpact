@@ -23,6 +23,18 @@ pub struct ReportVm {
     pub project: ProjectVm,
     pub stats: Vec<StatVm>,
     pub nodes: Vec<NodeVm>,
+    pub unmeasurable_files: Vec<UnmeasurableFileVm>,
+}
+
+/// A file that could not be measured at all (D3, #50 slice S4) — distinct
+/// from a node's `level: "none"` (parsed OK, zero functions). Surfaced at
+/// the project level (spec's "same spirit as the console `=== Fichiers NON
+/// MESURÉS ===` section"), not per-tree-node: an unmeasurable file has no
+/// `CodeMetrics` to hang a `NodeVm` off of.
+#[derive(serde::Serialize)]
+pub struct UnmeasurableFileVm {
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(serde::Serialize)]
@@ -168,7 +180,23 @@ pub fn build_report_vm(graph: &FileConsumptionGraph, target: &str) -> ReportVm {
         },
         stats: build_stats(graph),
         nodes: build_tree(graph, target),
+        unmeasurable_files: build_unmeasurable_files(graph),
     }
+}
+
+/// Reuses `UnmeasurableReason`'s own `Display` (the same human-readable
+/// French text the console writer already shows) — never a coefficient or a
+/// re-derived string invented in this adapter (ADR-8.8/8.8a/8.8b's rule
+/// generalises: present the domain's own value, don't recompute it).
+fn build_unmeasurable_files(graph: &FileConsumptionGraph) -> Vec<UnmeasurableFileVm> {
+    graph
+        .unmeasurable_files()
+        .iter()
+        .map(|f| UnmeasurableFileVm {
+            path: f.path.to_string_lossy().to_string(),
+            reason: f.reason.to_string(),
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
