@@ -19,7 +19,7 @@ impl CodeParser for SynCodeParser {
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
         let mut pending = Vec::new();
-        collect_functions(&syntax_tree.items, &mut pending);
+        collect_functions(&syntax_tree.items, "", &mut pending);
 
         let mut functions = Vec::new();
         for pf in pending {
@@ -133,11 +133,11 @@ fn type_last_segment(ty: &syn::Type) -> Option<String> {
 /// every function/method declaration as a [`PendingFn`], per the D1
 /// qualification scheme (ADR-0013 / #50). Name uniqueness is enforced by
 /// the caller after collection (source-order suffixing).
-fn collect_functions<'a>(items: &'a [syn::Item], out: &mut Vec<PendingFn<'a>>) {
+fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec<PendingFn<'a>>) {
     for item in items {
         if let syn::Item::Fn(func) = item {
             out.push(PendingFn {
-                name: func.sig.ident.to_string(),
+                name: format!("{}{}", mod_prefix, func.sig.ident),
                 enclosing_type: None,
                 block: &func.block,
                 start_line: func.span().start().line,
@@ -147,12 +147,13 @@ fn collect_functions<'a>(items: &'a [syn::Item], out: &mut Vec<PendingFn<'a>>) {
             for impl_item in &item_impl.items {
                 if let syn::ImplItem::Fn(method) = impl_item {
                     let name = match &qualifier {
-                        Some(q) => format!("{}::{}", q, method.sig.ident),
-                        None => method.sig.ident.to_string(),
+                        Some(q) => format!("{}{}::{}", mod_prefix, q, method.sig.ident),
+                        None => format!("{}{}", mod_prefix, method.sig.ident),
                     };
+                    let enclosing_type = qualifier.as_ref().map(|q| format!("{}{}", mod_prefix, q));
                     out.push(PendingFn {
                         name,
-                        enclosing_type: qualifier.clone(),
+                        enclosing_type,
                         block: &method.block,
                         start_line: method.span().start().line,
                     });
@@ -166,13 +167,22 @@ fn collect_functions<'a>(items: &'a [syn::Item], out: &mut Vec<PendingFn<'a>>) {
                     // not a function — it must not be emitted (D1).
                     if let Some(default_block) = &method.default {
                         out.push(PendingFn {
-                            name: format!("{}::{}", trait_name, method.sig.ident),
-                            enclosing_type: Some(trait_name.clone()),
+                            name: format!("{}{}::{}", mod_prefix, trait_name, method.sig.ident),
+                            enclosing_type: Some(format!("{}{}", mod_prefix, trait_name)),
                             block: default_block,
                             start_line: method.span().start().line,
                         });
                     }
                 }
+            }
+        } else if let syn::Item::Mod(item_mod) = item {
+            // Inline module (`mod m { … }`) — recurse with its name folded
+            // into the prefix, so nested items qualify as `m::T::foo`. A
+            // path-style module (`mod m;`, no body) has nothing to recurse
+            // into.
+            if let Some((_, sub_items)) = &item_mod.content {
+                let new_prefix = format!("{}{}::", mod_prefix, item_mod.ident);
+                collect_functions(sub_items, &new_prefix, out);
             }
         }
     }
