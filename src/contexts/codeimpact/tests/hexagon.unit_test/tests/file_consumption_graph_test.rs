@@ -41,8 +41,27 @@ use codeimpact_hexagon::analysis::{
 //  18. graph_with_chain — correct depth and count
 //  19. graph_with_cycle — depth stops at cycle
 
+// D3 (#50 slice S4): complexity_level() now reports "none" when
+// function_details is empty, regardless of cc. These fixtures are about
+// graph/aggregation math, not the D3 zero-function state, so they carry one
+// measured function each — otherwise `aggregated_metrics_hotspot_files_
+// counts_only_critical` below could never observe a "critical" file (every
+// fixture would read "none").
 fn make_metrics(cc: u32, tc: u32) -> CodeMetrics {
-    CodeMetrics::with_call_graph(cc, tc, 0, vec![], vec![])
+    CodeMetrics::with_call_graph(
+        cc,
+        tc,
+        0,
+        vec![],
+        vec![FunctionDetail::new(
+            "f".to_string(),
+            CodeLocation::new("f.rs".into(), 1, 1),
+            cc,
+            0,
+            0,
+            false,
+        )],
+    )
 }
 
 fn path(s: &str) -> PathBuf {

@@ -140,7 +140,18 @@ fn e2e_analyze_empty_file_returns_complexity_1() {
         "expected complexity 1: {}",
         stdout
     );
-    assert!(stdout.contains("low"), "expected level low: {}", stdout);
+    // D3 (#50 slice S4): an empty file parses to zero functions, so
+    // complexity_level() now correctly reads "none" ("nothing to
+    // measure"), not a fabricated "low" — even though the file-level base
+    // complexity (the "+1") is honestly 1. (stdout still separately
+    // contains "low" from the unrelated EconomicImpact::level() line —
+    // asserting the exact "Niveau: none" text keeps this test honest about
+    // what it actually pins.)
+    assert!(
+        stdout.contains("Niveau: none"),
+        "expected complexity level none for an empty file (nothing measured): {}",
+        stdout
+    );
 }
 
 #[test]

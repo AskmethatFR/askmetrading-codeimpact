@@ -21,6 +21,28 @@ fn make_metrics(cc: u32, tc: u32) -> CodeMetrics {
     CodeMetrics::with_call_graph(cc, tc, 0, vec![], vec![])
 }
 
+/// Like `make_metrics`, but with one measured function attached, so
+/// `complexity_level()` reports a real threshold level instead of D3's
+/// (#50 slice S4) "none" — for tests whose actual intent is to exercise
+/// level-dependent behavior (e.g. worst-of-children ranking), not the
+/// "nothing measured" state.
+fn make_metrics_measured(cc: u32, tc: u32) -> CodeMetrics {
+    CodeMetrics::with_call_graph(
+        cc,
+        tc,
+        0,
+        vec![],
+        vec![FunctionDetail::new(
+            "f".to_string(),
+            CodeLocation::new("f.rs".into(), 1, 1),
+            cc,
+            0,
+            0,
+            false,
+        )],
+    )
+}
+
 fn graph_with_files(files: Vec<(&str, u32, u32)>) -> FileConsumptionGraph {
     let entries: Vec<(PathBuf, CodeMetrics)> = files
         .into_iter()
@@ -114,8 +136,12 @@ fn write_html_shows_project_view_with_files_and_levels() {
     );
     // US7 T2 S2: FileNodeVm.level_label is replaced by NodeVm.level (the tree
     // node carries the level directly, not a flat per-file row).
+    // D3 (#50 slice S4): make_metrics() carries no function_details, so
+    // these fixtures now correctly read "none" ("nothing to measure"), not
+    // a fabricated "low" — this test's intent (a level field is present
+    // per node) is unchanged.
     assert!(
-        html.contains("\"level\":\"low\""),
+        html.contains("\"level\":\"none\""),
         "project view must carry a level per node: {}",
         html
     );
@@ -257,6 +283,44 @@ fn write_html_zero_complexity_file_has_zero_score_pct_no_panic() {
     assert!(
         html.contains("\"pct\":0"),
         "scale == 0 branch must yield pct 0 for every metric, not divide by zero: {}",
+        html
+    );
+}
+
+// D3 (#50 slice S4), test case 22 — the level_rank/LVL traps: a zero-function
+// file must render its OWN grey "none" class, never fall into the critical
+// catch-all (level_rank's old `_ => 3`) nor the JS LVL fallback (`lvl-low`).
+// Two separate, independently-failing assertions on purpose:
+// 1. the data island's level field is "none", not a fabricated "critical"
+//    (defends the level_rank/level_name catch-all trap — the class names
+//    themselves are static CSS/JS boilerplate always present in the
+//    document regardless of node data, so this is the only meaningful
+//    server-rendered signal for that trap).
+// 2. the emitted JS's LVL lookup map explicitly maps "none" to "lvl-none"
+//    (defends the JS fallback trap — without this entry, `cls(LVL, "none",
+//    "lvl-low")` would silently render every zero-function node green).
+#[test]
+fn zero_function_file_renders_level_none_and_js_maps_it_to_its_own_class() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("empty.rs", make_metrics(0, 0))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""id":"empty.rs","name":"empty.rs","kind":"file","path":"empty.rs","child_ids":[],"score":0,"level":"none""#),
+        "a zero-function file must report level \"none\", not a fabricated threshold: {}",
+        html
+    );
+    assert!(
+        html.contains(r#"LVL = { none: "lvl-none""#),
+        "the JS LVL map must explicitly map \"none\" to its own class, not fall through to lvl-low: {}",
+        html
+    );
+    assert!(
+        html.contains(".lvl-none {"),
+        "the CSS must define a dedicated .lvl-none rule: {}",
         html
     );
 }
@@ -595,12 +659,16 @@ fn folder_score_is_max_of_descendant_file_scores() {
 #[test]
 fn folder_level_is_worst_descendant_level() {
     let writer = HtmlReportWriter::new();
+    // make_metrics_measured (not make_metrics): this test's intent is the
+    // worst-of-children ranking itself, which needs real "low"/"critical"
+    // levels to discriminate — D3's "none" state would collapse every file
+    // to the same rank and make the assertion vacuous.
     let graph = graph_from(vec![
-        ("a/ok1.rs", make_metrics(1, 1)),
-        ("a/ok2.rs", make_metrics(2, 2)),
-        ("a/bad.rs", make_metrics(50, 50)),
-        ("a/ok3.rs", make_metrics(3, 3)),
-        ("a/ok4.rs", make_metrics(4, 4)),
+        ("a/ok1.rs", make_metrics_measured(1, 1)),
+        ("a/ok2.rs", make_metrics_measured(2, 2)),
+        ("a/bad.rs", make_metrics_measured(50, 50)),
+        ("a/ok3.rs", make_metrics_measured(3, 3)),
+        ("a/ok4.rs", make_metrics_measured(4, 4)),
     ]);
 
     let html = writer
@@ -646,16 +714,20 @@ fn metric_pct_floors_at_five_and_caps_at_hundred() {
         .write_html(&graph, "proj")
         .expect("write_html should succeed");
 
+    // D3 (#50 slice S4): make_metrics() carries no function_details, so
+    // both files now correctly read "none" ("nothing to measure"). This
+    // test's intent (pct floors at 5%, caps at 100%) is independent of the
+    // level string and is unaffected.
     assert!(
         html.contains(
-            r#""id":"tiny.rs","name":"tiny.rs","kind":"file","path":"tiny.rs","child_ids":[],"score":1,"level":"low","metrics":[{"label":"Direct complexity","value":"1","pct":5}"#
+            r#""id":"tiny.rs","name":"tiny.rs","kind":"file","path":"tiny.rs","child_ids":[],"score":1,"level":"none","metrics":[{"label":"Direct complexity","value":"1","pct":5}"#
         ),
         "a small nonzero value (1/100=1%) must floor at 5%, not round down to 0: {}",
         html
     );
     assert!(
         html.contains(
-            r#""id":"huge.rs","name":"huge.rs","kind":"file","path":"huge.rs","child_ids":[],"score":100,"level":"critical","metrics":[{"label":"Direct complexity","value":"100","pct":100}"#
+            r#""id":"huge.rs","name":"huge.rs","kind":"file","path":"huge.rs","child_ids":[],"score":100,"level":"none","metrics":[{"label":"Direct complexity","value":"100","pct":100}"#
         ),
         "the max value itself must cap at 100%: {}",
         html

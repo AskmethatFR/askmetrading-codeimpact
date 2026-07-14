@@ -117,8 +117,11 @@ fn json_writer_empty_metrics() {
     let json_str = result.unwrap();
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
 
+    // D3 (#50 slice S4): CodeMetrics::new(0) carries no function_details, so
+    // this now correctly reads "none" ("nothing to measure"), not a
+    // fabricated "low".
     assert_eq!(json["metrics"]["cyclomatic_complexity"], 0);
-    assert_eq!(json["metrics"]["complexity_level"], "low");
+    assert_eq!(json["metrics"]["complexity_level"], "none");
 }
 
 #[test]
