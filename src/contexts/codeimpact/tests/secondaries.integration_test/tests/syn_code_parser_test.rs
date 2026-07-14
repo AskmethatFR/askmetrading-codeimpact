@@ -1,4 +1,8 @@
+use codeimpact_hexagon::analysis::CallGraph;
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::ComplexityDetector;
+use codeimpact_hexagon::analysis::DetectionConfig;
+use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 
 #[test]
@@ -457,6 +461,11 @@ fn self_method_call_resolves_to_qualified_callee() {
         "self.b() must resolve to S::b, got {:?}",
         a.calls
     );
+    // The test that bites: without the self rule, calls would contain the
+    // bare "b", which never matches the declaration "S::b" — hidden_of
+    // would stay 0 and every intra-type edge would silently disappear.
+    let graph = CallGraph::build(&functions);
+    assert_eq!(graph.hidden_of("S::a"), 1);
 }
 
 #[test]
@@ -469,5 +478,64 @@ fn self_colon_colon_method_call_resolves_to_qualified_callee() {
         a.calls.contains(&"S::b".to_string()),
         "Self::b() must resolve to S::b, got {:?}",
         a.calls
+    );
+}
+
+#[test]
+fn mutual_self_recursion_is_detected_as_a_cycle() {
+    let parser = SynCodeParser::new();
+    let source =
+        "struct S; impl S { fn a(&self) { self.b(); } fn b(&self) { self.a(); } }";
+    let functions = parser.parse(source).unwrap();
+    let graph = CallGraph::build(&functions);
+    assert!(graph.has_cycle("S::a"), "S::a must be reported in_cycle");
+    assert!(graph.has_cycle("S::b"), "S::b must be reported in_cycle");
+}
+
+#[test]
+fn non_self_receiver_method_call_stays_bare() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl S { fn a(&self, v: Vec<u8>) { v.len(); } fn len(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    let a = functions.iter().find(|f| f.name == "S::a").unwrap();
+    assert!(
+        a.calls.contains(&"len".to_string()),
+        "v.len() must stay bare \"len\", got {:?}",
+        a.calls
+    );
+    assert!(
+        !a.calls.contains(&"S::len".to_string()),
+        "v.len() must NOT be fabricated into S::len, got {:?}",
+        a.calls
+    );
+    let graph = CallGraph::build(&functions);
+    assert_eq!(
+        graph.hidden_of("S::a"),
+        0,
+        "no fabricated edge means no hidden complexity from S::len"
+    );
+}
+
+#[test]
+fn quadratic_loop_detected_through_resolved_self_call() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl S { \
+        fn a(&self) { for i in 0..n { self.b(); } } \
+        fn b(&self) { for j in 0..n { } } \
+    }";
+    let functions = parser.parse(source).unwrap();
+    let graph = CallGraph::build(&functions);
+    let warnings =
+        ComplexityDetector::detect(&functions, &graph, &DetectionConfig::default());
+    let quadratic: Vec<_> = warnings
+        .iter()
+        .filter(|w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "S::a")
+        .collect();
+    assert_eq!(
+        quadratic.len(),
+        1,
+        "S::a must get exactly one QuadraticLoop warning now that self.b() resolves \
+         to the looping S::b, got {:?}",
+        warnings
     );
 }
