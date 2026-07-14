@@ -654,7 +654,10 @@ fn aggregated_metrics_counts_unmeasurable_files_separately_from_total_files() {
         .with_unmeasurable_files(unmeasurable);
     let pm = graph.aggregated_metrics();
 
-    assert_eq!(pm.total_files, 1, "total_files keeps counting MEASURED files only");
+    assert_eq!(
+        pm.total_files, 1,
+        "total_files keeps counting MEASURED files only"
+    );
     assert_eq!(pm.unmeasurable_files, 1);
     // bad.rs's (nonexistent) numbers entered no sum: the sum is exactly
     // a.rs's own complexity, untouched by the unmeasurable entry.

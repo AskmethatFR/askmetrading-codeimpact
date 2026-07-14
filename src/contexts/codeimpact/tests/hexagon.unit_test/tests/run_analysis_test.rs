@@ -332,7 +332,9 @@ fn handle_project_records_unreadable_file_as_unmeasurable() {
     assert!(result.is_ok());
 
     let graph = writer.last_graph.lock().unwrap();
-    let graph = graph.as_ref().expect("write_project_report should have been called");
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
     let unmeasurable = graph.unmeasurable_files();
     assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
     assert_eq!(unmeasurable[0].path, PathBuf::from("src/bad.rs"));
@@ -377,7 +379,9 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     assert!(result.is_ok());
 
     let graph = writer.last_graph.lock().unwrap();
-    let graph = graph.as_ref().expect("write_project_report should have been called");
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
     assert!(
         graph
             .per_file_metrics()
@@ -387,7 +391,10 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     let unmeasurable = graph.unmeasurable_files();
     assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
     assert_eq!(unmeasurable[0].path, PathBuf::from("src/bad.rs"));
-    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceUnparseable);
+    assert_eq!(
+        unmeasurable[0].reason,
+        UnmeasurableReason::SourceUnparseable
+    );
     let pm = graph.aggregated_metrics();
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
     assert_eq!(pm.unmeasurable_files, 1);

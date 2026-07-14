@@ -7,7 +7,9 @@ use super::code_metrics::CodeMetrics;
 use super::code_parser::CodeParser;
 use super::code_reader::CodeReader;
 use super::errors::AnalysisError;
-use super::file_consumption_graph::{resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile};
+use super::file_consumption_graph::{
+    resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile,
+};
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
 use super::proactive_analyzer;
