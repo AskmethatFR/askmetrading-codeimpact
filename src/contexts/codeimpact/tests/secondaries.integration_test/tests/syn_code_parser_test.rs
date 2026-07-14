@@ -368,3 +368,12 @@ fn impl_method_is_qualified_by_type_name() {
     assert_eq!(functions[0].name, "S::foo");
     assert_eq!(functions[0].decision_points, 1);
 }
+
+#[test]
+fn impl_trait_for_type_uses_type_name_not_trait_name() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl Display for S { fn fmt(&self) { } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "S::fmt");
+}
