@@ -559,31 +559,13 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
         .collect()
 }
 
+/// Renders the 9 project stat tiles. Every value comes straight from
+/// `ProjectMetrics` (`FileConsumptionGraph::aggregated_metrics()`, the
+/// single source of truth) — no `.len()`/`.sum()`/`.count()` here (#46/#49
+/// tech spec §11): a tile that recomputes its own aggregate is exactly how
+/// the JSON and HTML writers diverged in the first place (ADR-0012).
 fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
-    let per_file = graph.per_file_metrics();
     let aggregated = graph.aggregated_metrics();
-
-    let total_hidden: u32 = per_file.values().map(|m| m.hidden_complexity()).sum();
-
-    let total_warnings_and_io: usize = per_file
-        .values()
-        .map(|m| m.warnings().len() + m.io_in_loops().len())
-        .sum();
-    let critical_count: usize = per_file
-        .values()
-        .map(|m| {
-            m.warnings()
-                .iter()
-                .filter(|w| w.severity == WarningSeverity::Critical)
-                .count()
-                + m.io_in_loops().len()
-        })
-        .sum();
-
-    let hotspots = per_file
-        .values()
-        .filter(|m| m.complexity_level() == "critical")
-        .count();
 
     let cost_value = match &aggregated.total_economic_impact {
         Some(economic) => format_dollars(economic.total_cost_microdollars()),
@@ -601,7 +583,7 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
     vec![
         StatVm {
             label: "Files".to_string(),
-            value: per_file.len().to_string(),
+            value: aggregated.total_files.to_string(),
             sub: "analysed".to_string(),
         },
         StatVm {
@@ -612,12 +594,17 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
         StatVm {
             label: "Transitive \u{3a3}".to_string(),
             value: aggregated.total_transitive_complexity.to_string(),
-            sub: format!("{} hidden", total_hidden),
+            sub: format!("{} hidden", aggregated.total_hidden_complexity),
         },
         StatVm {
             label: "Warnings".to_string(),
-            value: total_warnings_and_io.to_string(),
-            sub: format!("{} critical", critical_count),
+            value: aggregated.total_warnings.to_string(),
+            sub: format!("{} critical", aggregated.critical_warnings),
+        },
+        StatVm {
+            label: "I/O in loops".to_string(),
+            value: aggregated.total_io_in_loops.to_string(),
+            sub: "in loops".to_string(),
         },
         StatVm {
             label: "Max depth".to_string(),
@@ -626,7 +613,7 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
         },
         StatVm {
             label: "Hotspots".to_string(),
-            value: hotspots.to_string(),
+            value: aggregated.hotspot_files.to_string(),
             sub: "critical files".to_string(),
         },
         StatVm {

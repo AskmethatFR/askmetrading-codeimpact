@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::code_metrics::CodeMetrics;
+use super::complexity_detector::WarningSeverity;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
 use super::errors::AnalysisError;
@@ -136,12 +137,26 @@ impl FileConsumptionGraph {
         let mut total_tc = 0u32;
         let mut total_hidden = 0u32;
         let mut max_call_depth = 0usize;
+        let mut total_warnings = 0usize;
+        let mut critical_warnings = 0usize;
+        let mut total_io_in_loops = 0usize;
+        let mut hotspot_files = 0usize;
 
         for metrics in self.per_file_metrics.values() {
             total_cc = total_cc.saturating_add(metrics.cyclomatic_complexity());
             total_tc = total_tc.saturating_add(metrics.transitive_complexity());
             total_hidden = total_hidden.saturating_add(metrics.hidden_complexity());
             max_call_depth = max_call_depth.max(metrics.max_call_depth());
+            total_warnings += metrics.warnings().len();
+            critical_warnings += metrics
+                .warnings()
+                .iter()
+                .filter(|w| w.severity == WarningSeverity::Critical)
+                .count();
+            total_io_in_loops += metrics.io_in_loops().len();
+            if metrics.complexity_level() == "critical" {
+                hotspot_files += 1;
+            }
         }
 
         let total_economic_impact = self
@@ -166,6 +181,10 @@ impl FileConsumptionGraph {
             total_hidden_complexity: total_hidden,
             max_call_depth,
             files_with_cycles,
+            total_warnings,
+            critical_warnings,
+            total_io_in_loops,
+            hotspot_files,
             total_economic_impact,
             total_ecological_impact,
         }
@@ -327,6 +346,16 @@ pub struct ProjectMetrics {
     pub total_hidden_complexity: u32,
     pub max_call_depth: usize,
     pub files_with_cycles: Vec<PathBuf>,
+    /// Total `ComplexityWarning` count across all files. `IoInLoopWarning`
+    /// has no severity and is never folded in here (ubiquitous language: an
+    /// I/O-in-loop is not a "complexity warning") — see `total_io_in_loops`.
+    pub total_warnings: usize,
+    /// `total_warnings`' subset with `WarningSeverity::Critical`.
+    pub critical_warnings: usize,
+    /// Total `IoInLoopWarning` count across all files — its own category.
+    pub total_io_in_loops: usize,
+    /// Number of files whose `complexity_level()` is `"critical"`.
+    pub hotspot_files: usize,
     pub total_economic_impact: Option<EconomicImpact>,
     pub total_ecological_impact: Option<EcologicalImpact>,
 }
