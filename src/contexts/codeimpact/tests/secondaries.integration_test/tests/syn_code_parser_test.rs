@@ -458,3 +458,16 @@ fn self_method_call_resolves_to_qualified_callee() {
         a.calls
     );
 }
+
+#[test]
+fn self_colon_colon_method_call_resolves_to_qualified_callee() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl S { fn a() { Self::b(); } fn b() { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    let a = functions.iter().find(|f| f.name == "S::a").unwrap();
+    assert!(
+        a.calls.contains(&"S::b".to_string()),
+        "Self::b() must resolve to S::b, got {:?}",
+        a.calls
+    );
+}
