@@ -386,3 +386,12 @@ fn impl_with_generics_erases_generic_params() {
     assert_eq!(functions.len(), 1);
     assert_eq!(functions[0].name, "Wrapper::get");
 }
+
+#[test]
+fn trait_default_method_is_qualified_by_trait_name_abstract_method_excluded() {
+    let parser = SynCodeParser::new();
+    let source = "trait Tr { fn hook(&self) { if x { } } fn abstract_(&self); }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "Tr::hook");
+}
