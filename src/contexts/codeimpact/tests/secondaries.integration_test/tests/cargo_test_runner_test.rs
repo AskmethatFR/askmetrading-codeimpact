@@ -1,7 +1,10 @@
 use std::process::Command;
 use std::sync::Mutex;
 
+use codeimpact_hexagon::analysis::Measurement;
+use codeimpact_hexagon::analysis::ReactiveAnalyzer;
 use codeimpact_hexagon::analysis::TestRunnerPort;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
 
 /// Every test in this file shells out to real `cargo`/`rustc` processes
@@ -286,6 +289,74 @@ edition = "2021"
 // passing measurement for `good` — a bogus success hiding the real compile
 // error in `bad`. This is exactly the "silent success" / "bogus
 // measurement" scenario the check exists to prevent.
+// #39 — AC#4: on a multi-crate workspace, the stress test must measure
+// EVERY member, not just one arbitrary binary. Two members with 2 and 3
+// tests respectively must sum to 5 total / 5 passed, not the 2 (last
+// artifact only) or 0 (--lib excludes tests/*.rs integration targets)
+// the pre-fix code reported.
+#[test]
+fn cargo_test_runner_on_multi_crate_workspace_counts_tests_from_every_member() {
+    let _guard = lock_cargo_spawn();
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["alpha", "beta"]
+resolver = "2"
+"#,
+    )
+    .expect("write workspace Cargo.toml");
+
+    write_package(
+        &dir.path().join("alpha"),
+        "alpha",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\n#[test]\nfn test_add() { assert_eq!(add(2, 2), 4); }\n\n#[test]\nfn test_add_negative() { assert_eq!(add(-1, 1), 0); }\n",
+    );
+    write_package(
+        &dir.path().join("beta"),
+        "beta",
+        "pub fn mul(a: i32, b: i32) -> i32 { a * b }\n\n#[test]\nfn test_mul() { assert_eq!(mul(2, 3), 6); }\n\n#[test]\nfn test_mul_zero() { assert_eq!(mul(0, 5), 0); }\n\n#[test]\nfn test_mul_negative() { assert_eq!(mul(-2, 3), -6); }\n",
+    );
+
+    let runner = CargoTestRunner::new(dir.path().to_path_buf());
+    let result = runner.run_tests(None).expect("run_tests should succeed");
+
+    assert_eq!(result.tests_total(), 5);
+    assert_eq!(result.tests_passed(), 5);
+}
+
+// #39 — mirror of AC#4 for the zero-test case: a workspace whose members
+// have no tests at all must report tests_total() == 0 and the hexagon
+// must refuse to synthesize a confident economic impact from it.
+#[test]
+fn cargo_test_runner_on_workspace_with_no_tests_yields_no_confident_impact() {
+    let _guard = lock_cargo_spawn();
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["silent"]
+resolver = "2"
+"#,
+    )
+    .expect("write workspace Cargo.toml");
+
+    write_package(
+        &dir.path().join("silent"),
+        "silent",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    );
+
+    let runner = CargoTestRunner::new(dir.path().to_path_buf());
+    let result = runner.run_tests(None).expect("run_tests should succeed");
+
+    assert_eq!(result.tests_total(), 0);
+    assert_eq!(
+        ReactiveAnalyzer::analyze(&result),
+        Measurement::Unmeasurable(UnmeasurableReason::NoTestsExecuted)
+    );
+}
+
 #[test]
 fn cargo_test_runner_returns_error_when_a_workspace_member_fails_to_compile() {
     let _guard = lock_cargo_spawn();

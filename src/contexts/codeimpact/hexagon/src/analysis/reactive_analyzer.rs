@@ -1,5 +1,5 @@
 use super::economic_impact::EconomicImpact;
-use super::stress_test_run::{Measurement, StressTestRun};
+use super::stress_test_run::{Measurement, StressTestRun, UnmeasurableReason};
 
 const KB_TO_BYTES: u64 = 1024;
 const MEMORY_TO_TOTAL_RATIO: f64 = 0.0001;
@@ -23,6 +23,9 @@ impl ReactiveAnalyzer {
     /// is `Unmeasurable`: there is no honest cost to report from a missing
     /// reading (#36).
     pub fn analyze(run: &StressTestRun) -> Measurement<EconomicImpact> {
+        if run.tests_total() == 0 {
+            return Measurement::Unmeasurable(UnmeasurableReason::NoTestsExecuted);
+        }
         let cpu_time_ms = match run.cpu_time_ms() {
             Measurement::Available(ms) => ms,
             Measurement::Unmeasurable(reason) => return Measurement::Unmeasurable(reason),
@@ -111,6 +114,30 @@ mod tests {
         assert_eq!(
             impact,
             Measurement::Unmeasurable(UnmeasurableReason::NoSampler)
+        );
+    }
+
+    // #39 — the empty-binary invariant: a run that exercised zero tests
+    // has no honest cost to report, however well-sampled its process was.
+    // Without this guard, a 0/0 run with Available cpu/memory (e.g. the
+    // process itself started and exited cleanly, sampler ran fine) yields
+    // a confident EconomicImpact for work that never happened — exactly
+    // the "rapport économique parfaitement assuré" from #39.
+    #[test]
+    fn reactive_analyzer_zero_tests_yields_unmeasurable_no_tests_executed() {
+        let run = StressTestRun::new(10, available(0), available(0), 0, 0, None);
+        let impact = ReactiveAnalyzer::analyze(&run);
+        assert_eq!(
+            impact,
+            Measurement::Unmeasurable(UnmeasurableReason::NoTestsExecuted)
+        );
+    }
+
+    #[test]
+    fn no_tests_executed_reason_is_distinct_from_no_sampler() {
+        assert_ne!(
+            UnmeasurableReason::NoTestsExecuted.to_string(),
+            UnmeasurableReason::NoSampler.to_string()
         );
     }
 

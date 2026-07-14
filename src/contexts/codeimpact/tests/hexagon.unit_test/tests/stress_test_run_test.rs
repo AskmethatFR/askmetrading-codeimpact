@@ -166,6 +166,132 @@ fn run_stress_test_with_filter() {
     assert_eq!(run.filter(), Some("test_foo".to_string()));
 }
 
+// Test List (StressTestRun::aggregate — #39 aggregation law, folds N
+// per-binary runs from a --workspace build into one):
+// 5. sums tests_passed and tests_total
+// 6. sums durations (binaries run sequentially -> wall clock actually spent)
+// 7. sums cpu_time_ms when every run is Available
+// 8. takes peak memory_kb, not the sum (processes never coexist)
+// 9. cpu_time_ms is Unmeasurable if ANY run is Unmeasurable (ADR-0010)
+// 10. memory_kb is Unmeasurable if ANY run is Unmeasurable (ADR-0010)
+// 11. preserves the filter
+// 12. aggregate of no runs is an error, not a synthesized all-zero run
+
+#[test]
+fn aggregate_sums_tests_passed_and_total() {
+    let run_a = StressTestRun::new(100, available(10), available(1024), 2, 2, None);
+    let run_b = StressTestRun::new(100, available(10), available(1024), 1, 3, None);
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(aggregated.tests_passed(), 3);
+    assert_eq!(aggregated.tests_total(), 5);
+}
+
+#[test]
+fn aggregate_sums_durations() {
+    let run_a = StressTestRun::new(100, available(10), available(1024), 1, 1, None);
+    let run_b = StressTestRun::new(250, available(10), available(1024), 1, 1, None);
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(aggregated.duration_ms(), 350);
+}
+
+#[test]
+fn aggregate_sums_cpu_time_when_every_run_is_available() {
+    let run_a = StressTestRun::new(100, available(100), available(1024), 1, 1, None);
+    let run_b = StressTestRun::new(100, available(200), available(1024), 1, 1, None);
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(aggregated.cpu_time_ms(), available(300));
+}
+
+#[test]
+fn aggregate_takes_peak_memory_not_the_sum() {
+    let run_a = StressTestRun::new(100, available(10), available(8192), 1, 1, None);
+    let run_b = StressTestRun::new(100, available(10), available(2048), 1, 1, None);
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(aggregated.memory_kb(), available(8192));
+}
+
+#[test]
+fn aggregate_cpu_time_is_unmeasurable_when_any_run_is_unmeasurable() {
+    let run_a = StressTestRun::new(100, available(100), available(1024), 1, 1, None);
+    let run_b = StressTestRun::new(
+        100,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        available(1024),
+        1,
+        1,
+        None,
+    );
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(
+        aggregated.cpu_time_ms(),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler)
+    );
+}
+
+#[test]
+fn aggregate_memory_is_unmeasurable_when_any_run_is_unmeasurable() {
+    let run_a = StressTestRun::new(100, available(100), available(1024), 1, 1, None);
+    let run_b = StressTestRun::new(
+        100,
+        available(100),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(
+        aggregated.memory_kb(),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler)
+    );
+}
+
+#[test]
+fn aggregate_preserves_the_filter() {
+    let run_a = StressTestRun::new(
+        100,
+        available(10),
+        available(1024),
+        1,
+        1,
+        Some("test_foo".into()),
+    );
+    let run_b = StressTestRun::new(
+        100,
+        available(10),
+        available(1024),
+        1,
+        1,
+        Some("test_foo".into()),
+    );
+
+    let aggregated = StressTestRun::aggregate(&[run_a, run_b]).expect("aggregate should succeed");
+
+    assert_eq!(aggregated.filter(), Some("test_foo".to_string()));
+}
+
+#[test]
+fn aggregate_of_no_runs_is_an_error() {
+    let result = StressTestRun::aggregate(&[]);
+
+    match result {
+        Err(AnalysisError::TestRunnerError(_)) => {}
+        other => panic!("expected TestRunnerError, got {:?}", other),
+    }
+}
+
 #[test]
 fn run_stress_test_propagates_runner_error() {
     let runner = TestRunnerStub::new(Err(AnalysisError::TestRunnerError(
