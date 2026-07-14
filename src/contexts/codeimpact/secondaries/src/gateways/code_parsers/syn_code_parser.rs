@@ -158,6 +158,22 @@ fn collect_functions<'a>(items: &'a [syn::Item], out: &mut Vec<PendingFn<'a>>) {
                     });
                 }
             }
+        } else if let syn::Item::Trait(item_trait) = item {
+            let trait_name = item_trait.ident.to_string();
+            for trait_item in &item_trait.items {
+                if let syn::TraitItem::Fn(method) = trait_item {
+                    // A trait method without a default body is a signature,
+                    // not a function — it must not be emitted (D1).
+                    if let Some(default_block) = &method.default {
+                        out.push(PendingFn {
+                            name: format!("{}::{}", trait_name, method.sig.ident),
+                            enclosing_type: Some(trait_name.clone()),
+                            block: default_block,
+                            start_line: method.span().start().line,
+                        });
+                    }
+                }
+            }
         }
     }
 }
