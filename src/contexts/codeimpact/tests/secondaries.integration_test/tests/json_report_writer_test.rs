@@ -1,10 +1,16 @@
+use std::path::PathBuf;
+
 use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::EfficiencyClass;
+use codeimpact_hexagon::analysis::FileConsumptionGraph;
+use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::UnmeasurableFile;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 
@@ -153,4 +159,76 @@ fn console_writer_write_json_produces_valid_json() {
     assert_eq!(json["target"], "test.rs");
     assert_eq!(json["metrics"]["cyclomatic_complexity"], 5);
     assert_eq!(json["metrics"]["economic_impact"]["level"], "moderate");
+}
+
+// D3 (#50 slice S4), test case 20 — project JSON must surface unmeasurable
+// files (additive per ADR-0007: no existing field removed or renamed).
+#[test]
+fn project_json_includes_unmeasurable_files_and_keeps_existing_fields_unchanged() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(
+            5,
+            8,
+            0,
+            vec![],
+            vec![FunctionDetail::new(
+                "f".to_string(),
+                CodeLocation::new("a.rs".into(), 1, 1),
+                5,
+                0,
+                0,
+                false,
+            )],
+        ),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unmeasurable_files(vec![UnmeasurableFile {
+            path: PathBuf::from("bad.rs"),
+            reason: UnmeasurableReason::SourceUnparseable,
+        }]);
+
+    let result = writer.write_project_json(&graph, "proj");
+    assert!(result.is_ok(), "write_project_json should succeed");
+    let json_str = result.unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    // ADR-0007 schema non-regression: every pre-existing field is still there.
+    assert_eq!(json["tool"]["name"], "codeimpact");
+    assert!(json["tool"]["version"].is_string());
+    assert!(json["timestamp"].is_string());
+    assert_eq!(json["target"], "proj");
+    assert_eq!(json["target_type"], "project");
+    assert_eq!(json["metrics"]["cyclomatic_complexity"], 5);
+    assert_eq!(json["metrics"]["transitive_complexity"], 8);
+
+    // New, additive field.
+    let unmeasurable = json["metrics"]["unmeasurable_files"]
+        .as_array()
+        .expect("unmeasurable_files should be an array");
+    assert_eq!(unmeasurable.len(), 1);
+    assert_eq!(unmeasurable[0]["path"], "bad.rs");
+    assert_eq!(unmeasurable[0]["reason"], "SourceUnparseable");
+    assert_eq!(json["metrics"]["unmeasurable_files_count"], 1);
+}
+
+#[test]
+fn file_json_reports_zero_unmeasurable_files() {
+    let writer = JsonReportWriter::new();
+    let metrics = make_metrics_with_impacts();
+
+    let json_str = writer.write_json(&metrics, "test.rs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unmeasurable_files_count"], 0);
+    assert!(
+        json["metrics"]["unmeasurable_files"].is_null()
+            || json["metrics"]["unmeasurable_files"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+        "a single-file report has no notion of other unmeasurable files"
+    );
 }
