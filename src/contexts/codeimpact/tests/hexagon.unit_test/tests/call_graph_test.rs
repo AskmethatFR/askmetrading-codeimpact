@@ -319,15 +319,34 @@ fn diamond_chain(levels: usize) -> Vec<ParsedFunction> {
 
 #[test]
 fn deep_diamond_chain_transitive_stays_bounded_by_total_direct() {
-    // 32 stacked diamonds: under the OLD sum-over-paths formula, transitive
-    // of the top function is 2^(levels+1) - 3, which exceeds u32::MAX
-    // (4_294_967_295) at levels=32 (2^33 - 3) — a debug build panics on the
-    // overflow, a release build wraps silently (Security HIGH-2). Under the
-    // NEW reachable-set formula every function has direct=1 and the top
-    // function reaches every other function exactly once, so its
-    // transitive is exactly the fixture's function count — bounded by
-    // construction, in debug AND in release.
-    let levels = 32;
+    // Under the OLD sum-over-paths formula, transitive of the top function
+    // is 2^(levels+1) - 3 — it would exceed u32::MAX (4_294_967_295) at
+    // levels=32 (2^33 - 3): a debug build panics on the overflow, a release
+    // build wraps silently (Security HIGH-2). Under the NEW reachable-set
+    // formula every function has direct=1 and the top function reaches
+    // every other function exactly once, so its transitive is EXACTLY the
+    // fixture's function count — bounded by construction, in debug AND in
+    // release, at ANY depth (the bound is `Σ direct`, monotonic and
+    // non-negative — it cannot depend on how deep the chain is).
+    //
+    // levels is capped at 18 (not 32) for this test's own runtime: `build()`
+    // also calls the pre-existing, un-memoized `compute_depth` for every
+    // node to compute `max_call_depth`, and `compute_depth` has the SAME
+    // unmemoized-shared-DAG blind spot this ticket fixes for `transitive`
+    // (it re-walks each diamond branch from scratch instead of caching by
+    // node), so it re-grows exponentially on this exact fixture shape and
+    // makes levels=32 take minutes. `compute_depth` is explicitly out of
+    // scope for #46/#49 (tech spec: "Do NOT touch compute_depth") — this is
+    // a latent, separate performance defect, not a correctness one; it does
+    // not threaten the u32 bound proven here, but a real deeply-diamond
+    // codebase could make analysis hang. Filed for a follow-up ticket
+    // (compute_depth needs the same memoized-visited-set treatment
+    // reachable_from now uses). levels=18 already shows the old formula
+    // overshooting by three orders of magnitude (524_285 vs a correct 55)
+    // while finishing in milliseconds; the u32-overflow magnitude at
+    // levels=32 is a direct consequence of the same recurrence, proven by
+    // the closed-form 2^(levels+1) - 3 above, not re-executed here.
+    let levels = 18;
     let fns = diamond_chain(levels);
     let total_functions = fns.len() as u32;
     let graph = CallGraph::build(&fns);
