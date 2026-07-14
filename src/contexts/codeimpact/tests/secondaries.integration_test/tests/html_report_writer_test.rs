@@ -719,22 +719,22 @@ fn write_html_neutralizes_payload_in_a_folder_path_segment() {
 fn detail_carries_functions_with_location_and_cycle_flag() {
     let writer = HtmlReportWriter::new();
     let metrics = make_metrics(5, 5).with_function_details(vec![
-        FunctionDetail {
-            name: "a".to_string(),
-            location: CodeLocation::new("f.rs".into(), 10, 1),
-            direct: 1,
-            transitive: 2,
-            call_depth: 1,
-            in_cycle: false,
-        },
-        FunctionDetail {
-            name: "b".to_string(),
-            location: CodeLocation::new("f.rs".into(), 20, 1),
-            direct: 3,
-            transitive: 4,
-            call_depth: 2,
-            in_cycle: true,
-        },
+        FunctionDetail::new(
+            "a".to_string(),
+            CodeLocation::new("f.rs".into(), 10, 1),
+            1,
+            1,
+            1,
+            false,
+        ),
+        FunctionDetail::new(
+            "b".to_string(),
+            CodeLocation::new("f.rs".into(), 20, 1),
+            3,
+            1,
+            2,
+            true,
+        ),
     ]);
     let graph = graph_from(vec![("f.rs", metrics)]);
 
@@ -821,14 +821,14 @@ fn folder_ecological_class_is_recomputed_from_summed_co2() {
 fn write_html_neutralizes_payload_in_function_name() {
     let writer = HtmlReportWriter::new();
     let payload = "</script><script>alert(1)</script>";
-    let metrics = make_metrics(1, 1).with_function_details(vec![FunctionDetail {
-        name: payload.to_string(),
-        location: CodeLocation::new("f.rs".into(), 1, 1),
-        direct: 1,
-        transitive: 1,
-        call_depth: 1,
-        in_cycle: false,
-    }]);
+    let metrics = make_metrics(1, 1).with_function_details(vec![FunctionDetail::new(
+        payload.to_string(),
+        CodeLocation::new("f.rs".into(), 1, 1),
+        1,
+        0,
+        1,
+        false,
+    )]);
     let graph = graph_from(vec![("f.rs", metrics)]);
 
     let html = writer

@@ -54,16 +54,21 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Détails par fonction ===").unwrap();
             for d in details {
-                let loc = if d.location.file_path().is_empty() {
-                    format!(":{}", d.location.line())
+                let loc = if d.location().file_path().is_empty() {
+                    format!(":{}", d.location().line())
                 } else {
-                    d.location.to_string()
+                    d.location().to_string()
                 };
-                let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                let cycle = if d.in_cycle() { " [cycle]" } else { "" };
                 writeln!(
                     writer,
                     "  {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                    d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                    d.name(),
+                    d.direct(),
+                    d.transitive(),
+                    d.call_depth(),
+                    cycle,
+                    loc
                 )
                 .unwrap();
             }
@@ -180,12 +185,17 @@ impl ConsoleReportWriter {
                 )
                 .unwrap();
                 for d in metrics.function_details() {
-                    let loc = d.location.to_string();
-                    let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                    let loc = d.location().to_string();
+                    let cycle = if d.in_cycle() { " [cycle]" } else { "" };
                     writeln!(
                         writer,
                         "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                        d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                        d.name(),
+                        d.direct(),
+                        d.transitive(),
+                        d.call_depth(),
+                        cycle,
+                        loc
                     )
                     .unwrap();
                 }

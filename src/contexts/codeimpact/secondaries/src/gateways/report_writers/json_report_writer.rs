@@ -174,16 +174,16 @@ pub fn serialize_metrics(
         .function_details()
         .iter()
         .map(|d: &FunctionDetail| FunctionDetailDto {
-            name: d.name.clone(),
+            name: d.name().to_string(),
             location: LocationDto {
-                file: d.location.file_path().to_string(),
-                line: d.location.line(),
-                col: d.location.col(),
+                file: d.location().file_path().to_string(),
+                line: d.location().line(),
+                col: d.location().col(),
             },
-            direct: d.direct,
-            transitive: d.transitive,
-            call_depth: d.call_depth,
-            in_cycle: d.in_cycle,
+            direct: d.direct(),
+            transitive: d.transitive(),
+            call_depth: d.call_depth(),
+            in_cycle: d.in_cycle(),
         })
         .collect();
 

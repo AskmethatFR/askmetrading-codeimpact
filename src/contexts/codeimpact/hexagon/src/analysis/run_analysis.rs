@@ -126,10 +126,7 @@ impl RunAnalysis {
         let updated_details: Vec<super::code_metrics::FunctionDetail> = metrics
             .function_details()
             .iter()
-            .map(|d| super::code_metrics::FunctionDetail {
-                location: CodeLocation::new(file_path.clone(), d.location.line(), d.location.col()),
-                ..d.clone()
-            })
+            .map(|d| d.clone().with_location(file_path.clone()))
             .collect();
 
         let updated_io: Vec<IoInLoopWarning> = metrics

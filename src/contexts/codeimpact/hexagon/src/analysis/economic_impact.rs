@@ -275,14 +275,14 @@ mod tests {
             20,
             1,
             vec![],
-            vec![FunctionDetail {
-                name: "main".to_string(),
-                location: CodeLocation::new(String::new(), 1, 1),
-                direct: 5,
-                transitive: 20,
-                call_depth: 1,
-                in_cycle: false,
-            }],
+            vec![FunctionDetail::new(
+                "main".to_string(),
+                CodeLocation::new(String::new(), 1, 1),
+                5,
+                15,
+                1,
+                false,
+            )],
         );
         let fns = vec![make_fn("main", 5, false, vec![])];
         let graph = CallGraph::build(&fns);

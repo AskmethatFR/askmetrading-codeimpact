@@ -457,12 +457,12 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                     .function_details()
                     .iter()
                     .map(|f| FunctionVm {
-                        name: f.name.clone(),
-                        direct: f.direct,
-                        transitive: f.transitive,
-                        depth: f.call_depth,
-                        loc: f.location.to_string(),
-                        in_cycle: f.in_cycle,
+                        name: f.name().to_string(),
+                        direct: f.direct(),
+                        transitive: f.transitive(),
+                        depth: f.call_depth(),
+                        loc: f.location().to_string(),
+                        in_cycle: f.in_cycle(),
                     })
                     .collect(),
                 warnings: metrics.warnings().iter().map(to_warning_vm).collect(),

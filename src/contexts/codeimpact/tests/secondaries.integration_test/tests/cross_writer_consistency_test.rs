@@ -32,15 +32,15 @@ use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonRe
 ///         C(b)=1+1=2     T(b)=1       hidden(b)=0
 ///   PROJECT: ΣC=8  ΣT=9  hidden CORRECT=3 (not max(0,9-8)=1, not
 ///            max(0,8-6)+max(0,1-2)=2)
-fn detail(name: &str, file: &str, direct: u32, transitive: u32, call_depth: usize) -> FunctionDetail {
-    FunctionDetail {
-        name: name.to_string(),
-        location: CodeLocation::new(file.to_string(), 1, 1),
+fn detail(name: &str, file: &str, direct: u32, hidden: u32, call_depth: usize) -> FunctionDetail {
+    FunctionDetail::new(
+        name.to_string(),
+        CodeLocation::new(file.to_string(), 1, 1),
         direct,
-        transitive,
+        hidden,
         call_depth,
-        in_cycle: false,
-    }
+        false,
+    )
 }
 
 fn a_project_graph() -> FileConsumptionGraph {
@@ -49,12 +49,9 @@ fn a_project_graph() -> FileConsumptionGraph {
         8,
         1,
         vec![],
-        vec![
-            detail("f1", "a.rs", 2, 5, 1),
-            detail("f2", "a.rs", 3, 3, 0),
-        ],
+        vec![detail("f1", "a.rs", 2, 3, 1), detail("f2", "a.rs", 3, 0, 0)],
     );
-    let b = CodeMetrics::with_call_graph(2, 1, 0, vec![], vec![detail("g", "b.rs", 1, 1, 0)]);
+    let b = CodeMetrics::with_call_graph(2, 1, 0, vec![], vec![detail("g", "b.rs", 1, 0, 0)]);
 
     FileConsumptionGraph::build(
         &[(PathBuf::from("a.rs"), a), (PathBuf::from("b.rs"), b)],

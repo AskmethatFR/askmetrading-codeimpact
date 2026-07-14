@@ -183,14 +183,14 @@ fn hidden_complexity_increases_memory() {
             20, // transitive
             1,  // max depth
             vec![],
-            vec![FunctionDetail {
-                name: "main".to_string(),
-                location: CodeLocation::new(String::new(), 1, 1),
-                direct: 5,
-                transitive: 20,
-                call_depth: 1,
-                in_cycle: false,
-            }],
+            vec![FunctionDetail::new(
+                "main".to_string(),
+                CodeLocation::new(String::new(), 1, 1),
+                5,
+                15,
+                1,
+                false,
+            )],
         );
         m = m.with_warnings(vec![]);
         m
