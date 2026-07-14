@@ -8,14 +8,26 @@ use codeimpact_hexagon::analysis::{
 // 2. nested_loops_detected — fn with has_nested_loop → Warning
 // 3. deep_call_chain_detected — chain depth > max_call_depth → Warning
 // 4. hidden_complexity_detected — callee transitive > caller direct * ratio → Warning
-// 5. recursion_direct_detected — fn calling itself → Critical
-// 6. recursion_indirect_detected — cycle A→B→A → Critical
+// 5. recursion_direct_detected — fn calling itself → Recursion, Warning (#47: not
+//    Critical — bounded tree/graph descent is a normal pattern, not evidence of
+//    an unbounded/dangerous recursion the detector has actually established)
+// 6. recursion_indirect_detected — cycle A→B→A → Recursion, Warning (#47, same)
 // 7. large_match_detected — match_arms > max_match_arms → Warning
 // 8. deep_conditional_detected — depth > max_conditional_depth → Warning
 // 9. clean_code_no_warnings — no pattern triggers
 // 10. detection_config_defaults — sensible default values
 // 11. quadratic_loop_skipped_when_callee_has_no_loop — no false positive
 // 12. multiple_warnings_on_same_function — multiple patterns can fire
+// 13. quadratic_loop_not_flagged_on_recursive_tree_descent (#47) — a
+//     self-recursive fn (has_cycle) whose loop iterates its own children is a
+//     tree descent (O(n)), not O(n²) — QuadraticLoop must NOT fire, Recursion must
+// 14. quadratic_loop_not_flagged_when_caller_also_calls_recursive_helper (#47) —
+//     a fn that calls a non-recursive loop-having helper AND, elsewhere, a
+//     recursive tree-descending helper (models build_tree → sort_children +
+//     aggregate) must NOT be flagged QuadraticLoop for the non-recursive call
+// 15. quadratic_loop_still_detected_with_unrelated_recursion_elsewhere (#47) —
+//     a genuine quadratic pair must still be flagged even when the SAME file
+//     contains an unrelated recursive pair the caller never calls
 
 fn make_fn(
     name: &str,
@@ -152,7 +164,8 @@ fn recursion_direct_detected() {
         .collect();
     assert_eq!(rec.len(), 1);
     assert_eq!(rec[0].function, "self_call");
-    assert_eq!(rec[0].severity, WarningSeverity::Critical);
+    // #47: Recursion is Warning, not Critical — see rationale at test #5.
+    assert_eq!(rec[0].severity, WarningSeverity::Warning);
 }
 
 // === 6. Recursion indirect ===
@@ -173,6 +186,8 @@ fn recursion_indirect_detected() {
     assert_eq!(rec.len(), 2);
     assert!(rec.iter().any(|w| w.function == "a"));
     assert!(rec.iter().any(|w| w.function == "b"));
+    // #47: Recursion is Warning, not Critical — see rationale at test #5.
+    assert!(rec.iter().all(|w| w.severity == WarningSeverity::Warning));
 }
 
 // === 7. LargeMatch ===
@@ -275,4 +290,81 @@ fn multiple_warnings_on_same_function() {
     assert!(warnings
         .iter()
         .any(|w| matches!(w.pattern, WarningPattern::DeepConditional)));
+}
+
+// === 13. QuadraticLoop not flagged on recursive tree descent (#47) ===
+#[test]
+fn quadratic_loop_not_flagged_on_recursive_tree_descent() {
+    // Models view_model.rs::aggregate: a postorder recursion over a tree —
+    // the loop iterates the node's children, the recursive call descends.
+    // Each node is visited exactly once: O(n), not O(n²).
+    let fns = vec![make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0)];
+    let graph = CallGraph::build(&fns);
+    let config = DetectionConfig::default();
+    let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+    assert!(!warnings
+        .iter()
+        .any(|w| matches!(w.pattern, WarningPattern::QuadraticLoop)));
+    assert!(warnings
+        .iter()
+        .any(|w| matches!(w.pattern, WarningPattern::Recursion) && w.function == "aggregate"));
+}
+
+// === 14. QuadraticLoop not flagged when caller also drives a recursive helper (#47) ===
+#[test]
+fn quadratic_loop_not_flagged_when_caller_also_calls_recursive_helper() {
+    // Models view_model.rs::build_tree: calls sort_children (a non-recursive
+    // loop over the whole node set, bounded per-node work) and, separately,
+    // aggregate (a recursive tree descent). build_tree's own loop and
+    // sort_children's loop are sequential passes over the same tree, not
+    // nested — and build_tree also drives a genuine recursive descent, which
+    // is evidence it orchestrates a tree structure rather than nesting an
+    // unrelated quadratic pass.
+    let fns = vec![
+        make_fn(
+            "build_tree",
+            1,
+            vec!["sort_children", "aggregate"],
+            true,
+            false,
+            0,
+            0,
+        ),
+        make_fn("sort_children", 1, vec![], true, false, 0, 0),
+        make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0),
+    ];
+    let graph = CallGraph::build(&fns);
+    let config = DetectionConfig::default();
+    let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+    assert!(!warnings.iter().any(
+        |w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "build_tree"
+    ));
+}
+
+// === 15. Genuine quadratic loop still detected despite unrelated recursion elsewhere (#47) ===
+#[test]
+fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
+    // Non-regression: the recursion-based exclusion must be scoped to the
+    // caller's OWN calls — an unrelated recursive pair elsewhere in the same
+    // file, that the caller never calls, must not suppress a genuine
+    // quadratic pair.
+    let fns = vec![
+        make_fn("process_items", 1, vec!["validate"], true, false, 0, 0),
+        make_fn("validate", 1, vec![], true, false, 0, 0),
+        make_fn("a", 1, vec!["b"], false, false, 0, 0),
+        make_fn("b", 1, vec!["a"], false, false, 0, 0),
+    ];
+    let graph = CallGraph::build(&fns);
+    let config = DetectionConfig::default();
+    let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+    let quad: Vec<&ComplexityWarning> = warnings
+        .iter()
+        .filter(|w| matches!(w.pattern, WarningPattern::QuadraticLoop))
+        .collect();
+    assert_eq!(quad.len(), 1);
+    assert_eq!(quad[0].function, "process_items");
+    assert_eq!(quad[0].severity, WarningSeverity::Critical);
 }

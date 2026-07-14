@@ -390,7 +390,9 @@ mod tests {
             .collect();
         assert_eq!(rec.len(), 1);
         assert_eq!(rec[0].function, "self_call");
-        assert_eq!(rec[0].severity, WarningSeverity::Critical);
+        // #47: Recursion is Warning, not Critical — bounded tree/graph descent
+        // is a normal pattern, not an established unbounded-recursion risk.
+        assert_eq!(rec[0].severity, WarningSeverity::Warning);
     }
 
     #[test]
@@ -410,6 +412,7 @@ mod tests {
         assert_eq!(rec.len(), 2);
         assert!(rec.iter().any(|w| w.function == "a"));
         assert!(rec.iter().any(|w| w.function == "b"));
+        assert!(rec.iter().all(|w| w.severity == WarningSeverity::Warning));
     }
 
     #[test]
@@ -505,5 +508,65 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|w| matches!(w.pattern, WarningPattern::DeepConditional)));
+    }
+
+    #[test]
+    fn quadratic_loop_not_flagged_on_recursive_tree_descent() {
+        let fns = vec![make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0)];
+        let graph = CallGraph::build(&fns);
+        let config = DetectionConfig::default();
+        let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+        assert!(!warnings
+            .iter()
+            .any(|w| matches!(w.pattern, WarningPattern::QuadraticLoop)));
+        assert!(warnings.iter().any(
+            |w| matches!(w.pattern, WarningPattern::Recursion) && w.function == "aggregate"
+        ));
+    }
+
+    #[test]
+    fn quadratic_loop_not_flagged_when_caller_also_calls_recursive_helper() {
+        let fns = vec![
+            make_fn(
+                "build_tree",
+                1,
+                vec!["sort_children", "aggregate"],
+                true,
+                false,
+                0,
+                0,
+            ),
+            make_fn("sort_children", 1, vec![], true, false, 0, 0),
+            make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0),
+        ];
+        let graph = CallGraph::build(&fns);
+        let config = DetectionConfig::default();
+        let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+        assert!(!warnings.iter().any(
+            |w| matches!(w.pattern, WarningPattern::QuadraticLoop) && w.function == "build_tree"
+        ));
+    }
+
+    #[test]
+    fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
+        let fns = vec![
+            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0),
+            make_fn("validate", 1, vec![], true, false, 0, 0),
+            make_fn("a", 1, vec!["b"], false, false, 0, 0),
+            make_fn("b", 1, vec!["a"], false, false, 0, 0),
+        ];
+        let graph = CallGraph::build(&fns);
+        let config = DetectionConfig::default();
+        let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+        let quad: Vec<&ComplexityWarning> = warnings
+            .iter()
+            .filter(|w| matches!(w.pattern, WarningPattern::QuadraticLoop))
+            .collect();
+        assert_eq!(quad.len(), 1);
+        assert_eq!(quad[0].function, "process_items");
+        assert_eq!(quad[0].severity, WarningSeverity::Critical);
     }
 }
