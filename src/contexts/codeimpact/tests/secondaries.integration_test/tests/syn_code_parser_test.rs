@@ -516,6 +516,48 @@ fn non_self_receiver_method_call_stays_bare() {
     );
 }
 
+// D6 (#50, slice S3) — `#[cfg(test)] mod tests { ... }` is Rust's own test
+// harness, not production code: leaving it in makes every test function
+// enter production metrics (function count, call graph, hidden_complexity),
+// inflating cost/CO2 for code that never runs in production (ADR-0013: the
+// domain names the concept, the adapter — here, `#[cfg(test)]` — names the
+// Rust syntax that expresses it).
+// Test List:
+// 15. cfg_test_mod_is_excluded_from_parsing — the attribute is honored
+// 16. inline_mod_without_cfg_test_attribute_is_still_parsed — the exclusion
+//     is scoped to `cfg(test)`, not to inline `mod` in general (S1 already
+//     descends into legitimate inline mods; S3 must not throw that away)
+
+#[test]
+fn cfg_test_mod_is_excluded_from_parsing() {
+    let parser = SynCodeParser::new();
+    let source = "fn prod() {} #[cfg(test)] mod tests { fn t1() { if x {} } }";
+    let functions = parser.parse(source).unwrap();
+
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(functions[0].name, "prod");
+    let total_decision_points: u32 = functions.iter().map(|f| f.decision_points).sum();
+    assert_eq!(
+        total_decision_points, 0,
+        "t1's `if x {{}}` must not contribute a decision point — it was never parsed"
+    );
+    assert!(
+        !functions.iter().any(|f| f.name.contains("t1")),
+        "t1 must be absent, got {:?}",
+        functions
+    );
+}
+
+#[test]
+fn inline_mod_without_cfg_test_attribute_is_still_parsed() {
+    let parser = SynCodeParser::new();
+    let source = "mod util { fn helper() {} }";
+    let functions = parser.parse(source).unwrap();
+
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(functions[0].name, "util::helper");
+}
+
 #[test]
 fn quadratic_loop_detected_through_resolved_self_call() {
     let parser = SynCodeParser::new();
