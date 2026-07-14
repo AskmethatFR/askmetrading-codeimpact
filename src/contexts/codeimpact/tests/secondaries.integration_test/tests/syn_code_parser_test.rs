@@ -395,3 +395,12 @@ fn trait_default_method_is_qualified_by_trait_name_abstract_method_excluded() {
     assert_eq!(functions.len(), 1);
     assert_eq!(functions[0].name, "Tr::hook");
 }
+
+#[test]
+fn inline_mod_free_fn_is_qualified_by_mod_path() {
+    let parser = SynCodeParser::new();
+    let source = "mod inner { fn helper() { } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "inner::helper");
+}
