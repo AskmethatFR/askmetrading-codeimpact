@@ -1,5 +1,69 @@
+use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EconomicImpact;
+use codeimpact_hexagon::analysis::FunctionDetail;
+
+// Test List (hidden complexity — #46/#49, ADR-0012 follow-up):
+// 1. hidden_complexity() is the SUM of per-function hidden(), never a
+//    subtraction of the two file-level aggregates.
+// 2. hidden_complexity() is 0 when no function was measured (ADR-0010: no
+//    fabricated hidden complexity for data that was never collected).
+// 3. FunctionDetail::hidden() returns the measured value directly.
+// 4. FunctionDetail::transitive() is direct + hidden, derived.
+//
+// function_detail_hidden_panics_when_invariant_broken — DELETED (#46/#49
+// arbitration §2, Security HIGH-1): it pinned a debug_assert! that is
+// compiled OUT of a release binary (Security ran the exact test in
+// --release and it did not panic), so the guard it exercised never
+// protected a real user. Fields are now private and FunctionDetail::new()
+// takes (direct, hidden) with transitive() = direct + hidden derived — no
+// public constructor can build a FunctionDetail whose transitive is less
+// than its direct, so the illegal state is unconstructible and there is
+// nothing left for a runtime assertion to catch.
+
+fn detail(name: &str, direct: u32, hidden: u32) -> FunctionDetail {
+    FunctionDetail::new(
+        name.to_string(),
+        CodeLocation::new("a.rs".into(), 1, 1),
+        direct,
+        hidden,
+        0,
+        false,
+    )
+}
+
+#[test]
+fn hidden_complexity_is_the_sum_of_per_function_hidden() {
+    let details = vec![detail("f1", 2, 3), detail("f2", 3, 0)];
+    let m = CodeMetrics::with_call_graph(6, 8, 1, vec![], details);
+
+    assert_eq!(m.hidden_complexity(), 3, "hidden = 3 + 0 = 3");
+}
+
+#[test]
+fn hidden_is_zero_when_no_function_was_measured() {
+    // File-level cc=6, tc=8 would give a non-zero value under the OLD
+    // saturating_sub(transitive, cyclomatic) formula (8-6=2), but zero
+    // functions were ever measured here — hidden complexity cannot be
+    // reported for functions nobody looked at.
+    let m = CodeMetrics::with_call_graph(6, 8, 1, vec![], vec![]);
+
+    assert_eq!(m.hidden_complexity(), 0);
+}
+
+#[test]
+fn function_detail_hidden_returns_the_measured_value() {
+    let f = detail("f", 2, 3);
+
+    assert_eq!(f.hidden(), 3);
+}
+
+#[test]
+fn function_detail_transitive_is_direct_plus_hidden() {
+    let f = detail("f", 2, 3);
+
+    assert_eq!(f.transitive(), 5);
+}
 
 #[test]
 fn complexity_0_is_low() {

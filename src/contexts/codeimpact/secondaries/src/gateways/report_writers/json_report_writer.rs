@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use codeimpact_hexagon::analysis::complexity_level_for;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ComplexityWarning;
@@ -131,6 +132,14 @@ impl ReportWriter for JsonReportWriter {
         ))
     }
 
+    fn write_project_json(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError> {
+        serialize_project_metrics(graph, target)
+    }
+
     fn write_stress_test(
         &self,
         _run: &StressTestRun,
@@ -165,16 +174,16 @@ pub fn serialize_metrics(
         .function_details()
         .iter()
         .map(|d: &FunctionDetail| FunctionDetailDto {
-            name: d.name.clone(),
+            name: d.name().to_string(),
             location: LocationDto {
-                file: d.location.file_path().to_string(),
-                line: d.location.line(),
-                col: d.location.col(),
+                file: d.location().file_path().to_string(),
+                line: d.location().line(),
+                col: d.location().col(),
             },
-            direct: d.direct,
-            transitive: d.transitive,
-            call_depth: d.call_depth,
-            in_cycle: d.in_cycle,
+            direct: d.direct(),
+            transitive: d.transitive(),
+            call_depth: d.call_depth(),
+            in_cycle: d.in_cycle(),
         })
         .collect();
 
@@ -253,6 +262,51 @@ pub fn serialize_metrics(
             ecological_impact: ecological,
             warnings,
             io_in_loops,
+        },
+    };
+
+    serde_json::to_string_pretty(&output)
+        .map_err(|e| AnalysisError::AnalysisFailed(format!("JSON serialization error: {}", e)))
+}
+
+/// Serializes a project's `ProjectMetrics` (the single source of truth —
+/// `FileConsumptionGraph::aggregated_metrics()`) to the same JSON shape as a
+/// single file's metrics (ADR-0007: stable shape). Never fabricates a
+/// `CodeMetrics` to reuse `serialize_metrics` (ADR-0012) — the project has no
+/// `function_details`, no per-file location, and no single economic/
+/// ecological impact worth pretending is one file's.
+pub fn serialize_project_metrics(
+    graph: &FileConsumptionGraph,
+    target: &str,
+) -> Result<String, AnalysisError> {
+    let aggregated = graph.aggregated_metrics();
+    let timestamp = format_timestamp();
+
+    let output = JsonOutput {
+        tool: ToolInfo {
+            name: "codeimpact",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+        timestamp,
+        target: target.to_string(),
+        target_type: "project".to_string(),
+        metrics: MetricsDto {
+            cyclomatic_complexity: aggregated.total_cyclomatic_complexity,
+            transitive_complexity: aggregated.total_transitive_complexity,
+            hidden_complexity: aggregated.total_hidden_complexity,
+            max_call_depth: aggregated.max_call_depth,
+            complexity_level: complexity_level_for(aggregated.total_cyclomatic_complexity)
+                .to_string(),
+            functions_with_cycles: aggregated
+                .files_with_cycles
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect(),
+            function_details: vec![],
+            economic_impact: None,
+            ecological_impact: None,
+            warnings: vec![],
+            io_in_loops: vec![],
         },
     };
 

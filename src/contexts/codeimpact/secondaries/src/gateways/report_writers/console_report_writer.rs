@@ -54,16 +54,21 @@ impl ConsoleReportWriter {
             writeln!(writer).unwrap();
             writeln!(writer, "=== Détails par fonction ===").unwrap();
             for d in details {
-                let loc = if d.location.file_path().is_empty() {
-                    format!(":{}", d.location.line())
+                let loc = if d.location().file_path().is_empty() {
+                    format!(":{}", d.location().line())
                 } else {
-                    d.location.to_string()
+                    d.location().to_string()
                 };
-                let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                let cycle = if d.in_cycle() { " [cycle]" } else { "" };
                 writeln!(
                     writer,
                     "  {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                    d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                    d.name(),
+                    d.direct(),
+                    d.transitive(),
+                    d.call_depth(),
+                    cycle,
+                    loc
                 )
                 .unwrap();
             }
@@ -180,12 +185,17 @@ impl ConsoleReportWriter {
                 )
                 .unwrap();
                 for d in metrics.function_details() {
-                    let loc = d.location.to_string();
-                    let cycle = if d.in_cycle { " [cycle]" } else { "" };
+                    let loc = d.location().to_string();
+                    let cycle = if d.in_cycle() { " [cycle]" } else { "" };
                     writeln!(
                         writer,
                         "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                        d.name, d.direct, d.transitive, d.call_depth, cycle, loc
+                        d.name(),
+                        d.direct(),
+                        d.transitive(),
+                        d.call_depth(),
+                        cycle,
+                        loc
                     )
                     .unwrap();
                 }
@@ -279,6 +289,12 @@ impl ConsoleReportWriter {
             writer,
             "Complexité transitive totale: {}",
             aggregated.total_transitive_complexity
+        )
+        .unwrap();
+        writeln!(
+            writer,
+            "Complexité cachée totale: {}",
+            aggregated.total_hidden_complexity
         )
         .unwrap();
         writeln!(
@@ -431,6 +447,16 @@ impl ReportWriter for ConsoleReportWriter {
     fn write_project_report(&self, graph: &FileConsumptionGraph) -> Result<(), AnalysisError> {
         self.write_project_report_to(&mut std::io::stdout().lock(), graph);
         Ok(())
+    }
+
+    fn write_project_json(
+        &self,
+        graph: &FileConsumptionGraph,
+        target: &str,
+    ) -> Result<String, AnalysisError> {
+        // ConsoleReportWriter uses the same DTOs as JsonReportWriter (ADR-4.4)
+        use super::json_report_writer;
+        json_report_writer::serialize_project_metrics(graph, target)
     }
 
     fn write_stress_test(

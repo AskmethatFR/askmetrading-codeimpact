@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::{
-    CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass, FileConsumptionGraph,
-    FileDependency,
+    CodeLocation, CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass,
+    FileConsumptionGraph, FileDependency, FunctionDetail,
 };
 
 // ── Test List ──────────────────────────────────────────────────────────
@@ -34,6 +34,8 @@ use codeimpact_hexagon::analysis::{
 //  19. aggregated_ecological_impact — sums ecological impacts from all files
 //  20. aggregated_impacts_some_missing — skip files without impacts
 //  21. aggregated_impacts_all_missing — None when no file has impacts
+//  22. hotspot_files_counts_only_critical — mixed critical/high/low files,
+//      hotspot_files counts only the "critical" ones (#46/#49 follow-up)
 //
 // total_dependencies / max_depth:
 //  18. graph_with_chain — correct depth and count
@@ -511,4 +513,83 @@ fn aggregated_impacts_all_missing_returns_none() {
     let pm = graph.aggregated_metrics();
     assert!(pm.total_economic_impact.is_none());
     assert!(pm.total_ecological_impact.is_none());
+}
+
+// #46/#49 follow-up (QA gap): hotspot_files is a new branch introduced when
+// aggregated_metrics() became the single source of truth for the "critical"
+// count. Every other fixture in this file uses cc <= 10, so the "critical"
+// branch (cc > 40) was never exercised. This fixture mixes critical, high,
+// and low files so the count discriminates against both "critical" ->
+// "high" and a deleted increment.
+#[test]
+fn aggregated_metrics_hotspot_files_counts_only_critical() {
+    let files = vec![
+        (path("a.rs"), make_metrics(45, 45)), // critical (> 40)
+        (path("b.rs"), make_metrics(25, 25)), // high (21..=40)
+        (path("c.rs"), make_metrics(35, 35)), // high (21..=40)
+        (path("d.rs"), make_metrics(5, 5)),   // low (0..=10)
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let pm = graph.aggregated_metrics();
+
+    assert_eq!(pm.hotspot_files, 1);
+}
+
+// #46/#49 (ADR-0012): total_hidden_complexity is additive across files/
+// functions, never re-derived by subtracting the two file-level aggregates
+// (ΣT - ΣC, which would give max(0, 9-8) = 1 on this fixture instead of 3).
+#[test]
+fn project_hidden_equals_sum_of_file_hidden() {
+    let files = vec![
+        (
+            path("a.rs"),
+            CodeMetrics::with_call_graph(
+                6,
+                8,
+                1,
+                vec![],
+                vec![
+                    FunctionDetail::new(
+                        "f1".into(),
+                        CodeLocation::new("a.rs".into(), 1, 1),
+                        2,
+                        3,
+                        1,
+                        false,
+                    ),
+                    FunctionDetail::new(
+                        "f2".into(),
+                        CodeLocation::new("a.rs".into(), 2, 1),
+                        3,
+                        0,
+                        0,
+                        false,
+                    ),
+                ],
+            ),
+        ),
+        (
+            path("b.rs"),
+            CodeMetrics::with_call_graph(
+                2,
+                1,
+                0,
+                vec![],
+                vec![FunctionDetail::new(
+                    "g".into(),
+                    CodeLocation::new("b.rs".into(), 1, 1),
+                    1,
+                    0,
+                    0,
+                    false,
+                )],
+            ),
+        ),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let pm = graph.aggregated_metrics();
+
+    assert_eq!(pm.total_cyclomatic_complexity, 8);
+    assert_eq!(pm.total_transitive_complexity, 9);
+    assert_eq!(pm.total_hidden_complexity, 3);
 }

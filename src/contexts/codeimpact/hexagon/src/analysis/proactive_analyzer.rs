@@ -35,17 +35,17 @@ pub fn analyze(
         .iter()
         .map(|f| {
             let direct = call_graph.direct_of(&f.name);
-            let transitive = call_graph.transitive_of(&f.name);
+            let hidden = call_graph.hidden_of(&f.name);
             let call_depth = call_graph.call_chain_depth(&f.name);
             let in_cycle = call_graph.has_cycle(&f.name);
-            FunctionDetail {
-                name: f.name.clone(),
-                location: CodeLocation::new(String::new(), f.start_line, 1),
+            FunctionDetail::new(
+                f.name.clone(),
+                CodeLocation::new(String::new(), f.start_line, 1),
                 direct,
-                transitive,
+                hidden,
                 call_depth,
                 in_cycle,
-            }
+            )
         })
         .collect();
 

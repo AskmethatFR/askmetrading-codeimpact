@@ -126,10 +126,7 @@ impl RunAnalysis {
         let updated_details: Vec<super::code_metrics::FunctionDetail> = metrics
             .function_details()
             .iter()
-            .map(|d| super::code_metrics::FunctionDetail {
-                location: CodeLocation::new(file_path.clone(), d.location.line(), d.location.col()),
-                ..d.clone()
-            })
+            .map(|d| d.clone().with_location(file_path.clone()))
             .collect();
 
         let updated_io: Vec<IoInLoopWarning> = metrics
@@ -170,24 +167,8 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
     ) -> Result<String, AnalysisError> {
         let graph = self.build_project_graph(target, rules)?;
-        let aggregated = graph.aggregated_metrics();
-
-        // Build a single CodeMetrics from aggregated data for JSON serialization
-        let project_metrics = CodeMetrics::with_call_graph(
-            aggregated.total_cyclomatic_complexity,
-            aggregated.total_transitive_complexity,
-            aggregated.max_call_depth,
-            aggregated
-                .files_with_cycles
-                .iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect(),
-            vec![],
-        );
-
         let target_str = target.path().to_string_lossy();
-        self.reporter
-            .write_json(&project_metrics, &target_str, "project")
+        self.reporter.write_project_json(&graph, &target_str)
     }
 
     pub fn handle_project_html(

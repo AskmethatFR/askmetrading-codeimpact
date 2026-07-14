@@ -109,7 +109,7 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
 .banner-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 23px; letter-spacing: -0.01em; }
 
 .stat-grid {
-  display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px;
+  display: grid; grid-template-columns: repeat(9, 1fr); gap: 1px;
   background: var(--color-divider); border: 1px solid var(--color-divider);
   margin-bottom: var(--space-6);
 }

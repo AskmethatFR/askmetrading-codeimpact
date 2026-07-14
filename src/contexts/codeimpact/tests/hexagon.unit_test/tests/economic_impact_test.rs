@@ -4,7 +4,8 @@ use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReactiveAnalyzer;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::{
-    CodeLocation, CodeMetrics, ComplexityWarning, ParsedFunction, WarningPattern, WarningSeverity,
+    CodeLocation, CodeMetrics, ComplexityWarning, FunctionDetail, ParsedFunction, WarningPattern,
+    WarningSeverity,
 };
 
 // Test List:
@@ -172,13 +173,24 @@ fn loops_increase_memory() {
 #[test]
 fn hidden_complexity_increases_memory() {
     // direct=5, transitive=20 → hidden=15 → 15*200 = 3000 bytes
+    // hidden_complexity() sums per-function hidden (#46/#49, ADR-0012), so
+    // the fixture carries the one function it represents instead of an
+    // empty function_details (which would now correctly report hidden=0,
+    // per ADR-0010, since nothing was measured).
     let metrics = {
         let mut m = CodeMetrics::with_call_graph(
             5,  // direct
             20, // transitive
             1,  // max depth
             vec![],
-            vec![],
+            vec![FunctionDetail::new(
+                "main".to_string(),
+                CodeLocation::new(String::new(), 1, 1),
+                5,
+                15,
+                1,
+                false,
+            )],
         );
         m = m.with_warnings(vec![]);
         m

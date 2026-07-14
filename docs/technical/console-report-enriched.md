@@ -73,6 +73,7 @@ src/main.rs — complexité directe: 5, complexité transitive: 8, niveau: low
       [CRITICAL] read_file → I/O dans boucle: std::fs::read (src/reader.rs:10)
 src/utils.rs — complexité directe: 3, complexité transitive: 5, niveau: low
     parse — directe: 3, transitive: 5, profondeur: 1 (utils.rs:15)
+    complexité cachée dans les appels: 2
 
 === Chaînes de consommation ===
   src/main.rs → parse → process
@@ -85,6 +86,7 @@ Fichiers analysés: 2
 Dépendances totales: 3
 Complexité directe totale: 8
 Complexité transitive totale: 13
+Complexité cachée totale: 5
 Profondeur max de chaîne: 3
 Fichiers en cycle: 0
 
@@ -103,7 +105,7 @@ Niveau: low
 | Warnings | **Only if** per-file warnings non-empty | Indented `avertissements:` block with `[SEVERITY][PatternName]` lines |
 | I/O in loops | **Only if** per-file io_in_loops non-empty | Indented `I/O dans boucles:` block with `[CRITICAL]` lines |
 
-Hidden complexity is unconditional (always shown per file because it's always derivable as `transitive - direct`). Warnings and I/O sections are conditional to avoid clutter in clean files.
+Hidden complexity is unconditional (always shown per file). It is **measured** — the sum of `direct(g)` over the reachable subgraph, each distinct function counted once — never re-derived by subtracting two aggregates. See [[ADR-0012]]. Warnings and I/O sections are conditional to avoid clutter in clean files.
 
 ## Architecture Decisions
 
@@ -111,7 +113,7 @@ Hidden complexity is unconditional (always shown per file because it's always de
 |---|---|---|
 | **ADR-12.1** | `{:?}` Debug for pattern names | Zero-dep hexagon constraint — no `Display` trait import in domain. Debug is provided by `#[derive(Debug)]` on `WarningPattern` enum, which is already present and does not add dependencies. |
 | **ADR-12.2** | `_to(&mut dyn Write)` methods added | Testability — captures output to `Vec<u8>` buffer instead of stdout. Trait unchanged (`ReportWriter` still delegates to internal methods). |
-| **ADR-12.3** | Hidden complexity unconditional per file | Always derivable from `transitive - direct`. No cost to compute. Provides immediate signal even on clean code. |
+| **ADR-12.3** | Hidden complexity unconditional per file | **Measured** as the sum of each function's `hidden()` (`CallGraph::hidden_of` — a reachable-set sum, each distinct callee counted once). **Never** derived by subtracting file-level aggregates: file `direct` carries a `+1`-per-file that per-function `transitive` does not, so the subtraction mixes two units — see [[ADR-0012]]. No cost beyond the per-function sum already computed. Provides immediate signal even on clean code. |
 | **ADR-12.4** | Warnings/I/O conditional per file | Reduces noise — clean files show no empty sections. Follows "don't print what isn't there" principle. |
 
 ## Testability

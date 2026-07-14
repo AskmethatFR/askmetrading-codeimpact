@@ -26,14 +26,14 @@ fn make_metrics_with_impacts() -> CodeMetrics {
         8,
         2,
         vec!["foo".into()],
-        vec![codeimpact_hexagon::analysis::FunctionDetail {
-            name: "main".into(),
-            location: codeimpact_hexagon::analysis::CodeLocation::new("src/main.rs".into(), 1, 1),
-            direct: 5,
-            transitive: 8,
-            call_depth: 2,
-            in_cycle: false,
-        }],
+        vec![codeimpact_hexagon::analysis::FunctionDetail::new(
+            "main".into(),
+            codeimpact_hexagon::analysis::CodeLocation::new("src/main.rs".into(), 1, 1),
+            5,
+            3,
+            2,
+            false,
+        )],
     )
     .with_economic_impact(economic)
     .with_ecological_impact(ecological)

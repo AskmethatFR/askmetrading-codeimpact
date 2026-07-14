@@ -6,7 +6,8 @@
 |---|---|---|
 | AnalysisTarget | VO | Fichier ou projet soumis à l'analyse. Porte un `path` et un `TargetType` (File / Project). |
 | CodeLocation | VO | Position précise dans le code: `file_path`, `line`, `column`. Validée au constructeur (line >= 1, column >= 1). |
-| CodeMetrics | VO | Résultat de l'analyse proactive: complexité cyclomatique, complexité transitive, profondeur d'appel, warnings, impact économique. |
+| CodeMetrics | VO | Résultat de l'analyse proactive: complexité cyclomatique, complexité transitive, complexité cachée (somme additive des `hidden` par fonction — voir [[ADR-0012]]), profondeur d'appel, warnings, impact économique. |
+| FunctionDetail | VO | Métriques d'**une** fonction. Champs **privés**, construit par `new()`. Stocke `direct` et `hidden` ; **dérive** `transitive() = direct + hidden`. L'état illégal (`transitive < direct`) est donc **inconstructible**, y compris depuis un futur adaptateur FFI — impossibilité structurelle plutôt que garde-fou runtime. Voir [[ADR-0012]]. |
 | EconomicImpact | VO | Coût estimé: CPU (μ$), mémoire (bytes), coût total (μ$), niveau (low/moderate/high/critical). |
 | EconomicImpactEstimator | Domain Service | Calcule EconomicImpact à partir de CodeMetrics, ParsedFunction, et CallGraph via formules heuristiques. |
 | MicroDollars | Unité | 1 μ$ = 10⁻⁶ $. Unité de coût CPU basée sur le pricing cloud (~$0.10/CPU-heure). 1 μ$ ≈ 10⁷ cycles CPU. |
@@ -31,4 +32,8 @@
 | CallGraph | VO | Graphe d'appels entre fonctions, dérivé du parsing AST. Utilisé pour la complexité transitive et la profondeur. |
 | CyclomaticComplexity | Concept | Nombre de chemins linéairement indépendants dans le code. Mesure statique de complexité structurelle. |
 | TransitiveComplexity | Concept | Somme des complexités de toutes les fonctions appelées (directement ou indirectement). |
-| HiddenComplexity | Concept | Différence entre complexité transitive et directe. Complexité qui "se cache" dans les appels. |
+| HiddenComplexity | Concept | Complexité atteignable **à travers les appels** d'une fonction : `hidden(f) = Σ direct(g)` pour chaque `g` du **sous-graphe atteignable** depuis `f`, chaque fonction distincte comptée **une seule fois** (lire `g` deux fois n'est pas deux fois le travail). Toujours ≥ 0 par construction. **C'est une propriété de la FONCTION**, qui s'agrège **additivement** : `hidden(fichier) = Σ_f hidden(f)`, `hidden(projet) = Σ_fichiers hidden(fichier)`. Elle ne se calcule **jamais** en soustrayant deux agrégats (`ΣT − ΣC`) : `C` (fichier) et `T` (fonction) ne sont pas dans la même unité, et la soustraction exige un clamp qui masque les violations d'invariant. Voir [[ADR-0012]]. |
+| TransitiveComplexity | Concept | Coût de **compréhension** d'une fonction : `transitive(f) = direct(f) + hidden(f)`. Dérivée, jamais stockée — d'où `transitive ≥ direct` comme vérité arithmétique, sans garde-fou runtime. Bornée par la somme des complexités directes du fichier, donc non débordable par construction. Ce n'est **pas** une somme sur les chemins d'exécution (c'était le défaut corrigé par [[ADR-0012]]). |
+| ProjectMetrics | VO | **Unique source de vérité** des nombres de niveau-rapport (fichiers, complexités directe/transitive/cachée, profondeur, cycles, warnings, critiques, I/O-en-boucle, hotspots, impacts). Calculée une seule fois par `FileConsumptionGraph::aggregated_metrics()`. Les writers console, JSON et HTML la **rendent** — aucun n'a le droit de recalculer un agrégat. Voir [[ADR-0012]]. |
+| ComplexityWarning | VO | Avertissement de complexité **porteur d'une sévérité** (`Critical` / `Warning`). Compté par la tuile `Warnings`. |
+| IoInLoopWarning | VO | I/O détectée dans une boucle. **N'a PAS de sévérité** — l'agréger à un décompte de « critiques » est un non-sens (cause du défaut #49). Classe distincte, tuile distincte. Voir [[ADR-0012]]. |
