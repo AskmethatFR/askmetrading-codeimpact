@@ -126,6 +126,17 @@ fn type_last_segment(ty: &syn::Type) -> Option<String> {
     }
 }
 
+/// The trait name of an `impl Trait for Type` block (D1's fallback qualifier
+/// when `self_ty` has no nameable segment — a tuple, an array, ...). `None`
+/// for an inherent impl (`impl Type { ... }`, no `for Trait` clause), which
+/// has no trait to fall back to.
+fn trait_name(item_impl: &syn::ItemImpl) -> Option<String> {
+    item_impl
+        .trait_
+        .as_ref()
+        .and_then(|(_, path, _)| path.segments.last().map(|s| s.ident.to_string()))
+}
+
 /// Whether a method-call receiver is the bare identifier `self` — not
 /// `self.field` or any other expression. Only this exact shape is eligible
 /// for `self`-call resolution (D2, #50).
@@ -164,7 +175,7 @@ fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec
                 start_line: func.span().start().line,
             });
         } else if let syn::Item::Impl(item_impl) = item {
-            let qualifier = type_last_segment(&item_impl.self_ty);
+            let qualifier = type_last_segment(&item_impl.self_ty).or_else(|| trait_name(item_impl));
             for impl_item in &item_impl.items {
                 if let syn::ImplItem::Fn(method) = impl_item {
                     let name = match &qualifier {
