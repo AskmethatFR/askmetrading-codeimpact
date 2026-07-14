@@ -554,3 +554,139 @@ fn e2e_analyze_view_model_reports_no_quadratic_loop_warnings() {
         quadratic
     );
 }
+
+// Issue #48 — `--format json -o <file>` silently ignored `-o`: JSON was always
+// printed to stdout and the requested file was never created, no warning, no
+// error. HTML already honors `-o` (see the tests above); JSON must too, and
+// `-o` must behave consistently across every format.
+// Test List:
+// 1. --format json -o <path> writes the file; content is valid JSON and matches
+//    the expected shape (real RED first — reproduces the reported bug).
+// 2. --format json -o <path> does NOT also dump the JSON to stdout (consistent
+//    with the HTML branch, which prints a confirmation line, not the document).
+// 3. --format json -o <nonexistent-parent> fails cleanly, non-zero exit, no
+//    absolute path leak (ADR-0006) — same contract as the HTML branch.
+// 4. --format console -o <path> must not silently ignore -o either: it errors
+//    explicitly (console writes straight to stdout as a stream; wiring it to
+//    a file is a separate, larger port change — out of scope here per the
+//    architecture note. The consistent, non-silent choice is a clear refusal).
+
+#[test]
+fn e2e_analyze_json_format_with_output_writes_file() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output_path =
+        std::env::temp_dir().join(format!("codeimpact_report_{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&output_path);
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            fixture.to_str().unwrap(),
+            "--format",
+            "json",
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected for --format json -o. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\"tool\""),
+        "when -o is given, the JSON document should not also be dumped to stdout: {}",
+        stdout
+    );
+
+    let content =
+        std::fs::read_to_string(&output_path).expect("json output file should have been created");
+    let _ = std::fs::remove_file(&output_path);
+
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("file content should be valid JSON");
+    assert_eq!(json["tool"]["name"], "codeimpact");
+    assert_eq!(json["target_type"], "file");
+}
+
+#[test]
+fn e2e_analyze_json_format_output_to_nonexistent_dir_errors_without_path_leak() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let bogus_output = "/nonexistent_dir_xyz/report.json";
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            fixture.to_str().unwrap(),
+            "--format",
+            "json",
+            "-o",
+            bogus_output,
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "exit non-zero expected when the output directory does not exist. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("/nonexistent_dir_xyz"),
+        "error message must not leak the requested absolute path (ADR-0006): {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_console_format_with_output_flag_errors_instead_of_silently_ignoring() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output_path = std::env::temp_dir().join(format!(
+        "codeimpact_console_output_test_{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&output_path);
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            fixture.to_str().unwrap(),
+            "--format",
+            "console",
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        !output.status.success(),
+        "console format with -o should fail explicitly rather than silently ignore -o. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+    assert!(
+        !output_path.exists(),
+        "-o must not be silently ignored: no file should have been created for console format"
+    );
+}
