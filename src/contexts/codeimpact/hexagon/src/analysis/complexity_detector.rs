@@ -62,7 +62,7 @@ impl ComplexityDetector {
         config: &DetectionConfig,
     ) -> Vec<ComplexityWarning> {
         let mut warnings = Vec::new();
-        warnings.extend(Self::detect_quadratic_loops(functions));
+        warnings.extend(Self::detect_quadratic_loops(functions, call_graph));
         warnings.extend(Self::detect_nested_loops(functions));
         warnings.extend(Self::detect_deep_call_chains(functions, call_graph, config));
         warnings.extend(Self::detect_hidden_complexity(
@@ -74,7 +74,10 @@ impl ComplexityDetector {
         warnings
     }
 
-    fn detect_quadratic_loops(functions: &[ParsedFunction]) -> Vec<ComplexityWarning> {
+    fn detect_quadratic_loops(
+        functions: &[ParsedFunction],
+        call_graph: &CallGraph,
+    ) -> Vec<ComplexityWarning> {
         let loop_fns: std::collections::HashSet<&str> = functions
             .iter()
             .filter(|f| f.has_loop)
@@ -84,6 +87,15 @@ impl ComplexityDetector {
         let mut warnings = Vec::new();
         for f in functions {
             if !f.has_loop {
+                continue;
+            }
+            // A function that calls a recursive one (has_cycle — the same
+            // signal detect_recursion relies on) is coordinating a tree/graph
+            // descent, not nesting a second pass over the same collection:
+            // each node is visited once, O(n) not O(n²). This covers both
+            // self-recursion and an orchestrator that also calls an unrelated
+            // loop-having helper alongside its recursive one.
+            if f.calls.iter().any(|c| call_graph.has_cycle(c.as_str())) {
                 continue;
             }
             for callee in &f.calls {
@@ -195,7 +207,14 @@ impl ComplexityDetector {
             if call_graph.has_cycle(&f.name) {
                 warnings.push(ComplexityWarning {
                     pattern: WarningPattern::Recursion,
-                    severity: WarningSeverity::Critical,
+                    // #47: Warning, not Critical — the detector cannot establish
+                    // a recursion is unbounded/dangerous from static analysis
+                    // alone (actual depth is a runtime, data-dependent property,
+                    // e.g. a directory tree's height). A bounded tree/graph
+                    // descent is a normal, often the cleanest, pattern; crying
+                    // Critical on every recursive function is the same
+                    // over-alarming this issue fixes for QuadraticLoop.
+                    severity: WarningSeverity::Warning,
                     function: f.name.clone(),
                     location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: "récursion détectée".to_string(),
