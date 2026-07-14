@@ -616,6 +616,39 @@ impl TestRunnerPort for CargoTestRunner {
 mod tests {
     use super::*;
 
+    // #41 — `write_executable_script` opens the fake binary for writing,
+    // then the test hands it to `Command::new(binary)` (the exact
+    // production path, since `measure_cmd` executes the binary directly
+    // when there is no sampler — see `measure_cmd`/`measure_cmd_runs_
+    // binary_directly_when_no_sampler` above). `std::fs::write` closes
+    // its write fd before returning, so a single test writing then
+    // executing its OWN script never races itself. The race is
+    // cross-thread: `fork()` duplicates the WHOLE process's fd table,
+    // not just the calling thread's fds, so if some OTHER test's thread
+    // forks (to exec ITS OWN script) while THIS thread's write to ITS
+    // script is still in flight, the forked child transiently inherits
+    // a write-mode fd — closed by `O_CLOEXEC` only once THAT child's own
+    // `execve` completes, not at `fork()` time. Any exec landing in that
+    // narrow window sees a file "busy for writing" and gets `ETXTBSY`
+    // (os error 26), on whichever test the scheduler happened to
+    // interleave — which is exactly why a different test failed on each
+    // CI run, including on a docs-only PR that never touched this code.
+    //
+    // Rejected fix: invoking the fake binary through an interpreter
+    // (`sh <script>`) instead of executing it directly would sidestep
+    // ETXTBSY, but `measure_cmd` runs `Command::new(binary)` directly in
+    // production — routing the test through a shell would stop
+    // exercising the real path the bug lives in. Fixing the test
+    // helper's OWN concurrency (serializing the write-then-exec window)
+    // is the only option that keeps testing the real code.
+    static WRITE_THEN_EXEC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_write_then_exec() -> std::sync::MutexGuard<'static, ()> {
+        WRITE_THEN_EXEC_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     // Test List (build_cmd / measure_cmd — the build/measure seam, #36 bug 2):
     // 1. build_cmd never wraps in /usr/bin/time (unmeasured)
     // 2. build_cmd asks for --no-run (never executes the tests)
@@ -835,6 +868,7 @@ mod tests {
 
     #[test]
     fn run_with_timeout_does_not_deadlock_on_large_stdout() {
+        let _guard = lock_write_then_exec();
         let dir = tempfile::tempdir().expect("create temp dir");
         let script = big_output_script(dir.path(), "big_stdout.sh", "");
 
@@ -851,6 +885,7 @@ mod tests {
 
     #[test]
     fn run_with_timeout_does_not_deadlock_on_large_stderr() {
+        let _guard = lock_write_then_exec();
         let dir = tempfile::tempdir().expect("create temp dir");
         let script = big_output_script(dir.path(), "big_stderr.sh", "1>&2");
 
@@ -890,6 +925,7 @@ mod tests {
             return;
         }
 
+        let _guard = lock_write_then_exec();
         let dir = tempfile::tempdir().expect("create temp dir");
         // `(sleep 30 &)` alone does NOT reproduce the escape this test
         // exists to catch: in a non-interactive `/bin/sh` script, job
@@ -1192,6 +1228,7 @@ mod tests {
 
     #[test]
     fn measure_test_binary_with_sampler_no_sampler_yields_unmeasurable() {
+        let _guard = lock_write_then_exec();
         let dir = tempfile::tempdir().expect("create temp dir");
         let binary = write_executable_script(
             dir.path(),
@@ -1225,6 +1262,7 @@ mod tests {
 
     #[test]
     fn measure_test_binary_with_sampler_errors_when_binary_crashes_without_summary_line() {
+        let _guard = lock_write_then_exec();
         let dir = tempfile::tempdir().expect("create temp dir");
         let binary = write_executable_script(
             dir.path(),
@@ -1244,6 +1282,7 @@ mod tests {
 
     #[test]
     fn measure_test_binary_with_sampler_still_succeeds_when_tests_fail_but_complete() {
+        let _guard = lock_write_then_exec();
         let dir = tempfile::tempdir().expect("create temp dir");
         let binary = write_executable_script(
             dir.path(),
