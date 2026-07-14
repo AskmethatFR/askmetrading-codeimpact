@@ -281,6 +281,30 @@ mod tests {
     use super::super::code_parser::ParsedFunction;
     use super::*;
 
+    // Test List — detect_quadratic_loops (#47 retry 1, nesting-aware rewrite):
+    // 1. quadratic_loop_detected_with_nested_call — nested call to a loop-having,
+    //    non-cyclic callee -> flagged (regression, was via f.calls before).
+    // 2. quadratic_loop_skipped_when_nested_callee_has_no_loop — nested call to a
+    //    non-looping callee -> not flagged.
+    // 3. quadratic_loop_not_flagged_for_sequential_non_nested_call — caller has a
+    //    loop and calls a loop-having callee, but NOT from inside the loop
+    //    (calls_in_loops empty) -> not flagged. Kills the naive "per-callee
+    //    has_cycle scoped to f.calls" fix, which has no nesting information and
+    //    would wrongly flag this (the callee here is not even cyclic).
+    // 4. quadratic_loop_not_flagged_on_recursive_tree_descent — self-call nested
+    //    inside the loop AND cyclic -> excluded; Recursion still fires.
+    // 5. quadratic_loop_not_flagged_when_caller_also_calls_recursive_helper —
+    //    build_tree calls sort_children/aggregate but NEITHER nested in its loop
+    //    -> not flagged regardless of aggregate being cyclic (regression pin:
+    //    using f.calls instead of calls_in_loops would wrongly flag this).
+    // 6. quadratic_loop_still_detected_despite_nested_cyclic_helper — THE
+    //    adversarial case: caller nests calls to BOTH a genuine quadratic
+    //    partner and an unrelated cyclic helper, in the same loop -> still
+    //    flagged once, for the genuine partner only.
+    // 7. quadratic_loop_still_detected_with_unrelated_recursion_elsewhere —
+    //    genuine nested quadratic call, with a disconnected recursive pair
+    //    elsewhere in the codebase that never gets called -> still flagged.
+
     fn make_fn(
         name: &str,
         decision_points: u32,
@@ -304,9 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn quadratic_loop_detected() {
+    fn quadratic_loop_detected_with_nested_call() {
+        let mut process_items =
+            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
+        process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
         let fns = vec![
-            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0),
+            process_items,
             make_fn("validate", 1, vec![], true, false, 0, 0),
         ];
         let graph = CallGraph::build(&fns);
@@ -491,11 +518,34 @@ mod tests {
     }
 
     #[test]
-    fn quadratic_loop_skipped_when_callee_has_no_loop() {
+    fn quadratic_loop_skipped_when_nested_callee_has_no_loop() {
+        let mut process_items =
+            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
+        process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
         let fns = vec![
-            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0),
+            process_items,
             make_fn("validate", 1, vec![], false, false, 0, 0),
         ];
+        let graph = CallGraph::build(&fns);
+        let config = DetectionConfig::default();
+        let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+        let quad: Vec<&ComplexityWarning> = warnings
+            .iter()
+            .filter(|w| matches!(w.pattern, WarningPattern::QuadraticLoop))
+            .collect();
+        assert!(quad.is_empty());
+    }
+
+    #[test]
+    fn quadratic_loop_not_flagged_for_sequential_non_nested_call() {
+        // `caller` has a loop and calls `helper` (which also loops), but the
+        // call is a SEQUENTIAL statement after the loop, not nested inside it
+        // — calls_in_loops stays empty. `helper` is not even cyclic, so a
+        // naive "exclude only cyclic callees, scoped to f.calls" fix would
+        // still wrongly flag this: it has no notion of nesting at all.
+        let caller = make_fn("caller", 1, vec!["helper"], true, false, 0, 0);
+        let fns = vec![caller, make_fn("helper", 1, vec![], true, false, 0, 0)];
         let graph = CallGraph::build(&fns);
         let config = DetectionConfig::default();
         let warnings = ComplexityDetector::detect(&fns, &graph, &config);
@@ -531,7 +581,13 @@ mod tests {
 
     #[test]
     fn quadratic_loop_not_flagged_on_recursive_tree_descent() {
-        let fns = vec![make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0)];
+        let mut aggregate = make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0);
+        // The self-call is nested inside aggregate's own loop (e.g.
+        // `for child_id in &child_ids { aggregate(child_id) }`) — this is
+        // exactly the shape that must be excluded, and only because the
+        // nested callee is cyclic, not because it lacks a loop.
+        aggregate.calls_in_loops = vec![("aggregate".to_string(), 2, 5)];
+        let fns = vec![aggregate];
         let graph = CallGraph::build(&fns);
         let config = DetectionConfig::default();
         let warnings = ComplexityDetector::detect(&fns, &graph, &config);
@@ -569,9 +625,62 @@ mod tests {
     }
 
     #[test]
-    fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
+    fn quadratic_loop_still_detected_despite_nested_cyclic_helper() {
+        // `process_items` nests calls to BOTH a genuine quadratic partner
+        // (`validate_loop`) and an unrelated recursive helper
+        // (`self_recursive_helper`) inside the SAME loop. The recursive
+        // helper must be excluded on its own merits (it is cyclic); the
+        // genuine partner must still trigger the warning. The over-broad
+        // "any nested call is cyclic -> skip the whole function" fix fails
+        // this: it drops the check entirely the moment any nested callee is
+        // cyclic, including callees unrelated to the recursion.
+        let mut process_items = make_fn(
+            "process_items",
+            1,
+            vec!["validate_loop", "self_recursive_helper"],
+            true,
+            false,
+            0,
+            0,
+        );
+        process_items.calls_in_loops = vec![
+            ("validate_loop".to_string(), 2, 5),
+            ("self_recursive_helper".to_string(), 3, 5),
+        ];
         let fns = vec![
-            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0),
+            process_items,
+            make_fn("validate_loop", 1, vec![], true, false, 0, 0),
+            make_fn(
+                "self_recursive_helper",
+                1,
+                vec!["self_recursive_helper"],
+                true,
+                false,
+                0,
+                0,
+            ),
+        ];
+        let graph = CallGraph::build(&fns);
+        let config = DetectionConfig::default();
+        let warnings = ComplexityDetector::detect(&fns, &graph, &config);
+
+        let quad: Vec<&ComplexityWarning> = warnings
+            .iter()
+            .filter(|w| matches!(w.pattern, WarningPattern::QuadraticLoop))
+            .collect();
+        assert_eq!(quad.len(), 1);
+        assert_eq!(quad[0].function, "process_items");
+        assert_eq!(quad[0].severity, WarningSeverity::Critical);
+        assert!(quad[0].message.contains("validate_loop"));
+    }
+
+    #[test]
+    fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
+        let mut process_items =
+            make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
+        process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+        let fns = vec![
+            process_items,
             make_fn("validate", 1, vec![], true, false, 0, 0),
             make_fn("a", 1, vec!["b"], false, false, 0, 0),
             make_fn("b", 1, vec!["a"], false, false, 0, 0),
