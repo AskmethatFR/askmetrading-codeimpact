@@ -435,12 +435,10 @@ fn deep_diamond_chain_compute_depth_completes_quickly() {
         let _ = tx.send(graph.max_call_depth());
     });
 
-    let depth = rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect(
-            "compute_depth must be memoized: an unmemoized diamond chain at \
+    let depth = rx.recv_timeout(std::time::Duration::from_secs(5)).expect(
+        "compute_depth must be memoized: an unmemoized diamond chain at \
              levels=32 takes minutes, not seconds",
-        );
+    );
 
     // depth(f_i) = 2*i + 1 (f0 = 1, each level adds a1/b1 hop then f1's own
     // hop): the topmost f is always the deepest node in this fixture shape.

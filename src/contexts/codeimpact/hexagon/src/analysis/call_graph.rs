@@ -67,16 +67,13 @@ impl CallGraph {
             })
             .collect();
 
-        let max_depth = if edges.is_empty() {
-            0
-        } else {
-            let mut max = 0usize;
-            for name in edges.keys() {
-                let mut visited = HashSet::new();
-                let depth = Self::compute_depth(name, &edges, &cycle_nodes, &mut visited);
-                max = max.max(depth);
-            }
-            max
+        let max_depth = {
+            let mut depth_memo: HashMap<String, usize> = HashMap::new();
+            edges
+                .keys()
+                .map(|name| Self::compute_depth(name, &edges, &cycle_nodes, &mut depth_memo))
+                .max()
+                .unwrap_or(0)
         };
 
         Self {
@@ -120,8 +117,8 @@ impl CallGraph {
         if !self.edges.contains_key(name) {
             return 0;
         }
-        let mut visited = HashSet::new();
-        Self::compute_depth(name, &self.edges, &self.cycle_nodes, &mut visited)
+        let mut depth_memo = HashMap::new();
+        Self::compute_depth(name, &self.edges, &self.cycle_nodes, &mut depth_memo)
     }
 
     /// Sum of all transitive complexities.
@@ -256,20 +253,30 @@ impl CallGraph {
         }
     }
 
+    /// Depth of the deepest call chain starting at `name`, memoized: each
+    /// node's depth is computed once and cached, then reused by every other
+    /// path that reaches it. A prior version tracked a per-path `visited`
+    /// set instead of a cache — harmless for correctness (a cycle member
+    /// short-circuits below, before ever recursing into a callee, so no
+    /// call path can revisit itself) but useless for performance: it was
+    /// cleared on backtrack, so a diamond-shaped graph re-walked the same
+    /// shared subtree once per incoming path — O(2^levels) on a chain of
+    /// stacked diamonds (#52). The cache below is the fix: same shape as
+    /// `compute_transitive`'s memoization before `hidden_of` moved to
+    /// `reachable_from`.
     fn compute_depth(
         name: &str,
         edges: &HashMap<String, Vec<String>>,
         cycle_nodes: &HashSet<String>,
-        visited: &mut HashSet<String>,
+        memo: &mut HashMap<String, usize>,
     ) -> usize {
-        if visited.contains(name) {
-            return 0;
+        if let Some(&cached) = memo.get(name) {
+            return cached;
         }
-        visited.insert(name.to_string());
 
         // If in cycle, depth stops at this node
         if cycle_nodes.contains(name) {
-            visited.remove(name);
+            memo.insert(name.to_string(), 1);
             return 1;
         }
 
@@ -278,14 +285,15 @@ impl CallGraph {
             .map(|callees| {
                 callees
                     .iter()
-                    .map(|c| Self::compute_depth(c, edges, cycle_nodes, visited))
+                    .map(|c| Self::compute_depth(c, edges, cycle_nodes, memo))
                     .max()
                     .unwrap_or(0)
             })
             .unwrap_or(0);
 
-        visited.remove(name);
-        1 + max_child
+        let depth = 1 + max_child;
+        memo.insert(name.to_string(), depth);
+        depth
     }
 }
 
