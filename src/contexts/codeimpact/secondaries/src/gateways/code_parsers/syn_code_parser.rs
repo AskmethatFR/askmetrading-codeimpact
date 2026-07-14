@@ -385,13 +385,25 @@ impl FunctionVisitor {
             }
             syn::Expr::Call(call) => {
                 if let syn::Expr::Path(path) = call.func.as_ref() {
-                    let name = path
+                    let mut segments: Vec<String> = path
                         .path
                         .segments
                         .iter()
                         .map(|s| s.ident.to_string())
-                        .collect::<Vec<_>>()
-                        .join("::");
+                        .collect();
+                    // `Self::b(...)` — the leading `Self` segment is
+                    // rewritten to the enclosing type, so the recorded name
+                    // matches the callee's own qualified declaration (D2).
+                    // A `Type::b(...)` UFCS path already matches naturally
+                    // and needs no rewrite.
+                    if let (Some(first), Some(qualifier)) =
+                        (segments.first_mut(), &self.enclosing_type)
+                    {
+                        if first == "Self" {
+                            *first = qualifier.clone();
+                        }
+                    }
+                    let name = segments.join("::");
                     self.record_call(name, call.func.as_ref());
                 }
                 for arg in &call.args {
