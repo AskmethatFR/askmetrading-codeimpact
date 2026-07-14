@@ -41,6 +41,21 @@ use codeimpact_hexagon::analysis::ParsedFunction;
 //     total direct complexity BY CONSTRUCTION, so it can never overflow.
 //     Must hold in `--release` too (Security HIGH-1's whole point: no
 //     runtime guard survives release, so the metric itself must be honest).
+//     Runs at levels=32 (#52 follow-up): `compute_depth` is now memoized,
+//     so the exponential re-walk that forced the level=18 cap is gone.
+// 21. call_chain_depth_stays_correct_when_a_diamond_funnels_into_a_cycle →
+//     #52 follow-up: memoizing `compute_depth` must not change a single
+//     hand-computed depth — cycle members (short-circuit to depth 1),
+//     a linear chain into the cycle, AND a diamond that reaches the same
+//     cycle member via two different callers (the shared-subtree case the
+//     memo cache must serve identically to both callers).
+// 22. deep_diamond_chain_compute_depth_completes_quickly → #52: pins the
+//     PERFORMANCE characteristic memoization fixes. Un-memoized, this
+//     exact fixture shape at levels=32 takes minutes (2^32 re-walks); a
+//     wall-clock assertion would be brittle, so instead the computation
+//     runs on a background thread and the test bounds the WAIT via
+//     `recv_timeout` — generous enough to never flake on a loaded CI
+//     runner, yet far below what an un-memoized run would need.
 
 fn make_fn(name: &str, decision_points: u32, calls: Vec<&str>) -> ParsedFunction {
     ParsedFunction {
@@ -329,24 +344,18 @@ fn deep_diamond_chain_transitive_stays_bounded_by_total_direct() {
     // release, at ANY depth (the bound is `Σ direct`, monotonic and
     // non-negative — it cannot depend on how deep the chain is).
     //
-    // levels is capped at 18 (not 32) for this test's own runtime: `build()`
-    // also calls the pre-existing, un-memoized `compute_depth` for every
-    // node to compute `max_call_depth`, and `compute_depth` has the SAME
-    // unmemoized-shared-DAG blind spot this ticket fixes for `transitive`
-    // (it re-walks each diamond branch from scratch instead of caching by
-    // node), so it re-grows exponentially on this exact fixture shape and
-    // makes levels=32 take minutes. `compute_depth` is explicitly out of
-    // scope for #46/#49 (tech spec: "Do NOT touch compute_depth") — this is
-    // a latent, separate performance defect, not a correctness one; it does
-    // not threaten the u32 bound proven here, but a real deeply-diamond
-    // codebase could make analysis hang. Filed for a follow-up ticket
-    // (compute_depth needs the same memoized-visited-set treatment
-    // reachable_from now uses). levels=18 already shows the old formula
-    // overshooting by three orders of magnitude (524_285 vs a correct 55)
-    // while finishing in milliseconds; the u32-overflow magnitude at
-    // levels=32 is a direct consequence of the same recurrence, proven by
-    // the closed-form 2^(levels+1) - 3 above, not re-executed here.
-    let levels = 18;
+    // levels was capped at 18 (not 32) until #52: `build()` also calls
+    // `compute_depth` for every node to compute `max_call_depth`, and
+    // `compute_depth` had the SAME unmemoized-shared-DAG blind spot this
+    // ticket originally fixed for `transitive` (it re-walked each diamond
+    // branch from scratch instead of caching by node), so it re-grew
+    // exponentially on this exact fixture shape and made levels=32 take
+    // minutes. `compute_depth` is now memoized (see
+    // `deep_diamond_chain_compute_depth_completes_quickly` for the
+    // dedicated performance pin), so levels=32 — the level at which the
+    // OLD sum-over-paths formula would have overflowed `u32` — is back and
+    // runs in milliseconds.
+    let levels = 32;
     let fns = diamond_chain(levels);
     let total_functions = fns.len() as u32;
     let graph = CallGraph::build(&fns);
@@ -360,4 +369,80 @@ fn deep_diamond_chain_transitive_stays_bounded_by_total_direct() {
         top,
         total_functions
     );
+}
+
+// === 21. Diamond funneling into a cycle: memoization must not change a
+//         single hand-computed depth ===
+#[test]
+fn call_chain_depth_stays_correct_when_a_diamond_funnels_into_a_cycle() {
+    // a <-> b: a two-node cycle. `compute_depth` short-circuits a cycle
+    // member to depth 1 (it never looks past the cycle boundary) — that is
+    // pre-existing, unchanged behavior this test pins.
+    //   depth(a) = depth(b) = 1
+    // c1 and c2 both call straight into the cycle (through "a"), so the
+    // memo cache for "a" — computed once — must be reused identically for
+    // BOTH callers, not recomputed or poisoned on the second lookup:
+    //   depth(c1) = depth(c2) = 1 + depth(a) = 2
+    // "top" reaches the cycle via two DIFFERENT paths (a diamond over c1/
+    // c2), exercising the exact shared-subtree shape memoization must
+    // serve correctly:
+    //   depth(top) = 1 + max(depth(c1), depth(c2)) = 3
+    let fns = vec![
+        make_fn("a", 1, vec!["b"]),
+        make_fn("b", 1, vec!["a"]),
+        make_fn("c1", 1, vec!["a"]),
+        make_fn("c2", 1, vec!["a"]),
+        make_fn("top", 1, vec!["c1", "c2"]),
+    ];
+    let graph = CallGraph::build(&fns);
+
+    assert!(graph.has_cycle("a"));
+    assert!(graph.has_cycle("b"));
+    assert!(!graph.has_cycle("c1"));
+    assert!(!graph.has_cycle("c2"));
+    assert!(!graph.has_cycle("top"));
+
+    assert_eq!(graph.call_chain_depth("a"), 1);
+    assert_eq!(graph.call_chain_depth("b"), 1);
+    assert_eq!(graph.call_chain_depth("c1"), 2);
+    assert_eq!(graph.call_chain_depth("c2"), 2);
+    assert_eq!(graph.call_chain_depth("top"), 3);
+    assert_eq!(graph.max_call_depth(), 3);
+}
+
+// === 22. Deep diamond chain — compute_depth must be memoized ===
+#[test]
+fn deep_diamond_chain_compute_depth_completes_quickly() {
+    // Reproduces the #52 performance defect: `compute_depth` re-walked the
+    // same subtree once per incoming path with no cache, so a diamond
+    // stacked `levels` deep costs O(2^levels). At levels=18 this measured
+    // ~3.5s; at levels=32 the UNMEMOIZED code would take on the order of
+    // MINUTES. A literal wall-clock assertion on that magnitude is brittle
+    // (flaky under CI load) AND impractical to observe directly in a test
+    // run, so instead the computation is handed to a background thread and
+    // the test bounds the WAIT via `recv_timeout` — the same idiom already
+    // used in this codebase for exactly this class of problem (see
+    // `cargo_test_runner.rs`'s `run_with_timeout` tests). The bound below
+    // is generous (the memoized version finishes in low single-digit
+    // milliseconds) so it cannot flake, yet it is nowhere near what an
+    // un-memoized run of this fixture would need.
+    let levels = 32;
+    let fns = diamond_chain(levels);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let graph = CallGraph::build(&fns);
+        let _ = tx.send(graph.max_call_depth());
+    });
+
+    let depth = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect(
+            "compute_depth must be memoized: an unmemoized diamond chain at \
+             levels=32 takes minutes, not seconds",
+        );
+
+    // depth(f_i) = 2*i + 1 (f0 = 1, each level adds a1/b1 hop then f1's own
+    // hop): the topmost f is always the deepest node in this fixture shape.
+    assert_eq!(depth, 2 * levels + 1);
 }
