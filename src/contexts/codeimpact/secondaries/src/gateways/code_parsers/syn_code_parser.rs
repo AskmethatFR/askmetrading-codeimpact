@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use syn::spanned::Spanned;
 
@@ -106,7 +107,7 @@ impl SynCodeParser {
 struct FunctionVisitor {
     decision_points: u32,
     calls: Vec<String>,
-    calls_in_loops: Vec<(String, usize, usize)>,
+    calls_in_loops: Vec<LoopCall>,
     has_loop: bool,
     has_nested_loop: bool,
     max_depth: u32,
@@ -255,8 +256,12 @@ impl FunctionVisitor {
                     if self.loop_depth > 0 && is_io_call(&name) {
                         let span = call.func.span();
                         let line_col = span.start();
-                        self.calls_in_loops
-                            .push((name.clone(), line_col.line, line_col.column));
+                        self.calls_in_loops.push(LoopCall {
+                            name: name.clone(),
+                            line: line_col.line,
+                            col: line_col.column,
+                            is_io: true,
+                        });
                     }
                     self.calls.push(name);
                 }

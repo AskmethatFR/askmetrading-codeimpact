@@ -98,11 +98,12 @@ impl ComplexityDetector {
             // the cycle exclusion to the specific nested callee (not "any
             // call anywhere") means an unrelated recursive helper nested
             // alongside a genuine quadratic partner no longer masks it.
-            for (callee, _line, _col) in &f.calls_in_loops {
-                if call_graph.has_cycle(callee.as_str()) {
+            for call in &f.calls_in_loops {
+                let callee = call.name.as_str();
+                if call_graph.has_cycle(callee) {
                     continue;
                 }
-                if loop_fns.contains(callee.as_str()) {
+                if loop_fns.contains(callee) {
                     warnings.push(ComplexityWarning {
                         pattern: WarningPattern::QuadraticLoop,
                         severity: WarningSeverity::Critical,
@@ -281,7 +282,7 @@ impl ComplexityDetector {
 #[cfg(test)]
 mod tests {
     use super::super::call_graph::CallGraph;
-    use super::super::code_parser::ParsedFunction;
+    use super::super::code_parser::{LoopCall, ParsedFunction};
     use super::*;
 
     // Test List — detect_quadratic_loops (#47 retry 1, nesting-aware rewrite):
@@ -330,10 +331,21 @@ mod tests {
         }
     }
 
+    /// A nested call, as `detect_quadratic_loops` sees it. `is_io` is
+    /// irrelevant here — this detector only cares about the callee's name.
+    fn lc(name: &str, line: usize, col: usize) -> LoopCall {
+        LoopCall {
+            name: name.to_string(),
+            line,
+            col,
+            is_io: false,
+        }
+    }
+
     #[test]
     fn quadratic_loop_detected_with_nested_call() {
         let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
-        process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+        process_items.calls_in_loops = vec![lc("validate", 2, 5)];
         let fns = vec![
             process_items,
             make_fn("validate", 1, vec![], true, false, 0, 0),
@@ -522,7 +534,7 @@ mod tests {
     #[test]
     fn quadratic_loop_skipped_when_nested_callee_has_no_loop() {
         let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
-        process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+        process_items.calls_in_loops = vec![lc("validate", 2, 5)];
         let fns = vec![
             process_items,
             make_fn("validate", 1, vec![], false, false, 0, 0),
@@ -587,7 +599,7 @@ mod tests {
         // `for child_id in &child_ids { aggregate(child_id) }`) — this is
         // exactly the shape that must be excluded, and only because the
         // nested callee is cyclic, not because it lacks a loop.
-        aggregate.calls_in_loops = vec![("aggregate".to_string(), 2, 5)];
+        aggregate.calls_in_loops = vec![lc("aggregate", 2, 5)];
         let fns = vec![aggregate];
         let graph = CallGraph::build(&fns);
         let config = DetectionConfig::default();
@@ -645,10 +657,8 @@ mod tests {
             0,
             0,
         );
-        process_items.calls_in_loops = vec![
-            ("validate_loop".to_string(), 2, 5),
-            ("self_recursive_helper".to_string(), 3, 5),
-        ];
+        process_items.calls_in_loops =
+            vec![lc("validate_loop", 2, 5), lc("self_recursive_helper", 3, 5)];
         let fns = vec![
             process_items,
             make_fn("validate_loop", 1, vec![], true, false, 0, 0),
@@ -679,7 +689,7 @@ mod tests {
     #[test]
     fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
         let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
-        process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+        process_items.calls_in_loops = vec![lc("validate", 2, 5)];
         let fns = vec![
             process_items,
             make_fn("validate", 1, vec![], true, false, 0, 0),

@@ -1,5 +1,5 @@
 use codeimpact_hexagon::analysis::{
-    CallGraph, ComplexityDetector, ComplexityWarning, DetectionConfig, ParsedFunction,
+    CallGraph, ComplexityDetector, ComplexityWarning, DetectionConfig, LoopCall, ParsedFunction,
     WarningPattern, WarningSeverity,
 };
 
@@ -60,11 +60,22 @@ fn make_fn(
     }
 }
 
+/// A nested call, as `detect_quadratic_loops` sees it. `is_io` is
+/// irrelevant here — this detector only cares about the callee's name.
+fn lc(name: &str, line: usize, col: usize) -> LoopCall {
+    LoopCall {
+        name: name.to_string(),
+        line,
+        col,
+        is_io: false,
+    }
+}
+
 // === 1. QuadraticLoop ===
 #[test]
 fn quadratic_loop_detected_with_nested_call() {
     let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
-    process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+    process_items.calls_in_loops = vec![lc("validate", 2, 5)];
     let fns = vec![
         process_items,
         make_fn("validate", 1, vec![], true, false, 0, 0),
@@ -265,7 +276,7 @@ fn detection_config_defaults() {
 #[test]
 fn quadratic_loop_skipped_when_nested_callee_has_no_loop() {
     let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
-    process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+    process_items.calls_in_loops = vec![lc("validate", 2, 5)];
     let fns = vec![
         process_items,
         make_fn("validate", 1, vec![], false, false, 0, 0),
@@ -336,7 +347,7 @@ fn quadratic_loop_not_flagged_on_recursive_tree_descent() {
     // exactly the shape that must be excluded — and only because the nested
     // callee is cyclic, not because it lacks a loop.
     let mut aggregate = make_fn("aggregate", 1, vec!["aggregate"], true, false, 0, 0);
-    aggregate.calls_in_loops = vec![("aggregate".to_string(), 2, 5)];
+    aggregate.calls_in_loops = vec![lc("aggregate", 2, 5)];
     let fns = vec![aggregate];
     let graph = CallGraph::build(&fns);
     let config = DetectionConfig::default();
@@ -390,7 +401,7 @@ fn quadratic_loop_still_detected_with_unrelated_recursion_elsewhere() {
     // file, that the caller never calls, must not suppress a genuine
     // quadratic pair.
     let mut process_items = make_fn("process_items", 1, vec!["validate"], true, false, 0, 0);
-    process_items.calls_in_loops = vec![("validate".to_string(), 2, 5)];
+    process_items.calls_in_loops = vec![lc("validate", 2, 5)];
     let fns = vec![
         process_items,
         make_fn("validate", 1, vec![], true, false, 0, 0),
@@ -430,10 +441,8 @@ fn quadratic_loop_still_detected_despite_nested_cyclic_helper() {
         0,
         0,
     );
-    process_items.calls_in_loops = vec![
-        ("validate_loop".to_string(), 2, 5),
-        ("self_recursive_helper".to_string(), 3, 5),
-    ];
+    process_items.calls_in_loops =
+        vec![lc("validate_loop", 2, 5), lc("self_recursive_helper", 3, 5)];
     let fns = vec![
         process_items,
         make_fn("validate_loop", 1, vec![], true, false, 0, 0),

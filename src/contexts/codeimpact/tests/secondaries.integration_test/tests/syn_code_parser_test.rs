@@ -230,9 +230,9 @@ fn io_call_in_loop_is_tracked() {
         "fn test() {\n    for _ in 0..10 {\n        std::fs::read_to_string(\"f\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    let (call_name, line, _col) = &functions[0].calls_in_loops[0];
-    assert_eq!(call_name, "std::fs::read_to_string");
-    assert_eq!(*line, 3);
+    let call = &functions[0].calls_in_loops[0];
+    assert_eq!(call.name, "std::fs::read_to_string");
+    assert_eq!(call.line, 3);
 }
 
 #[test]
@@ -263,9 +263,9 @@ fn multiple_io_calls_in_loop_all_tracked() {
     let source = "fn test() {\n    for _ in 0..10 {\n        std::fs::read(\"a\");\n        std::net::TcpStream::connect(\"b\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 2);
-    assert_eq!(functions[0].calls_in_loops[0].0, "std::fs::read");
+    assert_eq!(functions[0].calls_in_loops[0].name, "std::fs::read");
     assert_eq!(
-        functions[0].calls_in_loops[1].0,
+        functions[0].calls_in_loops[1].name,
         "std::net::TcpStream::connect"
     );
 }
@@ -278,7 +278,7 @@ fn tokio_fs_call_in_loop_tracked() {
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     assert_eq!(
-        functions[0].calls_in_loops[0].0,
+        functions[0].calls_in_loops[0].name,
         "tokio::fs::read_to_string"
     );
 }
@@ -289,5 +289,5 @@ fn reqwest_call_in_loop_tracked() {
     let source = "fn test() {\n    for _ in 0..10 {\n        reqwest::get(\"url\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert_eq!(functions[0].calls_in_loops[0].0, "reqwest::get");
+    assert_eq!(functions[0].calls_in_loops[0].name, "reqwest::get");
 }
