@@ -580,3 +580,92 @@ fn quadratic_loop_detected_through_resolved_self_call() {
         warnings
     );
 }
+
+// BLOCKER 3 (#50 QA retry 1) — `type_last_segment`'s Reference/Paren/Group
+// fallback arms, and the `collect_functions` branch that consumes a `None`
+// qualifier, had no test at all. Per the D1 table:
+//   - `impl Trait for &Type` / `(Type)` -> last segment of the dereferenced
+//     type (the Reference/Paren recursion).
+//   - a `self_ty` that is NOT nameable (tuple, array, ...) -> fall back to
+//     the trait name (`Trait::foo`); failing that (inherent impl, no
+//     trait), the bare name (`foo`).
+// Test List:
+// 17. impl_trait_for_reference_type_dereferences_to_last_segment
+// 18. impl_trait_for_parenthesized_type_dereferences_to_last_segment
+// 19. impl_for_generic_collection_type_uses_container_name
+// 20. impl_trait_for_non_nameable_type_falls_back_to_trait_name
+// 21. inherent_impl_for_non_nameable_type_falls_back_to_bare_name
+
+#[test]
+fn impl_trait_for_reference_type_dereferences_to_last_segment() {
+    let parser = SynCodeParser::new();
+    let source =
+        "struct S; trait Fmt { fn fmt(&self); } impl Fmt for &S { fn fmt(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(
+        functions[0].name, "S::fmt",
+        "impl Trait for &Type must dereference to the pointee's last segment, got {:?}",
+        functions
+    );
+}
+
+#[test]
+fn impl_trait_for_parenthesized_type_dereferences_to_last_segment() {
+    let parser = SynCodeParser::new();
+    let source =
+        "struct S; trait Fmt { fn fmt(&self); } impl Fmt for (S) { fn fmt(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(
+        functions[0].name, "S::fmt",
+        "impl Trait for (Type) must dereference the parenthesized type to its last segment, got {:?}",
+        functions
+    );
+}
+
+#[test]
+fn impl_for_generic_collection_type_uses_container_name() {
+    let parser = SynCodeParser::new();
+    let source = "struct Vec<T> { items: Vec<T> } impl<T> Vec<T> { fn push(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(
+        functions[0].name, "Vec::push",
+        "impl on a generic container type must qualify by the container's own name, got {:?}",
+        functions
+    );
+}
+
+#[test]
+fn impl_trait_for_non_nameable_type_falls_back_to_trait_name() {
+    let parser = SynCodeParser::new();
+    // (i32, i32) is a tuple type: `type_last_segment` has no nameable
+    // segment for it (falls to `_ => None`). The abstract trait method
+    // has no default body, so only the impl's override is collected.
+    let source =
+        "trait Tr { fn foo(&self); } impl Tr for (i32, i32) { fn foo(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(
+        functions[0].name, "Tr::foo",
+        "a trait impl on a non-nameable self_ty must fall back to the trait's name, got {:?}",
+        functions
+    );
+}
+
+#[test]
+fn inherent_impl_for_non_nameable_type_falls_back_to_bare_name() {
+    let parser = SynCodeParser::new();
+    // An inherent impl (no `for Trait`) on a non-nameable self_ty (a fixed-
+    // size array type) has no trait to fall back to either — the bare
+    // method name is the only option left.
+    let source = "impl [i32; 3] { fn foo(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1, "got {:?}", functions);
+    assert_eq!(
+        functions[0].name, "foo",
+        "an inherent impl on a non-nameable self_ty with no trait must fall back to the bare method name, got {:?}",
+        functions
+    );
+}
