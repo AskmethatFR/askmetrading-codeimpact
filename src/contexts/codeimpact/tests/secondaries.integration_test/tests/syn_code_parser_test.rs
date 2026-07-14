@@ -377,3 +377,12 @@ fn impl_trait_for_type_uses_type_name_not_trait_name() {
     assert_eq!(functions.len(), 1);
     assert_eq!(functions[0].name, "S::fmt");
 }
+
+#[test]
+fn impl_with_generics_erases_generic_params() {
+    let parser = SynCodeParser::new();
+    let source = "struct Wrapper<T>(T); impl<T> Wrapper<T> { fn get(&self) { } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "Wrapper::get");
+}
