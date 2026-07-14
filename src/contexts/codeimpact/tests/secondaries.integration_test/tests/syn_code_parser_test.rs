@@ -423,3 +423,25 @@ fn duplicate_qualified_names_are_suffixed_not_clobbered() {
     let names: Vec<&str> = functions.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["S::f", "S::f#2"]);
 }
+
+#[test]
+fn free_fn_names_stay_bare() {
+    let parser = SynCodeParser::new();
+    let source = "fn a() { if x > 0 { } }\nfn b() { }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 2);
+    assert_eq!(functions[0].name, "a");
+    assert_eq!(functions[0].decision_points, 1);
+    assert_eq!(functions[1].name, "b");
+    assert_eq!(functions[1].decision_points, 0);
+}
+
+#[test]
+fn nested_fn_stays_folded_into_parent() {
+    let parser = SynCodeParser::new();
+    let source = "fn outer() { fn inner() { if x > 0 { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "outer");
+    assert_eq!(functions[0].decision_points, 1);
+}
