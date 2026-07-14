@@ -616,6 +616,91 @@ impl TestRunnerPort for CargoTestRunner {
 mod tests {
     use super::*;
 
+    // #41 — every test in this module that forks a child process (directly
+    // via `Command::new(...)`, or transitively through
+    // `run_with_timeout_with_budget`/`measure_test_binary_with_sampler`) is
+    // a hazard to every OTHER such test running concurrently on Rust's
+    // parallel test-thread pool — not only the tests that write a fake
+    // script and immediately exec it.
+    //
+    // `write_executable_script` opens the fake binary for writing, then
+    // hands it to `Command::new(binary)` (the exact production path, since
+    // `measure_cmd` executes the binary directly when there is no sampler
+    // — see `measure_cmd`/`measure_cmd_runs_binary_directly_when_no_
+    // sampler` above). `std::fs::write` closes its write fd before
+    // returning, so a single test writing then executing its OWN script
+    // never races itself.
+    //
+    // The trigger is ANY `fork()` in the process, not only one that itself
+    // execs a freshly-written script: `fork()` duplicates the WHOLE
+    // process's fd table — fds are process-global, shared by every thread,
+    // not owned by the thread that opened them. So if ANY other thread
+    // forks — to exec a script of its own, to run `python3 --version`, or
+    // anything else — while THIS thread's write to ITS OWN script is
+    // still in flight, the forked child transiently inherits a write-mode
+    // fd on THAT script. That duplicate keeps the script's inode "busy for
+    // writing" (Linux's `i_writecount`) until the forked child's OWN
+    // `execve` completes and closes it via `O_CLOEXEC` — not at `fork()`
+    // time, and not when the original writer closes its own fd. Any exec
+    // of that script landing in the window fails with `ETXTBSY` (os error
+    // 26) — even the ORIGINAL writer's own, correctly-closed, exec
+    // attempt. Which test loses the race depends on scheduling, so a
+    // different test fails on each CI run.
+    //
+    // #41 follow-up: a first fix serialized only the six tests that
+    // write-then-exec a script against EACH OTHER, and the CI still failed
+    // — on `run_with_timeout_does_not_deadlock_on_large_stderr`, one of
+    // those six. Root cause: `run_with_timeout_with_budget_does_not_hang_
+    // when_a_grandchild_holds_the_pipe_open` called `python3_available()`
+    // (its own `Command::new("python3")...status()`) BEFORE taking the
+    // lock. That bare fork — which writes no script and execs nothing of
+    // its own creation — could still land inside another thread's
+    // write-then-exec window and inherit a duplicate write fd on THAT
+    // thread's script, reproducing the exact bug this lock exists to
+    // prevent. `python3_available` now takes this same lock internally,
+    // so every caller gets it automatically instead of depending on the
+    // call site to remember.
+    //
+    // Rejected fixes:
+    // - Routing the fake binary through an interpreter (`sh <script>`)
+    //   instead of executing it directly would sidestep ETXTBSY, but
+    //   `measure_cmd` runs `Command::new(binary)` directly in production —
+    //   routing the test through a shell would stop exercising the real
+    //   path the bug lives in.
+    // - Write-to-temp-name + `fsync` + `rename()` into the final path
+    //   (rename is atomic and opens no fd on the destination) does NOT
+    //   close the race: `rename()` does not change the file's inode, and
+    //   Linux's writer-count (`i_writecount`) is tracked per-INODE, not
+    //   per-path. A concurrent fork that inherited a write-mode duplicate
+    //   of the fd on the temp name keeps the SAME inode "busy for writing"
+    //   after the rename, so the renamed path can still fail `ETXTBSY` —
+    //   the rename only changes which directory entry points at the
+    //   problem, not whether the problem exists. `fsync` also lengthens
+    //   the fd-open window (a real disk flush vs. a buffered write),
+    //   making the race MORE likely to overlap a concurrent fork, not
+    //   less.
+    // - Forcing the whole test binary single-threaded
+    //   (`RUST_TEST_THREADS=1`) would work, but only as a property of the
+    //   invoking command unless baked into `.cargo/config.toml`'s `[env]`
+    //   — and that setting is workspace-wide, serializing EVERY test in
+    //   EVERY crate (hexagon, primaries, secondaries) for a cost far
+    //   larger than the four fork call sites that actually race here.
+    //
+    // Residual risk: this lock is still call-site (or call-site-adjacent,
+    // for helpers like `python3_available`) discipline — a NEW test added
+    // later that spawns a `Command` without taking
+    // `lock_fork_in_test_binary()` reopens the same hazard. There is no
+    // Rust-level way to force every `Command::new` call in this module
+    // through a single choke point without a custom test harness or a
+    // dedicated lint, which is out of scope for this fix.
+    static FORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_fork_in_test_binary() -> std::sync::MutexGuard<'static, ()> {
+        FORK_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     // Test List (build_cmd / measure_cmd — the build/measure seam, #36 bug 2):
     // 1. build_cmd never wraps in /usr/bin/time (unmeasured)
     // 2. build_cmd asks for --no-run (never executes the tests)
@@ -835,6 +920,7 @@ mod tests {
 
     #[test]
     fn run_with_timeout_does_not_deadlock_on_large_stdout() {
+        let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
         let script = big_output_script(dir.path(), "big_stdout.sh", "");
 
@@ -851,6 +937,7 @@ mod tests {
 
     #[test]
     fn run_with_timeout_does_not_deadlock_on_large_stderr() {
+        let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
         let script = big_output_script(dir.path(), "big_stderr.sh", "1>&2");
 
@@ -890,6 +977,7 @@ mod tests {
             return;
         }
 
+        let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
         // `(sleep 30 &)` alone does NOT reproduce the escape this test
         // exists to catch: in a non-interactive `/bin/sh` script, job
@@ -1039,7 +1127,16 @@ mod tests {
         script
     }
 
+    // #41 follow-up — this forks (`Command::status()`), so it must take
+    // `lock_fork_in_test_binary()` itself: the caller checks availability
+    // BEFORE deciding whether to run the rest of its test body (see
+    // `run_with_timeout_with_budget_does_not_hang_when_a_grandchild_holds_
+    // the_pipe_open`), so the fork here happens before that test's own
+    // write-then-exec guard is taken. Guarding it internally means every
+    // caller — this one and any future one — is protected automatically,
+    // instead of depending on the call site to remember.
     fn python3_available() -> bool {
+        let _guard = lock_fork_in_test_binary();
         Command::new("python3")
             .arg("--version")
             .stdout(std::process::Stdio::null())
@@ -1192,6 +1289,7 @@ mod tests {
 
     #[test]
     fn measure_test_binary_with_sampler_no_sampler_yields_unmeasurable() {
+        let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
         let binary = write_executable_script(
             dir.path(),
@@ -1225,6 +1323,7 @@ mod tests {
 
     #[test]
     fn measure_test_binary_with_sampler_errors_when_binary_crashes_without_summary_line() {
+        let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
         let binary = write_executable_script(
             dir.path(),
@@ -1244,6 +1343,7 @@ mod tests {
 
     #[test]
     fn measure_test_binary_with_sampler_still_succeeds_when_tests_fail_but_complete() {
+        let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
         let binary = write_executable_script(
             dir.path(),
