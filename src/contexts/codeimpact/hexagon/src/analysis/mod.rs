@@ -12,6 +12,7 @@ mod errors;
 pub mod file_consumption_graph;
 pub mod io_in_loop_warning;
 pub mod io_in_loops_detector;
+mod measurement;
 mod output_format;
 pub mod proactive_analyzer;
 pub mod reactive_analyzer;

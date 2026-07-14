@@ -1,0 +1,42 @@
+/// Why a physical quantity (CPU time, memory) — or a file's source — could
+/// not be measured.
+///
+/// There is deliberately no `f64`/`u64` default for "not measured" (#36):
+/// a missing reading must be `Unmeasurable`, never a silent `0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnmeasurableReason {
+    /// No sampler (e.g. `/usr/bin/time`) was available, or the one that
+    /// ran produced output that could not be parsed into a reading.
+    NoSampler,
+    /// The run exercised zero tests. A run with nothing executed has no
+    /// honest cost to report, however well-sampled its process was (#39).
+    NoTestsExecuted,
+}
+
+impl std::fmt::Display for UnmeasurableReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSampler => write!(f, "aucun outil de mesure disponible"),
+            Self::NoTestsExecuted => write!(f, "aucun test exécuté"),
+        }
+    }
+}
+
+/// A physical quantity that either was sampled, or explicitly was not.
+///
+/// Replaces the previous convention of defaulting to `0` when a measurement
+/// tool was unavailable — `0` reads as "free", which is a lie (#36).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Measurement<T> {
+    Available(T),
+    Unmeasurable(UnmeasurableReason),
+}
+
+impl<T> Measurement<T> {
+    pub fn available(self) -> Option<T> {
+        match self {
+            Self::Available(value) => Some(value),
+            Self::Unmeasurable(_) => None,
+        }
+    }
+}
