@@ -103,7 +103,7 @@ Niveau: low
 | Warnings | **Only if** per-file warnings non-empty | Indented `avertissements:` block with `[SEVERITY][PatternName]` lines |
 | I/O in loops | **Only if** per-file io_in_loops non-empty | Indented `I/O dans boucles:` block with `[CRITICAL]` lines |
 
-Hidden complexity is unconditional (always shown per file because it's always derivable as `transitive - direct`). Warnings and I/O sections are conditional to avoid clutter in clean files.
+Hidden complexity is unconditional (always shown per file). It is **measured** — the sum of `direct(g)` over the reachable subgraph, each distinct function counted once — never re-derived by subtracting two aggregates. See [[ADR-0012]]. Warnings and I/O sections are conditional to avoid clutter in clean files.
 
 ## Architecture Decisions
 

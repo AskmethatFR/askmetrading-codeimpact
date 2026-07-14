@@ -99,8 +99,8 @@ The JSON report is the machine-readable output of `CodeImpact` analysis. It is p
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `cyclomatic_complexity` | integer | yes | Direct cyclomatic complexity |
-| `transitive_complexity` | integer | yes | Direct + callee complexity |
-| `hidden_complexity` | integer | yes | `transitive - direct` |
+| `transitive_complexity` | integer | yes | `direct + hidden` — cost of comprehension. Derived, never stored. See [[ADR-0012]] |
+| `hidden_complexity` | integer | yes | Sum of `direct(g)` over the **reachable subgraph**, each distinct function counted **once**. Aggregates additively. **Never** `transitive - direct` on aggregates — see [[ADR-0012]] |
 | `max_call_depth` | integer | yes | Maximum call chain depth |
 | `complexity_level` | string | yes | `"low"`, `"moderate"`, `"high"`, `"critical"` |
 | `functions_with_cycles` | string[] | yes | Function names in call cycles |
