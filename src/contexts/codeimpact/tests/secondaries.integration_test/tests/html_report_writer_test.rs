@@ -10,6 +10,8 @@ use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::ReportWriter;
+use codeimpact_hexagon::analysis::UnmeasurableFile;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_hexagon::analysis::WarningSeverity;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
@@ -1075,6 +1077,126 @@ fn tree_ids_are_relative_when_target_resolves_to_the_files_common_root() {
         "when target resolves (canonicalization/symlinks) to the files' common root, the tree \
          must nest the file under a short relative id, not the full absolute path exploded into a \
          single-child folder chain from the filesystem root: {}",
+        html
+    );
+}
+
+// ── BLOCKER 1 (#50 QA retry 1) — the HTML report never surfaced
+// unmeasurable_files: no flag, no count, nothing. AC-7 ("a file that could
+// not be measured must be reported as NOT MEASURED, never as trivial") was
+// satisfied in JSON and console, and NOT in HTML — the report's own
+// headline failure mode, reproduced one surface later, invisibly. ──
+//
+// Test List:
+// 1. the data island carries the unmeasurable file's path and count
+// 2. the data island carries the human-readable reason
+// 3. the renderer JS actually consumes data.unmeasurable_files (not merely
+//    embedded-and-ignored)
+// 4. a graph with zero unmeasurable files carries an empty array, no panic
+// 5. a script-breakout payload in the unmeasurable path is neutralized —
+//    same mechanism (json_island_escape + textContent-only rendering) as
+//    every other code-derived value in this report, reused, not reinvented
+
+#[test]
+fn write_html_surfaces_unmeasurable_files_path_and_count() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]).with_unmeasurable_files(vec![
+        UnmeasurableFile {
+            path: PathBuf::from("src/bad.rs"),
+            reason: UnmeasurableReason::SourceUnparseable,
+        },
+    ]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""unmeasurable_files":[{"path":"src/bad.rs""#),
+        "the unmeasurable file's path must be surfaced in the report's data, got: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_surfaces_unmeasurable_reason_in_human_readable_form() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]).with_unmeasurable_files(vec![
+        UnmeasurableFile {
+            path: PathBuf::from("src/bad.rs"),
+            reason: UnmeasurableReason::SourceUnparseable,
+        },
+    ]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("code source non analysable"),
+        "the unmeasurable file's reason must be surfaced in human-readable form (same as the \
+         console writer's Display text), got: {}",
+        html
+    );
+}
+
+#[test]
+fn rendered_js_consumes_unmeasurable_files_from_the_data_island() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("data.unmeasurable_files"),
+        "the renderer JS must actually consume unmeasurable_files, not merely embed it unused \
+         in the data island: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_no_unmeasurable_files_yields_empty_array_no_panic() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed for a project with no unmeasurable files");
+
+    assert!(
+        html.contains(r#""unmeasurable_files":[]"#),
+        "a project with no unmeasurable files must carry an empty array, not omit the field: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_neutralizes_script_breakout_payload_in_unmeasurable_path() {
+    let writer = HtmlReportWriter::new();
+    let payload = "</script><script>alert(1)</script>bad.rs";
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]).with_unmeasurable_files(vec![
+        UnmeasurableFile {
+            path: PathBuf::from(payload),
+            reason: UnmeasurableReason::SourceUnparseable,
+        },
+    ]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        !html.contains("</script><script>alert(1)</script>"),
+        "unmeasurable file path payload must not appear as a literal script breakout: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<script").count(),
+        2,
+        "unmeasurable file path payload must not add a third <script> tag: {}",
         html
     );
 }
