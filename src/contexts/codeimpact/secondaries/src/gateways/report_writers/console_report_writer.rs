@@ -283,6 +283,12 @@ impl ConsoleReportWriter {
         .unwrap();
         writeln!(
             writer,
+            "Complexité cachée totale: {}",
+            aggregated.total_hidden_complexity
+        )
+        .unwrap();
+        writeln!(
+            writer,
             "Profondeur max de chaîne: {}",
             aggregated.max_call_depth
         )
