@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::{
     CodeLocation, CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass,
-    FileConsumptionGraph, FileDependency, FunctionDetail,
+    FileConsumptionGraph, FileDependency, FunctionDetail, UnmeasurableFile, UnmeasurableReason,
 };
 
 // ── Test List ──────────────────────────────────────────────────────────
@@ -611,4 +611,53 @@ fn project_hidden_equals_sum_of_file_hidden() {
     assert_eq!(pm.total_cyclomatic_complexity, 8);
     assert_eq!(pm.total_transitive_complexity, 9);
     assert_eq!(pm.total_hidden_complexity, 3);
+}
+
+// D3 (#50 slice S4), test case 19 — a file that failed to parse or read is
+// a THIRD state, distinct from both "measured" and "nothing to measure"
+// (complexity_level() == "none"): it never even reaches CodeMetrics, so it
+// must be tracked separately and excluded from every sum, not silently
+// dropped (the ADR-0010 bug one layer up: run_analysis.rs used to drop a
+// failing file from the report entirely, undercounting total_files).
+// Test List:
+// 20. with_unmeasurable_files stores them; unmeasurable_files() returns
+//     them with their path and reason
+// 21. aggregated_metrics().unmeasurable_files counts them, total_files
+//     keeps counting only MEASURED files, sums are untouched by them
+
+#[test]
+fn with_unmeasurable_files_stores_and_returns_them() {
+    let files = vec![(path("a.rs"), make_metrics(5, 5))];
+    let unmeasurable = vec![UnmeasurableFile {
+        path: path("bad.rs"),
+        reason: UnmeasurableReason::SourceUnparseable,
+    }];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unmeasurable_files(unmeasurable);
+
+    let stored = graph.unmeasurable_files();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].path, path("bad.rs"));
+    assert_eq!(stored[0].reason, UnmeasurableReason::SourceUnparseable);
+}
+
+#[test]
+fn aggregated_metrics_counts_unmeasurable_files_separately_from_total_files() {
+    let files = vec![(path("a.rs"), make_metrics(5, 10))];
+    let unmeasurable = vec![UnmeasurableFile {
+        path: path("bad.rs"),
+        reason: UnmeasurableReason::SourceUnparseable,
+    }];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unmeasurable_files(unmeasurable);
+    let pm = graph.aggregated_metrics();
+
+    assert_eq!(pm.total_files, 1, "total_files keeps counting MEASURED files only");
+    assert_eq!(pm.unmeasurable_files, 1);
+    // bad.rs's (nonexistent) numbers entered no sum: the sum is exactly
+    // a.rs's own complexity, untouched by the unmeasurable entry.
+    assert_eq!(pm.total_cyclomatic_complexity, 5);
+    assert_eq!(pm.total_transitive_complexity, 10);
 }
