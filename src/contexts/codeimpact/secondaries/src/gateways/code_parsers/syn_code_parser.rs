@@ -121,6 +121,24 @@ impl FunctionVisitor {
         Self::default()
     }
 
+    /// Records a call — free-function or method — reached at any nesting
+    /// level. When nested inside a loop, it is also recorded as a
+    /// `LoopCall` fact, classified (not filtered) by `is_io_call`: every
+    /// detector reading `calls_in_loops` decides for itself which facts it
+    /// cares about.
+    fn record_call<S: Spanned>(&mut self, name: String, spanned: &S) {
+        if self.loop_depth > 0 {
+            let line_col = spanned.span().start();
+            self.calls_in_loops.push(LoopCall {
+                name: name.clone(),
+                line: line_col.line,
+                col: line_col.column,
+                is_io: is_io_call(&name),
+            });
+        }
+        self.calls.push(name);
+    }
+
     fn visit_block(&mut self, block: &syn::Block) {
         for stmt in &block.stmts {
             self.visit_stmt(stmt);
@@ -253,24 +271,14 @@ impl FunctionVisitor {
                         .map(|s| s.ident.to_string())
                         .collect::<Vec<_>>()
                         .join("::");
-                    if self.loop_depth > 0 && is_io_call(&name) {
-                        let span = call.func.span();
-                        let line_col = span.start();
-                        self.calls_in_loops.push(LoopCall {
-                            name: name.clone(),
-                            line: line_col.line,
-                            col: line_col.column,
-                            is_io: true,
-                        });
-                    }
-                    self.calls.push(name);
+                    self.record_call(name, call.func.as_ref());
                 }
                 for arg in &call.args {
                     self.visit_expr(arg);
                 }
             }
             syn::Expr::MethodCall(method_call) => {
-                self.calls.push(method_call.method.to_string());
+                self.record_call(method_call.method.to_string(), &method_call.method);
                 self.visit_expr(&method_call.receiver);
                 for arg in &method_call.args {
                     self.visit_expr(arg);

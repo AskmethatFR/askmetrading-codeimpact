@@ -4,16 +4,19 @@ use super::io_in_loop_warning::IoInLoopWarning;
 
 /// Stateless domain service that detects I/O calls inside loops.
 ///
-/// Iterates each `ParsedFunction` and checks its `calls_in_loops` field.
-/// The parser (secondaries) is responsible for identifying which calls
-/// are I/O — the domain only maps them to warnings.
+/// Iterates each `ParsedFunction` and filters its `calls_in_loops` field
+/// down to the entries the parser (secondaries) classified as I/O. The
+/// parser records every nested call as a fact (`is_io` classifies, it does
+/// not filter) — this detector is the one deciding which facts it cares
+/// about, so it must filter here rather than trust the field to already
+/// hold I/O-only entries.
 pub struct IoInLoopsDetector;
 
 impl IoInLoopsDetector {
     pub fn detect(functions: &[ParsedFunction]) -> Vec<IoInLoopWarning> {
         let mut warnings = Vec::new();
         for f in functions {
-            for call in &f.calls_in_loops {
+            for call in f.calls_in_loops.iter().filter(|c| c.is_io) {
                 warnings.push(IoInLoopWarning {
                     function: f.name.clone(),
                     io_call: call.name.clone(),
