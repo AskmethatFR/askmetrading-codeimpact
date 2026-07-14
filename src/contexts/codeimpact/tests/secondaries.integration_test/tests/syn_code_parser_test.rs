@@ -340,3 +340,31 @@ fn non_io_call_after_loop_is_not_tracked() {
         "a sequential call after the loop must not be recorded"
     );
 }
+
+// #50 — Type::method qualification (D1) + self/Self call resolution (D2).
+// Test List (S1 — declarations):
+// 1. impl_method_is_qualified_by_type_name
+// 2. impl_trait_for_type_uses_type_name_not_trait_name
+// 3. impl_with_generics_erases_generic_params
+// 4. trait_default_method_is_qualified_by_trait_name_abstract_method_excluded
+// 5. inline_mod_free_fn_is_qualified_by_mod_path
+// 6. inline_mod_impl_method_is_qualified_by_mod_and_type_path
+// 7. duplicate_qualified_names_are_suffixed_not_clobbered
+// 8. NON-REGRESSION free_fn_names_stay_bare
+// 9. NON-REGRESSION nested_fn_stays_folded_into_parent
+// Test List (S2 — call-graph edges):
+// 10. self_method_call_resolves_to_qualified_callee
+// 11. self_colon_colon_method_call_resolves_to_qualified_callee
+// 12. mutual_self_recursion_is_detected_as_a_cycle
+// 13. NO FABRICATION non_self_receiver_method_call_stays_bare
+// 14. quadratic_loop_detected_through_resolved_self_call
+
+#[test]
+fn impl_method_is_qualified_by_type_name() {
+    let parser = SynCodeParser::new();
+    let source = "struct S; impl S { fn foo(&self) { if x { } } }";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "S::foo");
+    assert_eq!(functions[0].decision_points, 1);
+}
