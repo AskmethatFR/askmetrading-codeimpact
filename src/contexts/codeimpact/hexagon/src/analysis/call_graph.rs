@@ -237,6 +237,48 @@ impl CallGraph {
 mod tests {
     use super::*;
 
+    // Test List — detect_cycles / dfs_cycle determinism (#47 retry 1):
+    // 1. cycle_detection_finds_all_nodes_in_a_confluence_graph — two distinct
+    //    paths (through different direct successors of a common ancestor)
+    //    converge on the same node, which then closes a cycle back to that
+    //    ancestor. Every node on either path is structurally part of a cycle
+    //    and must be reported, regardless of which node the (HashMap-ordered)
+    //    root iteration visits first — the DFS-back-edge marking used before
+    //    this fix only followed the FIRST path fully to completion (coloring
+    //    the shared node black) before the second path started, so the
+    //    second path's back edge was never observed and its nodes were
+    //    silently dropped from cycle_nodes depending on root order.
+
+    fn make_fn(name: &str, calls: Vec<&str>) -> ParsedFunction {
+        ParsedFunction {
+            name: name.to_string(),
+            start_line: 1,
+            calls: calls.into_iter().map(String::from).collect(),
+            has_loop: false,
+            has_nested_loop: false,
+            decision_points: 1,
+            depth: 0,
+            match_arms: 0,
+            calls_in_loops: vec![],
+        }
+    }
+
+    #[test]
+    fn cycle_detection_finds_all_nodes_in_a_confluence_graph() {
+        // a -> b, a -> c, b -> d, c -> d, d -> a
+        // Both "a -> b -> d -> a" and "a -> c -> d -> a" are genuine cycles;
+        // a, b, c, d are ALL structurally part of some cycle.
+        let fns = vec![
+            make_fn("a", vec!["b", "c"]),
+            make_fn("b", vec!["d"]),
+            make_fn("c", vec!["d"]),
+            make_fn("d", vec!["a"]),
+        ];
+        let graph = CallGraph::build(&fns);
+        let cycles = graph.functions_with_cycles();
+        assert_eq!(cycles, vec!["a", "b", "c", "d"]);
+    }
+
     #[test]
     fn direct_of_known_function() {
         let fns = vec![ParsedFunction {
