@@ -133,6 +133,23 @@ fn is_bare_self_receiver(receiver: &syn::Expr) -> bool {
     matches!(receiver, syn::Expr::Path(path) if path.path.is_ident("self"))
 }
 
+/// Whether an item carries `#[cfg(test)]` (D6, #50 slice S3). Rust's own
+/// test harness — `#[cfg(test)] mod tests { ... }` — is not production code;
+/// leaving it in would count every test function as a production function,
+/// inflating the call graph and `hidden_complexity` with code that never
+/// runs in production. `#[cfg(test)]` is Rust syntax (ADR-0013: the domain
+/// names the concept, the adapter names the syntax), so the exclusion lives
+/// here, not in the hexagon.
+fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Ident>()
+                .map(|ident| ident == "test")
+                .unwrap_or(false)
+    })
+}
+
 /// Recursively walks top-level items — including `impl` blocks — collecting
 /// every function/method declaration as a [`PendingFn`], per the D1
 /// qualification scheme (ADR-0013 / #50). Name uniqueness is enforced by
@@ -183,7 +200,11 @@ fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec
             // Inline module (`mod m { … }`) — recurse with its name folded
             // into the prefix, so nested items qualify as `m::T::foo`. A
             // path-style module (`mod m;`, no body) has nothing to recurse
-            // into.
+            // into. `#[cfg(test)] mod tests { … }` is excluded outright
+            // (D6, #50 slice S3) — it is not production code.
+            if is_cfg_test(&item_mod.attrs) {
+                continue;
+            }
             if let Some((_, sub_items)) = &item_mod.content {
                 let new_prefix = format!("{}{}::", mod_prefix, item_mod.ident);
                 collect_functions(sub_items, &new_prefix, out);
