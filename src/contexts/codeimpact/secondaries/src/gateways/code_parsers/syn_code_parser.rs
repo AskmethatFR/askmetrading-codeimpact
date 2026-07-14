@@ -18,25 +18,24 @@ impl CodeParser for SynCodeParser {
         let syntax_tree = syn::parse_file(source)
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
-        let mut functions = Vec::new();
+        let mut pending = Vec::new();
+        collect_functions(&syntax_tree.items, &mut pending);
 
-        for item in &syntax_tree.items {
-            if let syn::Item::Fn(func) = item {
-                let name = func.sig.ident.to_string();
-                let mut visitor = FunctionVisitor::new();
-                visitor.visit_block(&func.block);
-                functions.push(ParsedFunction {
-                    name,
-                    start_line: func.span().start().line,
-                    calls: visitor.calls,
-                    has_loop: visitor.has_loop,
-                    has_nested_loop: visitor.has_nested_loop,
-                    decision_points: visitor.decision_points,
-                    depth: visitor.max_depth,
-                    match_arms: visitor.match_arms,
-                    calls_in_loops: visitor.calls_in_loops,
-                });
-            }
+        let mut functions = Vec::new();
+        for pf in pending {
+            let mut visitor = FunctionVisitor::new(pf.enclosing_type);
+            visitor.visit_block(pf.block);
+            functions.push(ParsedFunction {
+                name: pf.name,
+                start_line: pf.start_line,
+                calls: visitor.calls,
+                has_loop: visitor.has_loop,
+                has_nested_loop: visitor.has_nested_loop,
+                decision_points: visitor.decision_points,
+                depth: visitor.max_depth,
+                match_arms: visitor.match_arms,
+                calls_in_loops: visitor.calls_in_loops,
+            });
         }
 
         Ok(functions)
@@ -103,6 +102,66 @@ impl SynCodeParser {
     }
 }
 
+/// A function/method declaration collected from the syntax tree, still
+/// carrying its qualified name (D1) and — for methods — the enclosing type
+/// name used to resolve `self`/`Self` calls (D2).
+struct PendingFn<'a> {
+    name: String,
+    enclosing_type: Option<String>,
+    block: &'a syn::Block,
+    start_line: usize,
+}
+
+/// Returns the last path segment of a type — generics erased — or `None`
+/// when the type has no nameable segment (tuple, array, …). Recurses
+/// through `&Type` / `(Type)` so `impl Trait for &Type` still yields `Type`.
+fn type_last_segment(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(type_path) => type_path
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string()),
+        syn::Type::Reference(reference) => type_last_segment(&reference.elem),
+        syn::Type::Paren(paren) => type_last_segment(&paren.elem),
+        syn::Type::Group(group) => type_last_segment(&group.elem),
+        _ => None,
+    }
+}
+
+/// Recursively walks top-level items — including `impl` blocks — collecting
+/// every function/method declaration as a [`PendingFn`], per the D1
+/// qualification scheme (ADR-0013 / #50). Name uniqueness is enforced by
+/// the caller after collection (source-order suffixing).
+fn collect_functions<'a>(items: &'a [syn::Item], out: &mut Vec<PendingFn<'a>>) {
+    for item in items {
+        if let syn::Item::Fn(func) = item {
+            out.push(PendingFn {
+                name: func.sig.ident.to_string(),
+                enclosing_type: None,
+                block: &func.block,
+                start_line: func.span().start().line,
+            });
+        } else if let syn::Item::Impl(item_impl) = item {
+            let qualifier = type_last_segment(&item_impl.self_ty);
+            for impl_item in &item_impl.items {
+                if let syn::ImplItem::Fn(method) = impl_item {
+                    let name = match &qualifier {
+                        Some(q) => format!("{}::{}", q, method.sig.ident),
+                        None => method.sig.ident.to_string(),
+                    };
+                    out.push(PendingFn {
+                        name,
+                        enclosing_type: qualifier.clone(),
+                        block: &method.block,
+                        start_line: method.span().start().line,
+                    });
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct FunctionVisitor {
     decision_points: u32,
@@ -114,11 +173,19 @@ struct FunctionVisitor {
     current_depth: u32,
     loop_depth: u32,
     match_arms: u32,
+    /// The qualified name of the enclosing `impl`/`trait` type, when this
+    /// visitor is walking a method body. Used to resolve `self.m()` and
+    /// `Self::m()` to the callee's qualified declaration (D2, #50) — `None`
+    /// for a free function, where no such resolution applies.
+    enclosing_type: Option<String>,
 }
 
 impl FunctionVisitor {
-    fn new() -> Self {
-        Self::default()
+    fn new(enclosing_type: Option<String>) -> Self {
+        Self {
+            enclosing_type,
+            ..Self::default()
+        }
     }
 
     /// Records a call — free-function or method — reached at any nesting
@@ -156,7 +223,10 @@ impl FunctionVisitor {
                 }
             }
             syn::Stmt::Item(syn::Item::Fn(func)) => {
-                let mut inner = FunctionVisitor::new();
+                // A nested `fn` cannot capture (or declare) `self`, so it
+                // never needs `self`/`Self` resolution — unlike a closure,
+                // which shares this same visitor instance and its context.
+                let mut inner = FunctionVisitor::new(None);
                 inner.visit_block(&func.block);
                 self.decision_points += inner.decision_points;
                 self.calls.extend(inner.calls);
