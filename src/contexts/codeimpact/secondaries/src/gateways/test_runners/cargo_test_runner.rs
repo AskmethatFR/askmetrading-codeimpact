@@ -766,11 +766,14 @@ mod tests {
             .expect("binary is inside target dir");
 
         assert_eq!(cmd.get_program(), "/usr/bin/time");
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert!(args.iter().any(|a| a.contains("fake-test-binary")));
+        // Exact match against the canonicalized path, not a substring
+        // (#40 follow-up, Dev B) — a substring check is true for BOTH the
+        // raw and the canonicalized path, so it cannot discriminate
+        // whether the sampler branch executed `canonical` or `binary`.
+        // Mirrors measure_cmd_runs_binary_directly_when_no_sampler.
+        let canonical_binary = std::fs::canonicalize(&binary).expect("canonicalize fake binary");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert!(args.iter().any(|a| *a == canonical_binary.as_os_str()));
     }
 
     #[test]
