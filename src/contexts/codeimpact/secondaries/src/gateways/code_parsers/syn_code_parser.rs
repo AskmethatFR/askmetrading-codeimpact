@@ -588,7 +588,9 @@ mod tests {
     // ── Test List (source_guard wiring, #62) ──────────────────────────
     //   1. oversized_source_refused_before_syn_runs — >1 MB →
     //      Err(Unmeasurable(SourceTooLarge)), structurally (no RSS assertion).
-    //   2. normal_source_still_parses — regression: normal source still
+    //   2. parse_file_dependencies_refused_when_source_too_large — same
+    //      guard, mirrored through the parse_file_dependencies entry point.
+    //   3. normal_source_still_parses — regression: normal source still
     //      parses with the expected functions.
 
     #[test]
@@ -596,6 +598,17 @@ mod tests {
         let source = "a".repeat(1024 * 1024 + 1);
         let parser = SynCodeParser::new();
         let result = parser.parse(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
+            other => panic!("expected Unmeasurable(SourceTooLarge), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_file_dependencies_refused_when_source_too_large() {
+        let source = "a".repeat(1024 * 1024 + 1);
+        let parser = SynCodeParser::new();
+        let result = parser.parse_file_dependencies(&source);
         match result {
             Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
             other => panic!("expected Unmeasurable(SourceTooLarge), got {:?}", other),
