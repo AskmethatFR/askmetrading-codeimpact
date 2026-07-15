@@ -13,9 +13,13 @@ Le CLI lit des fichiers sur le filesystem. Risques: path traversal, fichier imme
 ## Decision
 
 1. **Canonicalize** tous les chemins en entrée (`fs::canonicalize`) pour résoudre les symlinks et `..`.
-2. **Limite de taille**: refuser les fichiers > 1 MB (const `MAX_FILE_SIZE`).
+2. **Limite de taille — deux étages** :
+   - **Plafond lecture** : l'adaptateur `FileSystemCodeReader` refuse de slurper un fichier au-delà de `MAX_FILE_SIZE` = **10 MB** (garde d'allocation brute).
+   - **Borne d'admissibilité mesure** (ajouté #62) : le domaine refuse une source > `MAX_MEASURABLE_SOURCE_BYTES` = **1 MB** via `source_guard::check_admissible`, surfacée `Unmeasurable(SourceTooLarge)` (ADR-0010), avant `syn::parse_file` — borne le RSS pire-cas (~900 MB à 1 MB) sous le plus petit conteneur CI. Une source hostile de 1–10 MB est lue puis refusée à la mesure, jamais un crash ni un `0` silencieux.
+   - *(Correction : ce point énonçait « 1 MB (const `MAX_FILE_SIZE`) » ; la constante réelle valait 10 MB — le drift doc/code est ici réconcilié, les deux étages distingués.)*
 3. **Pas de fuite de path**: les messages d'erreur utilisent des identifiants anonymes. Le chemin absolu n'est jamais affiché à l'utilisateur.
-4. **Confinement défense-en-profondeur au point d'exécution** (ajouté #40) : le binaire de test compilé est confiné au `target/` du projet par `confine_to_target_dir`. Ce check est **rejoué à l'intérieur de `measure_cmd`** (la fonction qui construit et lance `Command::new`), pas seulement chez l'appelant `build_test_binaries`. `measure_cmd` retourne `Result<Command, _>` et exécute le **chemin canonique retourné** (validate-then-use-the-validated-value), pas l'argument brut. Erreur dure (pas `debug_assert!`) → l'invariant tient **par construction dans tout profil de build**, pas par convention de l'appelant.
+4. **Garde d'écriture du rapport** (ajouté #53) : `write_report_file` refuse une cible de sortie qui n'est pas un fichier régulier via `std::fs::symlink_metadata` (ne suit pas le composant final) + `!file_type().is_file()` — bloque symlink / FIFO / socket / device / répertoire **avant** `fs::write`. Ferme l'écrasement arbitraire à travers un symlink planté en CI (démontré) et le hang sur FIFO ; s'applique aux formats JSON et HTML (fonction partagée). Erreur path-free (point 3). Résiduel accepté : la fenêtre check→write (TOCTOU) est adéquate pour la menace CI (symlink pré-planté, pas d'attaquant en course concurrente), même classe que le résiduel #40.
+5. **Confinement défense-en-profondeur au point d'exécution** (ajouté #40) : le binaire de test compilé est confiné au `target/` du projet par `confine_to_target_dir`. Ce check est **rejoué à l'intérieur de `measure_cmd`** (la fonction qui construit et lance `Command::new`), pas seulement chez l'appelant `build_test_binaries`. `measure_cmd` retourne `Result<Command, _>` et exécute le **chemin canonique retourné** (validate-then-use-the-validated-value), pas l'argument brut. Erreur dure (pas `debug_assert!`) → l'invariant tient **par construction dans tout profil de build**, pas par convention de l'appelant.
 
 ## Consequences
 
