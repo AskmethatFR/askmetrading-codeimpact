@@ -72,12 +72,14 @@ Le test de non-régression du défaut n°2 (« le build n'est plus dans la mesur
 
 **Coût assumé :** la suite passe de 2,4 s à **24,9 s**, et la CI exécute les tests dans les jobs `test` **et** `coverage` (~+45 s sur une base de 1m38). Arbitrage : **sur une branche protégée, un test lent qui mord bat un test rapide et aveugle.** La constante de 20 s ne sera pas rognée — « optimiser le seuil » est exactement le jeu qui a échoué deux fois. Optimisation éventuelle suivie en #41.
 
+**Résolu par #41 :** le test est marqué `#[ignore]` et exécuté par un job CI dédié `slow-tests` sur **chaque** PR (`cargo test ... -- --ignored --exact`). La boucle locale `cargo test --workspace` et les jobs `test`/`coverage` ne paient plus les +20 s ; la protection reste effective sur chaque PR (la mutation de référence — replier le build dans `duration_ms` — rougit toujours le job). La constante de 20 s n'a **pas** été touchée : le test a été *déplacé*, pas *optimisé*.
+
 ## Conséquences
 
 - **(+)** L'outil ne peut plus imprimer « gratuit » quand il n'a pas su mesurer. La garantie est portée par le **type**, pas par la discipline.
 - **(+)** Les chiffres du stress test mesurent enfin le code de l'utilisateur, pas `rustc`.
 - **(+)** Le binaire exécuté est confiné au `target/` du projet ; un `.cargo/config.toml` hostile échoue fermé.
-- **(−)** CI et boucle locale : +22 s par exécution de la suite (voir #41).
+- **(−→résolu #41)** CI et boucle locale ne paient plus les +20 s : le test lent vit dans le job CI dédié `slow-tests` (exécuté sur chaque PR), hors de la boucle locale et des jobs `test`/`coverage`.
 - **(−)** `Measurement<T>` se propage dans tous les `ReportWriter` — coût de migration payé une fois.
 
 ## Dette connue, explicitement non traitée

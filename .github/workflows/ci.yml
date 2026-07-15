@@ -44,6 +44,17 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo test --workspace
 
+  slow-tests:
+    name: slow-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: cargo test -p codeimpact_secondaries_integration_test --test cargo_test_runner_test cargo_test_runner_excludes_build_time_from_measured_duration -- --ignored --exact
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
