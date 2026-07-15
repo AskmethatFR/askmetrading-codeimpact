@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::code_metrics::CodeMetrics;
+use super::code_metrics::{complexity_level_for, CodeMetrics};
 use super::complexity_detector::WarningSeverity;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
@@ -215,6 +215,7 @@ impl FileConsumptionGraph {
             total_economic_impact,
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
+            median_file_cyclomatic_complexity: 0,
         }
     }
 
@@ -391,6 +392,13 @@ pub struct ProjectMetrics {
     /// `total_files` keeps its existing meaning (MEASURED files only): this
     /// is a separate counter, not folded into it (D3, #50).
     pub unmeasurable_files: usize,
+    pub median_file_cyclomatic_complexity: u32,
+}
+
+impl ProjectMetrics {
+    pub fn complexity_level(&self) -> &'static str {
+        complexity_level_for(self.median_file_cyclomatic_complexity)
+    }
 }
 
 /// Resolve a raw dependency string (from `parse_file_dependencies`) to a file path.
