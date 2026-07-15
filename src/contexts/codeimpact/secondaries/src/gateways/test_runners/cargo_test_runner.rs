@@ -581,16 +581,26 @@ impl CargoTestRunner {
     }
 
     /// A libtest binary that ran to completion — pass, fail, or zero
-    /// tests — always prints a `test result: ...` summary line. A binary
-    /// that crashed mid-harness (SIGSEGV, `abort()`, a panic that kills
-    /// the process before the summary) prints none. This, not the exit
-    /// status, is the discriminator: a binary with FAILING tests exits
-    /// non-zero on its ordinary, nominal path and must stay measurable
-    /// (#39 follow-up — Dev B).
+    /// tests — always prints a `test result: ...` summary line LAST. A
+    /// binary that crashed mid-harness (SIGSEGV, `abort()`, a panic that
+    /// kills the process before the summary) prints none. This, not the
+    /// exit status, is the discriminator: a binary with FAILING tests
+    /// exits non-zero on its ordinary, nominal path and must stay
+    /// measurable (#39 follow-up — Dev B).
+    ///
+    /// The summary must be the LAST non-empty line, not merely present
+    /// anywhere: a test body can `println!` a fake `test result: ...`
+    /// string, and a LATER test in the same binary can then crash the
+    /// process before libtest ever prints its real final summary. Scanning
+    /// for the string anywhere in stdout would still report that binary as
+    /// complete — a narrow reincarnation of the exact lie #39/ADR-0011
+    /// killed (#44).
     fn has_test_summary_line(stdout: &str) -> bool {
         stdout
             .lines()
-            .any(|line| line.trim().starts_with("test result"))
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| line.trim().starts_with("test result"))
     }
 
     fn parse_test_results(stdout: &str) -> (u32, u32) {
