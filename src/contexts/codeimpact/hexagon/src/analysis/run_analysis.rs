@@ -7,8 +7,11 @@ use super::code_metrics::CodeMetrics;
 use super::code_parser::CodeParser;
 use super::code_reader::CodeReader;
 use super::errors::AnalysisError;
-use super::file_consumption_graph::{resolve_file_dependency, FileConsumptionGraph};
+use super::file_consumption_graph::{
+    resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile,
+};
 use super::io_in_loop_warning::IoInLoopWarning;
+use super::measurement::UnmeasurableReason;
 use super::proactive_analyzer;
 use super::report_writer::ReportWriter;
 
@@ -54,6 +57,7 @@ impl RunAnalysis {
         let files = self.code_reader.list_rust_files(target.path())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
+        let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
         let crate_root = target.path().clone();
 
         for file in &files {
@@ -71,6 +75,10 @@ impl RunAnalysis {
                                 file.file_name().unwrap_or_default().to_string_lossy(),
                                 e
                             );
+                            unmeasurable.push(UnmeasurableFile {
+                                path: file.clone(),
+                                reason: UnmeasurableReason::SourceUnparseable,
+                            });
                         }
                     }
 
@@ -103,11 +111,16 @@ impl RunAnalysis {
                         file.file_name().unwrap_or_default().to_string_lossy(),
                         e
                     );
+                    unmeasurable.push(UnmeasurableFile {
+                        path: file.clone(),
+                        reason: UnmeasurableReason::SourceUnreadable,
+                    });
                 }
             }
         }
 
-        let graph = FileConsumptionGraph::build(&per_file, all_deps)?;
+        let graph =
+            FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
         self.reporter.write_project_report(&graph)
     }
 
@@ -195,31 +208,46 @@ impl RunAnalysis {
         let files = self.code_reader.list_rust_files(target.path())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
+        let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
         let crate_root = target.path().clone();
 
         for file in &files {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
-            if let Ok(source) = self.code_reader.read_source(&file_target) {
-                if let Ok(metrics) =
-                    proactive_analyzer::analyze(&source, rules, self.parser.as_ref())
-                {
-                    let metrics = Self::set_file_paths(metrics, file);
-                    per_file.push((file.clone(), metrics));
-                }
-                if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
-                    for raw in &raw_deps {
-                        if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
-                            raw,
-                            file,
-                            &crate_root,
-                            &files,
-                        ) {
-                            all_deps.push(super::file_consumption_graph::FileDependency {
-                                from: file.clone(),
-                                to,
+            match self.code_reader.read_source(&file_target) {
+                Ok(source) => {
+                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                        Ok(metrics) => {
+                            let metrics = Self::set_file_paths(metrics, file);
+                            per_file.push((file.clone(), metrics));
+                        }
+                        Err(_) => {
+                            unmeasurable.push(UnmeasurableFile {
+                                path: file.clone(),
+                                reason: UnmeasurableReason::SourceUnparseable,
                             });
                         }
                     }
+                    if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
+                        for raw in &raw_deps {
+                            if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
+                                raw,
+                                file,
+                                &crate_root,
+                                &files,
+                            ) {
+                                all_deps.push(super::file_consumption_graph::FileDependency {
+                                    from: file.clone(),
+                                    to,
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    unmeasurable.push(UnmeasurableFile {
+                        path: file.clone(),
+                        reason: UnmeasurableReason::SourceUnreadable,
+                    });
                 }
             }
         }
@@ -230,6 +258,6 @@ impl RunAnalysis {
             ));
         }
 
-        FileConsumptionGraph::build(&per_file, all_deps)
+        Ok(FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable))
     }
 }

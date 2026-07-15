@@ -99,6 +99,7 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
   letter-spacing: 0.02em; padding: 3px 10px; border-radius: calc(var(--radius-md) * 0.75);
 }
 .tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
+.lvl-none { background: var(--color-neutral-100); color: var(--color-neutral-800); }
 .lvl-low { background: var(--color-accent-100); color: var(--color-accent-800); }
 .lvl-moderate { background: var(--color-accent-200); color: var(--color-accent-800); }
 .lvl-high { background: var(--color-accent-700); color: #f2f2f3; }
@@ -201,6 +202,12 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
 .io-verb { font-size: 12px; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
 .io-loc { margin-left: auto; font-size: 11px; font-family: ui-monospace, Menlo, monospace; color: color-mix(in srgb, var(--color-text) 52%, transparent); }
 
+.unmeasurable-section { padding: 12px 14px; margin-bottom: var(--space-6); }
+.unmeasurable-list { display: flex; flex-direction: column; gap: 6px; }
+.unmeasurable-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.unmeasurable-path { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.unmeasurable-reason { margin-left: auto; font-size: 12px; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+
 .impact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .impact-card { padding: 16px; }
 .impact-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent); margin-bottom: 10px; }
@@ -246,7 +253,7 @@ pub const JS: &str = r#"
     return n;
   }
 
-  var LVL = { low: "lvl-low", moderate: "lvl-moderate", high: "lvl-high", critical: "lvl-critical" };
+  var LVL = { none: "lvl-none", low: "lvl-low", moderate: "lvl-moderate", high: "lvl-high", critical: "lvl-critical" };
   var SEV = { warning: "sev-warning", critical: "sev-critical" };
   var ENV = { A: "env-a", B: "env-b", C: "env-c", D: "env-d", E: "env-e", F: "env-f", G: "env-g" };
   function cls(map, key, fallback) {
@@ -300,6 +307,24 @@ pub const JS: &str = r#"
       grid.appendChild(tile);
     });
     return grid;
+  }
+
+  function renderUnmeasurable() {
+    if (!data.unmeasurable_files || data.unmeasurable_files.length === 0) return null;
+    var section = el("div", "section blueprint unmeasurable-section");
+    section.appendChild(
+      el("div", "section-heading", "Fichiers non mesurés · " + data.unmeasurable_files.length)
+    );
+    var list = el("div", "unmeasurable-list");
+    data.unmeasurable_files.forEach(function (f) {
+      var row = el("div", "unmeasurable-row");
+      row.appendChild(el("span", "tag sev-warning", "NON MESURÉ"));
+      row.appendChild(el("span", "unmeasurable-path", f.path));
+      row.appendChild(el("span", "unmeasurable-reason", f.reason));
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+    return section;
   }
 
   function renderTreeRow(id, depth, container) {
@@ -526,6 +551,8 @@ pub const JS: &str = r#"
     root.textContent = "";
     root.appendChild(renderBanner());
     root.appendChild(renderStats());
+    var unmeasurable = renderUnmeasurable();
+    if (unmeasurable) root.appendChild(unmeasurable);
     root.appendChild(renderSplit());
   }
 

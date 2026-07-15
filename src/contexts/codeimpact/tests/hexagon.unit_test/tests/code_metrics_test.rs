@@ -65,52 +65,81 @@ fn function_detail_transitive_is_direct_plus_hidden() {
     assert_eq!(f.transitive(), 5);
 }
 
+// D3 (#50 slice S4): complexity_level() now needs a MEASURED function to
+// report a threshold level — CodeMetrics::new(cc) alone has no
+// function_details, so it now reports "none" regardless of cc (see
+// complexity_level_is_none_when_no_functions_were_measured below). These 8
+// threshold tests are updated (not weakened) to attach one measured
+// function per fixture, so they keep pinning complexity_level_for's
+// boundaries THROUGH the instance method, exactly as before.
+fn measured(cc: u32) -> CodeMetrics {
+    CodeMetrics::with_call_graph(cc, cc, 0, vec![], vec![detail("f", cc, 0)])
+}
+
 #[test]
 fn complexity_0_is_low() {
-    let m = CodeMetrics::new(0);
+    let m = measured(0);
     assert_eq!(m.complexity_level(), "low");
 }
 
 #[test]
 fn complexity_10_is_low() {
-    let m = CodeMetrics::new(10);
+    let m = measured(10);
     assert_eq!(m.complexity_level(), "low");
 }
 
 #[test]
 fn complexity_11_is_moderate() {
-    let m = CodeMetrics::new(11);
+    let m = measured(11);
     assert_eq!(m.complexity_level(), "moderate");
 }
 
 #[test]
 fn complexity_20_is_moderate() {
-    let m = CodeMetrics::new(20);
+    let m = measured(20);
     assert_eq!(m.complexity_level(), "moderate");
 }
 
 #[test]
 fn complexity_21_is_high() {
-    let m = CodeMetrics::new(21);
+    let m = measured(21);
     assert_eq!(m.complexity_level(), "high");
 }
 
 #[test]
 fn complexity_40_is_high() {
-    let m = CodeMetrics::new(40);
+    let m = measured(40);
     assert_eq!(m.complexity_level(), "high");
 }
 
 #[test]
 fn complexity_41_is_critical() {
-    let m = CodeMetrics::new(41);
+    let m = measured(41);
     assert_eq!(m.complexity_level(), "critical");
 }
 
 #[test]
 fn complexity_100_is_critical() {
-    let m = CodeMetrics::new(100);
+    let m = measured(100);
     assert_eq!(m.complexity_level(), "critical");
+}
+
+// D3 (#50 slice S4) test cases 17/18 — three states, not two: "measured"
+// (>= 1 function) vs "nothing to measure" (parsed OK, 0 functions). A file
+// nobody looked at is a THIRD, separate state (unmeasurable_files, see
+// file_consumption_graph_test.rs) and must never collapse into either.
+#[test]
+fn complexity_level_is_none_when_no_functions_were_measured() {
+    // cc=5 would read "low" under the old formula — proving the guard fires
+    // on function_details, not on the complexity value itself.
+    let m = CodeMetrics::new(5);
+    assert_eq!(m.complexity_level(), "none");
+}
+
+#[test]
+fn complexity_level_is_low_with_one_function_non_regression() {
+    let m = measured(3);
+    assert_eq!(m.complexity_level(), "low");
 }
 
 #[test]
