@@ -578,6 +578,74 @@ impl FunctionVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codeimpact_hexagon::analysis::UnmeasurableReason;
+
+    // ── Test List (source_guard wiring, #62/#63) ──────────────────────
+    //   1. parse_pathologically_nested_mod_does_not_crash_process — ~2000
+    //      nested `mod` → Err(Unmeasurable(SourceTooComplex)), no SIGABRT.
+    //      THE STRONGEST RED: unguarded, this aborts the whole test binary.
+    //   2. parse_deep_reference_type_does_not_crash_process — ~5000 `&` in
+    //      a type → Err(Unmeasurable(SourceTooComplex)), no crash.
+    //   3. parse_file_dependencies_is_also_guarded — same pathological
+    //      source via parse_file_dependencies → Err(Unmeasurable(...)).
+    //   4. oversized_source_refused_before_syn_runs — >1 MB →
+    //      Err(Unmeasurable(SourceTooLarge)), structurally (no RSS assertion).
+    //   5. normal_source_still_parses — regression: normal source still
+    //      parses with the expected functions.
+
+    #[test]
+    fn parse_pathologically_nested_mod_does_not_crash_process() {
+        let source = "mod a {".repeat(2000) + &"}".repeat(2000);
+        let parser = SynCodeParser::new();
+        let result = parser.parse(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooComplex)) => {}
+            other => panic!("expected Unmeasurable(SourceTooComplex), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_deep_reference_type_does_not_crash_process() {
+        let source = format!("impl Foo for {}T {{}}", "&".repeat(5000));
+        let parser = SynCodeParser::new();
+        let result = parser.parse(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooComplex)) => {}
+            other => panic!("expected Unmeasurable(SourceTooComplex), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_file_dependencies_is_also_guarded() {
+        let source = "mod a {".repeat(2000) + &"}".repeat(2000);
+        let parser = SynCodeParser::new();
+        let result = parser.parse_file_dependencies(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(_)) => {}
+            other => panic!("expected Unmeasurable(_), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn oversized_source_refused_before_syn_runs() {
+        let source = "a".repeat(1024 * 1024 + 1);
+        let parser = SynCodeParser::new();
+        let result = parser.parse(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
+            other => panic!("expected Unmeasurable(SourceTooLarge), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normal_source_still_parses() {
+        let parser = SynCodeParser::new();
+        let source = "fn a() { if x > 0 { } }\nfn b() { while true { } }";
+        let functions = parser.parse(source).unwrap();
+        assert_eq!(functions.len(), 2);
+        assert_eq!(functions[0].name, "a");
+        assert_eq!(functions[1].name, "b");
+    }
 
     #[test]
     fn empty_source_returns_no_functions() {
