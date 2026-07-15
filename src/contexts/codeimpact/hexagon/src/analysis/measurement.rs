@@ -35,7 +35,9 @@ impl std::fmt::Display for UnmeasurableReason {
             Self::SourceUnparseable => write!(f, "code source non analysable"),
             Self::SourceUnreadable => write!(f, "fichier illisible"),
             Self::SourceTooLarge => write!(f, "code source trop volumineux pour être mesuré"),
-            Self::SourceTooComplex => write!(f, "code source trop complexe (imbrication excessive)"),
+            Self::SourceTooComplex => {
+                write!(f, "code source trop complexe (imbrication excessive)")
+            }
         }
     }
 }

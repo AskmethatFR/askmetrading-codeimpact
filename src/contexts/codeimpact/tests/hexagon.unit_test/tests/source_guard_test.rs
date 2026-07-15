@@ -1,6 +1,5 @@
 use codeimpact_hexagon::analysis::{
-    check_admissible, UnmeasurableReason, MAX_MEASURABLE_NESTING_DEPTH,
-    MAX_MEASURABLE_SOURCE_BYTES,
+    check_admissible, UnmeasurableReason, MAX_MEASURABLE_NESTING_DEPTH, MAX_MEASURABLE_SOURCE_BYTES,
 };
 
 // ── Test List ──────────────────────────────────────────────────────────
