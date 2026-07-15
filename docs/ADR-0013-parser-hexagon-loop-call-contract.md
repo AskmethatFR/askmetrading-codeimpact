@@ -85,5 +85,7 @@ Ce n'était pas un test instable : `has_cycle` conditionne l'exclusion du détec
 
 ## Dette connue, explicitement non traitée
 
+> **Amendement (2026-07-14, Issue #50 / [[ADR-0014]]).** À la date de cet ADR, le parseur ne visitait que les `fn` **libres de premier niveau** : les méthodes d'`impl` n'étaient **jamais parsées du tout**. Le §3 ci-dessus (« le parseur doit voir les appels de méthode ») traitait donc les *sites d'appel* dans un corps de fonction, alors que les *déclarations* de méthodes restaient invisibles. [[ADR-0014]] lève ce blocage côté déclarations (36 fichiers sur 69 parsaient zéro fonction) et ajoute la résolution intra-type (`self.m()` → `Type::m`). **La dette `is_io` ci-dessous reste entière** : elle porte sur la classification du *récepteur*, pas sur la visibilité de la déclaration.
+
 - **`is_io` est structurellement toujours `false` pour un appel de méthode.** Le nom enregistré est l'identifiant nu (`read_to_string`), qui ne peut jamais commencer par `std::fs::`. Donc `file.read_to_string(&mut s)` dans une boucle **passe inaperçu** — et en Rust idiomatique, l'I/O est massivement en forme de méthode. **US5 ne détecte qu'une minorité des I/O réelles.** Défaut **préexistant** (avant #47, `MethodCall` n'atteignait même pas `calls_in_loops`), donc pas une régression — mais c'est le même zéro confiant qu'[[ADR-0010]] combat. → **Issue #56**.
 - Les trois parcours du graphe d'appel (`dfs_reachable`, `tarjan_scc`, `compute_depth`) sont **récursifs** : débordement de pile vers 10-20k de profondeur linéaire. → **Issue #52**.

@@ -23,6 +23,18 @@ pub struct ReportVm {
     pub project: ProjectVm,
     pub stats: Vec<StatVm>,
     pub nodes: Vec<NodeVm>,
+    pub unmeasurable_files: Vec<UnmeasurableFileVm>,
+}
+
+/// A file that could not be measured at all (D3, #50 slice S4) — distinct
+/// from a node's `level: "none"` (parsed OK, zero functions). Surfaced at
+/// the project level (spec's "same spirit as the console `=== Fichiers NON
+/// MESURÉS ===` section"), not per-tree-node: an unmeasurable file has no
+/// `CodeMetrics` to hang a `NodeVm` off of.
+#[derive(serde::Serialize)]
+pub struct UnmeasurableFileVm {
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(serde::Serialize)]
@@ -168,7 +180,23 @@ pub fn build_report_vm(graph: &FileConsumptionGraph, target: &str) -> ReportVm {
         },
         stats: build_stats(graph),
         nodes: build_tree(graph, target),
+        unmeasurable_files: build_unmeasurable_files(graph),
     }
+}
+
+/// Reuses `UnmeasurableReason`'s own `Display` (the same human-readable
+/// French text the console writer already shows) — never a coefficient or a
+/// re-derived string invented in this adapter (ADR-8.8/8.8a/8.8b's rule
+/// generalises: present the domain's own value, don't recompute it).
+fn build_unmeasurable_files(graph: &FileConsumptionGraph) -> Vec<UnmeasurableFileVm> {
+    graph
+        .unmeasurable_files()
+        .iter()
+        .map(|f| UnmeasurableFileVm {
+            path: f.path.to_string_lossy().to_string(),
+            reason: f.reason.to_string(),
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -226,20 +254,35 @@ fn kind_str(kind: NodeKind) -> &'static str {
     }
 }
 
+/// Ranks `CodeMetrics::complexity_level()`'s five states for the folder
+/// "worst descendant wins" aggregation (`max` in `aggregate()`). `"none"`
+/// ("nothing to measure" — zero functions) ranks LOWEST, not highest: a
+/// function-less file (trait declaration, re-export `mod.rs`, pure data
+/// type) carries no risk signal and must never outrank — let alone be
+/// silently promoted above — an actually-measured `"critical"` file (D3,
+/// #50 slice S4). The previous catch-all (`_ => 3`) mapped every unknown
+/// string, including the newly-introduced `"none"`, straight into the
+/// `"critical"` bucket — a function-less file would have rendered as the
+/// reddest possible tag. Explicit arms for all five known states so that
+/// trap cannot recur silently; `_` only guards a value `complexity_level()`
+/// is not documented to produce.
 fn level_rank(level: &str) -> u8 {
     match level {
-        "low" => 0,
-        "moderate" => 1,
-        "high" => 2,
-        _ => 3,
+        "none" => 0,
+        "low" => 1,
+        "moderate" => 2,
+        "high" => 3,
+        "critical" => 4,
+        _ => 4,
     }
 }
 
 fn level_name(rank: u8) -> &'static str {
     match rank {
-        0 => "low",
-        1 => "moderate",
-        2 => "high",
+        0 => "none",
+        1 => "low",
+        2 => "moderate",
+        3 => "high",
         _ => "critical",
     }
 }

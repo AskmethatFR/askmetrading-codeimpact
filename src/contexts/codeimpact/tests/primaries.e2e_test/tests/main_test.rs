@@ -140,7 +140,18 @@ fn e2e_analyze_empty_file_returns_complexity_1() {
         "expected complexity 1: {}",
         stdout
     );
-    assert!(stdout.contains("low"), "expected level low: {}", stdout);
+    // D3 (#50 slice S4): an empty file parses to zero functions, so
+    // complexity_level() now correctly reads "none" ("nothing to
+    // measure"), not a fabricated "low" — even though the file-level base
+    // complexity (the "+1") is honestly 1. (stdout still separately
+    // contains "low" from the unrelated EconomicImpact::level() line —
+    // asserting the exact "Niveau: none" text keeps this test honest about
+    // what it actually pins.)
+    assert!(
+        stdout.contains("Niveau: none"),
+        "expected complexity level none for an empty file (nothing measured): {}",
+        stdout
+    );
 }
 
 #[test]
@@ -688,5 +699,55 @@ fn e2e_analyze_console_format_with_output_flag_errors_instead_of_silently_ignori
     assert!(
         !output_path.exists(),
         "-o must not be silently ignored: no file should have been created for console format"
+    );
+}
+
+// #50 slice S4, test case 23 — the full chain CLI → parser → hexagon →
+// JSON for a file whose only functions live inside an `impl` block (S1/S2
+// of #50: qualified `Type::method` names). Proves D1/D2/D3 all hold
+// end-to-end, not just at the unit level: impl methods are parsed,
+// function_details is non-empty, and complexity_level therefore reflects a
+// real threshold, never "none".
+#[test]
+fn e2e_analyze_impl_only_fixture_reports_measured_functions() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("impl_only.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+
+    let function_details = json["metrics"]["function_details"]
+        .as_array()
+        .expect("function_details should be an array");
+    assert!(
+        !function_details.is_empty(),
+        "impl methods must be parsed into function_details, got: {:#?}",
+        json["metrics"]
+    );
+    let names: Vec<&str> = function_details
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"Widget::render") && names.contains(&"Widget::is_visible"),
+        "expected qualified Type::method names, got: {:?}",
+        names
+    );
+    assert_ne!(
+        json["metrics"]["complexity_level"], "none",
+        "a file with measured functions must never report \"none\": {:#?}",
+        json["metrics"]
     );
 }

@@ -12,6 +12,7 @@ mod errors;
 pub mod file_consumption_graph;
 pub mod io_in_loop_warning;
 pub mod io_in_loops_detector;
+mod measurement;
 mod output_format;
 pub mod proactive_analyzer;
 pub mod reactive_analyzer;
@@ -34,7 +35,7 @@ pub use ecological_impact::{EcologicalImpact, EcologicalImpactEstimator, Efficie
 pub use economic_impact::{EconomicImpact, EconomicImpactEstimator};
 pub use errors::AnalysisError;
 pub use file_consumption_graph::{
-    resolve_file_dependency, FileConsumptionGraph, FileDependency, ProjectMetrics,
+    resolve_file_dependency, FileConsumptionGraph, FileDependency, ProjectMetrics, UnmeasurableFile,
 };
 pub use io_in_loop_warning::IoInLoopWarning;
 pub use io_in_loops_detector::IoInLoopsDetector;

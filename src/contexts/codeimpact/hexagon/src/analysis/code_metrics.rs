@@ -188,7 +188,17 @@ impl CodeMetrics {
             .fold(0u32, |acc, d| acc.saturating_add(d.hidden()))
     }
 
+    /// Three states, not two (ADR-0010 follow-up, #50 D3): a file with zero
+    /// measured functions has "nothing to report", never a fabricated
+    /// `"low"` — reporting the file-level `+1` base complexity as "clean"
+    /// would be the exact `0`-reads-as-free lie ADR-0010 already forbids,
+    /// one layer up. This is distinct from a file that failed to parse or
+    /// read at all (`UnmeasurableFile`, `FileConsumptionGraph`) — that file
+    /// never reaches `CodeMetrics` in the first place.
     pub fn complexity_level(&self) -> &'static str {
+        if self.function_details.is_empty() {
+            return "none";
+        }
         complexity_level_for(self.cyclomatic_complexity)
     }
 
