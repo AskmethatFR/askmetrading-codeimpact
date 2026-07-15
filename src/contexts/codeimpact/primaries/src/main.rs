@@ -206,6 +206,20 @@ fn write_report_file(output_path: &std::path::Path, content: &str) -> Result<(),
         .file_name()
         .ok_or_else(|| "nom de fichier de sortie invalide".to_string())?;
     let resolved_path = canonical_parent.join(file_name);
+
+    // `symlink_metadata` does not follow the final path component (unlike
+    // `metadata`), so a symlink is reported as itself: `fs::write` would
+    // otherwise follow it and clobber whatever it points to (demonstrated
+    // arbitrary overwrite), and would block forever opening a FIFO with no
+    // reader (demonstrated CI hang). Everything that is not a regular file
+    // is refused here, before either happens.
+    match std::fs::symlink_metadata(&resolved_path) {
+        Ok(meta) if !meta.file_type().is_file() => {
+            return Err("la cible de sortie n'est pas un fichier régulier".to_string());
+        }
+        _ => {}
+    }
+
     std::fs::write(&resolved_path, content)
         .map_err(|_| "impossible d'écrire le fichier de sortie".to_string())
 }
