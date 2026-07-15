@@ -101,12 +101,19 @@ impl CargoTestRunner {
 
     /// Runs the already-compiled test binary directly — this, and only
     /// this, is what gets measured (#36 bug 2).
+    ///
+    /// Scaffold step (#40 AC#2): return type widened to
+    /// `Result<Command, AnalysisError>` so the call site already threads
+    /// the `?`, but the body still trusts `binary` as-is — behaviorally
+    /// identical to before. The confinement replay itself lands in the
+    /// next commit, so the new tests below observe the REAL gap, not an
+    /// artifact of the signature migration.
     fn measure_cmd(
         project_dir: &Path,
         binary: &Path,
         filter: Option<&str>,
         use_time: bool,
-    ) -> Command {
+    ) -> Result<Command, AnalysisError> {
         let mut cmd = if use_time {
             let mut c = Command::new("/usr/bin/time");
             c.arg(Self::time_flag());
@@ -123,7 +130,7 @@ impl CargoTestRunner {
             cmd.arg(f);
         }
 
-        cmd
+        Ok(cmd)
     }
 
     fn run_with_timeout(cmd: Command) -> Result<(Duration, Output), AnalysisError> {
@@ -449,7 +456,7 @@ impl CargoTestRunner {
         filter: Option<&str>,
         use_time: bool,
     ) -> Result<StressTestRun, AnalysisError> {
-        let cmd = Self::measure_cmd(project_dir, binary, filter, use_time);
+        let cmd = Self::measure_cmd(project_dir, binary, filter, use_time)?;
         let (elapsed, output) = Self::run_with_timeout(cmd)?;
 
         let duration_ms = elapsed.as_millis() as u64;
@@ -739,10 +746,22 @@ mod tests {
         assert!(!args.contains(&"--lib".to_string()));
     }
 
+    fn confined_fake_binary(project: &Path) -> PathBuf {
+        let target_dir = project.join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        let binary = target_dir.join("fake-test-binary");
+        std::fs::write(&binary, b"").expect("write fake binary");
+        binary
+    }
+
     #[test]
     fn measure_cmd_wraps_binary_in_time_when_sampler_available() {
-        let binary = Path::new("/tmp/fake-test-binary");
-        let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, true);
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let cmd = CargoTestRunner::measure_cmd(project.path(), &binary, None, true)
+            .expect("binary is inside target dir");
+
         assert_eq!(cmd.get_program(), "/usr/bin/time");
         let args: Vec<_> = cmd
             .get_args()
@@ -753,16 +772,74 @@ mod tests {
 
     #[test]
     fn measure_cmd_runs_binary_directly_when_no_sampler() {
-        let binary = Path::new("/tmp/fake-test-binary");
-        let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, false);
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let cmd = CargoTestRunner::measure_cmd(project.path(), &binary, None, false)
+            .expect("binary is inside target dir");
+
         assert_eq!(cmd.get_program(), binary);
     }
 
     #[test]
     fn measure_cmd_never_reinvokes_cargo() {
-        let binary = Path::new("/tmp/fake-test-binary");
-        let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, true);
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let cmd = CargoTestRunner::measure_cmd(project.path(), &binary, None, true)
+            .expect("binary is inside target dir");
+
         assert_ne!(cmd.get_program(), "cargo");
+    }
+
+    // Test List (measure_cmd — replay confinement at the execution point,
+    // #40 AC#2): build_test_binaries confines candidates via
+    // confine_to_target_dir before the build handoff, but measure_cmd — the
+    // function that actually builds the Command that gets spawned — trusted
+    // its `binary` argument by caller convention only. The invariant must be
+    // structural, not conventional.
+    // 1. binary outside project/target -> Err
+    // 2. the rejection message leaks neither the binary nor the tempdir path
+    // 3. binary inside project/target -> Ok (guards against a naive
+    //    always-Err implementation)
+
+    #[test]
+    fn measure_cmd_rejects_a_binary_outside_the_target_dir() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let outside = tempfile::tempdir().expect("create temp dir");
+        let outside_binary = outside.path().join("evil-binary");
+        std::fs::write(&outside_binary, b"").expect("write fake binary");
+
+        let result = CargoTestRunner::measure_cmd(project.path(), &outside_binary, None, false);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn measure_cmd_rejection_message_leaks_no_path() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let outside = tempfile::tempdir().expect("create temp dir");
+        let outside_binary = outside.path().join("evil-binary");
+        std::fs::write(&outside_binary, b"").expect("write fake binary");
+
+        let err = CargoTestRunner::measure_cmd(project.path(), &outside_binary, None, false)
+            .expect_err("should be rejected");
+
+        let message = err.to_string();
+        assert!(!message.contains(&outside_binary.to_string_lossy().to_string()));
+        assert!(!message.contains(&outside.path().to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn measure_cmd_accepts_a_binary_inside_the_target_dir() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let result = CargoTestRunner::measure_cmd(project.path(), &binary, None, false);
+
+        assert!(result.is_ok());
     }
 
     // Test List (run_with_timeout — drain stdout/stderr concurrently while
