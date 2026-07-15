@@ -161,6 +161,66 @@ fn console_writer_write_json_produces_valid_json() {
     assert_eq!(json["metrics"]["economic_impact"]["level"], "moderate");
 }
 
+// #60: serialize_project_metrics fed complexity_level_for (the PER-FILE
+// scale) with the PROJECT TOTAL, so any project of non-trivial size read
+// "critical" regardless of its actual health. It must now read the MEDIAN
+// per-file complexity instead — the number that stays on that scale.
+fn make_measured_file(cc: u32) -> CodeMetrics {
+    CodeMetrics::with_call_graph(
+        cc,
+        cc,
+        0,
+        vec![],
+        vec![FunctionDetail::new(
+            "f".to_string(),
+            CodeLocation::new("f.rs".into(), 1, 1),
+            cc,
+            0,
+            0,
+            false,
+        )],
+    )
+}
+
+#[test]
+fn project_json_complexity_level_reflects_median_not_total() {
+    let writer = JsonReportWriter::new();
+
+    // 9 tiny files (cc=2) + 2 huge files (cc=200): total=418 is "critical",
+    // median=2 is "low".
+    let mut files: Vec<(PathBuf, CodeMetrics)> = (0..9)
+        .map(|i| (PathBuf::from(format!("tiny{i}.rs")), make_measured_file(2)))
+        .collect();
+    files.push((PathBuf::from("huge1.rs"), make_measured_file(200)));
+    files.push((PathBuf::from("huge2.rs"), make_measured_file(200)));
+
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["cyclomatic_complexity"], 418);
+    assert_eq!(
+        json["metrics"]["complexity_level"], "low",
+        "the median (2), not the total (418, off-scale), must drive the level: {}",
+        json_str
+    );
+}
+
+#[test]
+fn project_json_complexity_level_empty_project_is_none() {
+    let writer = JsonReportWriter::new();
+    let graph = FileConsumptionGraph::build(&[], vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["complexity_level"], "none");
+}
+
 // D3 (#50 slice S4), test case 20 — project JSON must surface unmeasurable
 // files (additive per ADR-0007: no existing field removed or renamed).
 #[test]
