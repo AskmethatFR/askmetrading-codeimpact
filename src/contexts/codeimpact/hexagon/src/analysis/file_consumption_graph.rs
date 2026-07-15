@@ -215,7 +215,9 @@ impl FileConsumptionGraph {
             total_economic_impact,
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
-            median_file_cyclomatic_complexity: 0,
+            median_file_cyclomatic_complexity: median_cyclomatic_complexity(
+                &self.per_file_metrics,
+            ),
         }
     }
 
@@ -392,12 +394,49 @@ pub struct ProjectMetrics {
     /// `total_files` keeps its existing meaning (MEASURED files only): this
     /// is a separate counter, not folded into it (D3, #50).
     pub unmeasurable_files: usize,
+    /// Median of MEASURED files' `cyclomatic_complexity()` — the number
+    /// `complexity_level()` judges, not `total_cyclomatic_complexity`. The
+    /// total is off the per-file scale `complexity_level_for` was
+    /// calibrated against (summing every file onto one file's scale reads
+    /// "critical" for nearly any real project, ADR-0010); the median stays
+    /// on it, because it IS one file's value. Even file count -> the two
+    /// middle values are averaged, round-half-up.
     pub median_file_cyclomatic_complexity: u32,
 }
 
 impl ProjectMetrics {
+    /// The project's complexity level, judged on its median (typical) file
+    /// — see `median_file_cyclomatic_complexity`. An empty project (no
+    /// measured files) reads "none", mirroring
+    /// `CodeMetrics::complexity_level()`'s own zero-function state, instead
+    /// of the misleadingly clean "low" `complexity_level_for(0)` would give.
     pub fn complexity_level(&self) -> &'static str {
+        if self.total_files == 0 {
+            return "none";
+        }
         complexity_level_for(self.median_file_cyclomatic_complexity)
+    }
+}
+
+/// Median of `cyclomatic_complexity()` across `per_file_metrics` — plain
+/// sort + index, no crate (hexagon stays zero-dep). Even count -> the two
+/// middle values average, round-half-up via integer arithmetic.
+fn median_cyclomatic_complexity(per_file_metrics: &HashMap<PathBuf, CodeMetrics>) -> u32 {
+    let mut values: Vec<u32> = per_file_metrics
+        .values()
+        .map(|m| m.cyclomatic_complexity())
+        .collect();
+    if values.is_empty() {
+        return 0;
+    }
+    values.sort_unstable();
+    let n = values.len();
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        let lower = values[n / 2 - 1] as u64;
+        let upper = values[n / 2] as u64;
+        ((lower + upper + 1) / 2) as u32
     }
 }
 
