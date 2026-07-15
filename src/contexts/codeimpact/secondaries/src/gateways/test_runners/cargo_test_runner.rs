@@ -581,16 +581,26 @@ impl CargoTestRunner {
     }
 
     /// A libtest binary that ran to completion — pass, fail, or zero
-    /// tests — always prints a `test result: ...` summary line. A binary
-    /// that crashed mid-harness (SIGSEGV, `abort()`, a panic that kills
-    /// the process before the summary) prints none. This, not the exit
-    /// status, is the discriminator: a binary with FAILING tests exits
-    /// non-zero on its ordinary, nominal path and must stay measurable
-    /// (#39 follow-up — Dev B).
+    /// tests — always prints a `test result: ...` summary line LAST. A
+    /// binary that crashed mid-harness (SIGSEGV, `abort()`, a panic that
+    /// kills the process before the summary) prints none. This, not the
+    /// exit status, is the discriminator: a binary with FAILING tests
+    /// exits non-zero on its ordinary, nominal path and must stay
+    /// measurable (#39 follow-up — Dev B).
+    ///
+    /// The summary must be the LAST non-empty line, not merely present
+    /// anywhere: a test body can `println!` a fake `test result: ...`
+    /// string, and a LATER test in the same binary can then crash the
+    /// process before libtest ever prints its real final summary. Scanning
+    /// for the string anywhere in stdout would still report that binary as
+    /// complete — a narrow reincarnation of the exact lie #39/ADR-0011
+    /// killed (#44).
     fn has_test_summary_line(stdout: &str) -> bool {
         stdout
             .lines()
-            .any(|line| line.trim().starts_with("test result"))
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| line.trim().starts_with("test result"))
     }
 
     fn parse_test_results(stdout: &str) -> (u32, u32) {
@@ -1456,5 +1466,70 @@ mod tests {
 
         assert_eq!(result.tests_passed(), 1);
         assert_eq!(result.tests_total(), 2);
+    }
+
+    // Test List (has_test_summary_line — the summary must be the LAST
+    // non-empty line of stdout, #44): a test body can `println!` a fake
+    // "test result: ..." string, then a LATER test in the same binary
+    // crashes the process before libtest ever prints its real final
+    // summary. The old `.any()` scan matched that fake line anywhere in
+    // stdout and reported the binary as complete — a narrow reincarnation
+    // of the exact lie #39/ADR-0011 killed (a crashed binary treated as
+    // measurable).
+    // 1. a fake "test result:" line printed from a test body, followed by
+    //    more output (simulating pre-crash noise) -> false: it is not the
+    //    last non-empty line, so it must not be trusted
+    // 2. the real summary line, genuinely last -> true (the ordinary
+    //    completed-binary case must stay recognized)
+    // 3. the real summary line followed only by trailing blank lines ->
+    //    true (trailing whitespace-only lines are not "more output")
+    // 4. no "test result:" line anywhere -> false (unchanged crash case)
+    // 5. stdout is empty or entirely blank -> false (the `.rev().find()`
+    //    `None` branch — a binary that produced no output at all must
+    //    never be silently trusted as complete; QA #44 retry #1)
+
+    #[test]
+    fn has_test_summary_line_is_false_when_stdout_is_empty_or_blank() {
+        assert!(!CargoTestRunner::has_test_summary_line(""));
+        assert!(!CargoTestRunner::has_test_summary_line("   \n\n  \n"));
+    }
+
+    #[test]
+    fn has_test_summary_line_rejects_a_summary_line_not_printed_last() {
+        let stdout = "test foo ... ok\n\
+                       test result: ok. 999 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\
+                       test bar ... ok\n";
+
+        assert!(
+            !CargoTestRunner::has_test_summary_line(stdout),
+            "a 'test result:' line printed from a test body, followed by more output, \
+             must not be trusted as the real completion summary"
+        );
+    }
+
+    #[test]
+    fn has_test_summary_line_accepts_the_real_summary_as_the_last_line() {
+        let stdout = "test foo ... ok\n\
+                       test bar ... ok\n\
+                       test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+
+        assert!(CargoTestRunner::has_test_summary_line(stdout));
+    }
+
+    #[test]
+    fn has_test_summary_line_ignores_trailing_blank_lines_after_the_summary() {
+        let stdout = "test foo ... ok\n\
+                       test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\
+                       \n\
+                       \n";
+
+        assert!(CargoTestRunner::has_test_summary_line(stdout));
+    }
+
+    #[test]
+    fn has_test_summary_line_is_false_when_absent() {
+        let stdout = "test foo ... ok\ntest bar ... ok\n";
+
+        assert!(!CargoTestRunner::has_test_summary_line(stdout));
     }
 }

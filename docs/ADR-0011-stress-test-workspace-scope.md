@@ -50,6 +50,8 @@ Un membre du workspace dont le binaire de test meurt (SIGSEGV, `abort()`, paniqu
 
 **Le discriminant est la ligne de résumé `test result:`, pas le code de sortie.** Un binaire libtest qui va au bout l'imprime *toujours* — succès, échec, ou zéro test. Un binaire qui meurt en cours n'en imprime aucune.
 
+> **Durci par #44 : la ligne doit être la *dernière ligne non vide* de stdout, pas présente *n'importe où*.** Un corps de test peut `println!("test result: ok. 999 passed")` ; si un test *ultérieur* du même binaire crashe avant le vrai résumé du harness, une recherche par `.any()` conclurait à tort « terminé normalement ». `has_test_summary_line` exige donc le résumé en dernière position (`.rev().find(non-vide).starts_with("test result")`). Valable car le discriminant s'applique au stdout d'**un seul** binaire (un résumé, en fin). stdout vide/tout-blanc ⇒ `false` (branche épinglée par un test dédié).
+
 > **Le code de sortie serait un piège.** Un binaire dont des tests **échouent** sort aussi en non-zéro : c'est son chemin **nominal**. S'en servir comme discriminant ferait échouer `stress-test` sur tout projet ayant un seul test rouge — or on mesure des stress tests, les tests rouges doivent rester mesurables. Un test dédié épingle ce garde-fou pour empêcher un futur « correctif » par `status.success()`.
 
 Absence de ligne de résumé ⇒ `Err`, tout le run échoue (fail-closed, comme `confine_all`). Pas de sauvetage d'un agrégat partiel.
