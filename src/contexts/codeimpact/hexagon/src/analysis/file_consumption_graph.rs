@@ -215,9 +215,7 @@ impl FileConsumptionGraph {
             total_economic_impact,
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
-            median_file_cyclomatic_complexity: median_cyclomatic_complexity(
-                &self.per_file_metrics,
-            ),
+            median_file_cyclomatic_complexity: median_cyclomatic_complexity(&self.per_file_metrics),
         }
     }
 
@@ -436,7 +434,7 @@ fn median_cyclomatic_complexity(per_file_metrics: &HashMap<PathBuf, CodeMetrics>
     } else {
         let lower = values[n / 2 - 1] as u64;
         let upper = values[n / 2] as u64;
-        ((lower + upper + 1) / 2) as u32
+        (lower + upper).div_ceil(2) as u32
     }
 }
 
