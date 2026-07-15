@@ -75,9 +75,13 @@ impl RunAnalysis {
                                 file.file_name().unwrap_or_default().to_string_lossy(),
                                 e
                             );
+                            let reason = match e {
+                                AnalysisError::Unmeasurable(reason) => reason,
+                                _ => UnmeasurableReason::SourceUnparseable,
+                            };
                             unmeasurable.push(UnmeasurableFile {
                                 path: file.clone(),
-                                reason: UnmeasurableReason::SourceUnparseable,
+                                reason,
                             });
                         }
                     }
@@ -220,10 +224,14 @@ impl RunAnalysis {
                             let metrics = Self::set_file_paths(metrics, file);
                             per_file.push((file.clone(), metrics));
                         }
-                        Err(_) => {
+                        Err(e) => {
+                            let reason = match e {
+                                AnalysisError::Unmeasurable(reason) => reason,
+                                _ => UnmeasurableReason::SourceUnparseable,
+                            };
                             unmeasurable.push(UnmeasurableFile {
                                 path: file.clone(),
-                                reason: UnmeasurableReason::SourceUnparseable,
+                                reason,
                             });
                         }
                     }

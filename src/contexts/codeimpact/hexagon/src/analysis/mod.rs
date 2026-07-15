@@ -19,6 +19,7 @@ pub mod reactive_analyzer;
 mod report_writer;
 mod run_analysis;
 mod run_stress_test;
+pub mod source_guard;
 pub mod stress_test_run;
 
 pub use analysis_rule::AnalysisRule;
@@ -45,4 +46,5 @@ pub use reactive_analyzer::ReactiveAnalyzer;
 pub use report_writer::ReportWriter;
 pub use run_analysis::RunAnalysis;
 pub use run_stress_test::RunStressTest;
+pub use source_guard::{check_admissible, MAX_MEASURABLE_SOURCE_BYTES};
 pub use stress_test_run::{Measurement, StressTestRun, TestRunnerPort, UnmeasurableReason};

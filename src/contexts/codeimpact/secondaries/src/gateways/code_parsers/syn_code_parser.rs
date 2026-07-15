@@ -1,3 +1,4 @@
+use codeimpact_hexagon::analysis::source_guard;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::LoopCall;
@@ -15,6 +16,8 @@ impl SynCodeParser {
 
 impl CodeParser for SynCodeParser {
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
+        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+
         let syntax_tree = syn::parse_file(source)
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
@@ -43,6 +46,8 @@ impl CodeParser for SynCodeParser {
     }
 
     fn parse_file_dependencies(&self, source: &str) -> Result<Vec<String>, AnalysisError> {
+        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+
         let syntax_tree = syn::parse_file(source)
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
@@ -578,6 +583,47 @@ impl FunctionVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codeimpact_hexagon::analysis::UnmeasurableReason;
+
+    // ── Test List (source_guard wiring, #62) ──────────────────────────
+    //   1. oversized_source_refused_before_syn_runs — >1 MB →
+    //      Err(Unmeasurable(SourceTooLarge)), structurally (no RSS assertion).
+    //   2. parse_file_dependencies_refused_when_source_too_large — same
+    //      guard, mirrored through the parse_file_dependencies entry point.
+    //   3. normal_source_still_parses — regression: normal source still
+    //      parses with the expected functions.
+
+    #[test]
+    fn oversized_source_refused_before_syn_runs() {
+        let source = "a".repeat(1024 * 1024 + 1);
+        let parser = SynCodeParser::new();
+        let result = parser.parse(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
+            other => panic!("expected Unmeasurable(SourceTooLarge), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_file_dependencies_refused_when_source_too_large() {
+        let source = "a".repeat(1024 * 1024 + 1);
+        let parser = SynCodeParser::new();
+        let result = parser.parse_file_dependencies(&source);
+        match result {
+            Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
+            other => panic!("expected Unmeasurable(SourceTooLarge), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normal_source_still_parses() {
+        let parser = SynCodeParser::new();
+        let source = "fn a() { if x > 0 { } }\nfn b() { while true { } }";
+        let functions = parser.parse(source).unwrap();
+        assert_eq!(functions.len(), 2);
+        assert_eq!(functions[0].name, "a");
+        assert_eq!(functions[1].name, "b");
+    }
 
     #[test]
     fn empty_source_returns_no_functions() {

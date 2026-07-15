@@ -54,3 +54,7 @@ path = "tests/stress_test_run_test.rs"
 [[test]]
 name = "run_analysis_html_test"
 path = "tests/run_analysis_html_test.rs"
+
+[[test]]
+name = "source_guard_test"
+path = "tests/source_guard_test.rs"

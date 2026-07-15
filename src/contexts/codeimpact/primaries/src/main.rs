@@ -206,6 +206,140 @@ fn write_report_file(output_path: &std::path::Path, content: &str) -> Result<(),
         .file_name()
         .ok_or_else(|| "nom de fichier de sortie invalide".to_string())?;
     let resolved_path = canonical_parent.join(file_name);
+
+    // `symlink_metadata` does not follow the final path component (unlike
+    // `metadata`), so a symlink is reported as itself: `fs::write` would
+    // otherwise follow it and clobber whatever it points to (demonstrated
+    // arbitrary overwrite), and would block forever opening a FIFO with no
+    // reader (demonstrated CI hang). Everything that is not a regular file
+    // is refused here, before either happens.
+    match std::fs::symlink_metadata(&resolved_path) {
+        Ok(meta) if !meta.file_type().is_file() => {
+            return Err("la cible de sortie n'est pas un fichier régulier".to_string());
+        }
+        _ => {}
+    }
+
     std::fs::write(&resolved_path, content)
         .map_err(|_| "impossible d'écrire le fichier de sortie".to_string())
+}
+
+#[cfg(all(test, unix))]
+mod write_report_file_tests {
+    use super::write_report_file;
+    use std::os::unix::fs::symlink;
+
+    fn isolated_dir(test_name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_write_report_file_test_{}_{}",
+            test_name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create isolated test dir");
+        dir
+    }
+
+    #[test]
+    fn write_to_new_path_creates_file() {
+        let dir = isolated_dir("new_path");
+        let target = dir.join("report.json");
+
+        let result = write_report_file(&target, "hello");
+
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overwrite_existing_regular_file_succeeds() {
+        let dir = isolated_dir("overwrite");
+        let target = dir.join("report.json");
+        std::fs::write(&target, "old").unwrap();
+
+        let result = write_report_file(&target, "new");
+
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_symlink_target_and_leaves_link_target_intact() {
+        let dir = isolated_dir("symlink");
+        let real_target = dir.join("real_target.txt");
+        std::fs::write(&real_target, "untouched").unwrap();
+        let link = dir.join("report.json");
+        symlink(&real_target, &link).expect("create symlink");
+
+        let result = write_report_file(&link, "malicious overwrite");
+
+        assert!(
+            result.is_err(),
+            "expected Err refusing a symlink target, got {:?}",
+            result
+        );
+        assert_eq!(
+            std::fs::read_to_string(&real_target).unwrap(),
+            "untouched",
+            "the symlink's target must be left untouched"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_fifo_target_without_hanging() {
+        let dir = isolated_dir("fifo");
+        let fifo = dir.join("report.json");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("failed to spawn mkfifo");
+        assert!(status.success(), "mkfifo must succeed to set up the test");
+
+        let result = write_report_file(&fifo, "content");
+
+        assert!(
+            result.is_err(),
+            "expected Err refusing a FIFO target, got {:?}",
+            result
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refusal_error_contains_no_path() {
+        let dir = isolated_dir("no_path_leak");
+        let real_target = dir.join("real_target.txt");
+        std::fs::write(&real_target, "untouched").unwrap();
+        let link = dir.join("report.json");
+        symlink(&real_target, &link).expect("create symlink");
+
+        let result = write_report_file(&link, "content");
+
+        let err = result.expect_err("expected Err refusing a symlink target");
+        assert!(
+            !err.contains(dir.to_str().unwrap()),
+            "error message must not leak the absolute path (ADR-0006): {}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_directory_target() {
+        let dir = isolated_dir("directory_target");
+        let target_dir = dir.join("report.json");
+        std::fs::create_dir(&target_dir).unwrap();
+
+        let result = write_report_file(&target_dir, "content");
+
+        assert!(
+            result.is_err(),
+            "expected Err refusing a directory target, got {:?}",
+            result
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
