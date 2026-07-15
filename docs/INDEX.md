@@ -26,11 +26,12 @@
 | ADR-0011 | technical | Stress test — portée workspace, agrégation, 0-test honnête | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0010]], [[ADR-0006]], [[ADR-0009]] | docs/ADR-0011-stress-test-workspace-scope.md |
 | ADR-0012 | technical | `hidden_complexity` — mesurée à l'atome, jamais dérivée d'agrégats | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0007]], [[glossary]], [[json-report-schema]], [[console-report-enriched]] | docs/ADR-0012-hidden-complexity-single-source.md |
 | ADR-0013 | technical | Contrat parser ↔ hexagone — le domaine nomme le concept, l'adaptateur nomme la syntaxe | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0012]], [[ADR-0001]], [[glossary]] | docs/ADR-0013-parser-hexagon-loop-call-contract.md |
-| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]] | docs/glossary.md |
+| ADR-0014 | technical | Le parseur voit enfin les méthodes — nom qualifié, résolution intra-type, trois états de mesure | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0013]], [[ADR-0007]], [[ADR-0008]], [[glossary]], [[json-report-schema]], [[console-report-enriched]], [[html-report]] | docs/ADR-0014-parser-impl-methods-qualified-names.md |
+| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]] | docs/glossary.md |
 
 ## Graph Health
 
-- **Total nodes:** 19
+- **Total nodes:** 20
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅

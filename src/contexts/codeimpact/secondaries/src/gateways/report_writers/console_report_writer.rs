@@ -271,6 +271,20 @@ impl ConsoleReportWriter {
         }
         writeln!(writer).unwrap();
 
+        let unmeasurable = graph.unmeasurable_files();
+        if !unmeasurable.is_empty() {
+            writeln!(
+                writer,
+                "=== Fichiers NON MESURÉS ({}) ===",
+                unmeasurable.len()
+            )
+            .unwrap();
+            for f in unmeasurable {
+                writeln!(writer, "  {} — {}", f.path.display(), f.reason).unwrap();
+            }
+            writeln!(writer).unwrap();
+        }
+
         writeln!(writer, "=== Résumé du projet ===").unwrap();
         writeln!(writer, "Fichiers analysés: {}", aggregated.total_files).unwrap();
         writeln!(

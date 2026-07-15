@@ -6,12 +6,24 @@ use super::complexity_detector::WarningSeverity;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
 use super::errors::AnalysisError;
+use super::measurement::UnmeasurableReason;
 
 /// A dependency between two files: `from` depends on `to`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileDependency {
     pub from: PathBuf,
     pub to: PathBuf,
+}
+
+/// A file that was never successfully measured — its source could not be
+/// read from disk, or could not be parsed (D3, #50). Distinct from
+/// `CodeMetrics::complexity_level() == "none"` (the file WAS read and
+/// parsed, it simply has zero functions): this file never reached
+/// `CodeMetrics` at all, so it carries no numbers to enter any sum.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnmeasurableFile {
+    pub path: PathBuf,
+    pub reason: UnmeasurableReason,
 }
 
 /// Immutable value object representing the consumption graph of a project.
@@ -26,6 +38,7 @@ pub struct FileConsumptionGraph {
     per_file_metrics: HashMap<PathBuf, CodeMetrics>,
     cycle_nodes: HashSet<PathBuf>,
     max_depth: usize,
+    unmeasurable_files: Vec<UnmeasurableFile>,
 }
 
 impl FileConsumptionGraph {
@@ -89,7 +102,21 @@ impl FileConsumptionGraph {
             per_file_metrics,
             cycle_nodes,
             max_depth,
+            unmeasurable_files: Vec::new(),
         })
+    }
+
+    /// Attaches the files that could not be measured (failed to read or to
+    /// parse) — builder style, consistent with `CodeMetrics::with_*` (D3,
+    /// #50).
+    pub fn with_unmeasurable_files(mut self, files: Vec<UnmeasurableFile>) -> Self {
+        self.unmeasurable_files = files;
+        self
+    }
+
+    /// Files that could not be measured — see `UnmeasurableFile`.
+    pub fn unmeasurable_files(&self) -> &[UnmeasurableFile] {
+        &self.unmeasurable_files
     }
 
     /// Returns the files in the graph.
@@ -187,6 +214,7 @@ impl FileConsumptionGraph {
             hotspot_files,
             total_economic_impact,
             total_ecological_impact,
+            unmeasurable_files: self.unmeasurable_files.len(),
         }
     }
 
@@ -358,6 +386,11 @@ pub struct ProjectMetrics {
     pub hotspot_files: usize,
     pub total_economic_impact: Option<EconomicImpact>,
     pub total_ecological_impact: Option<EcologicalImpact>,
+    /// Count of files that could not be measured (failed to read or parse)
+    /// — see `FileConsumptionGraph::unmeasurable_files()` for the list.
+    /// `total_files` keeps its existing meaning (MEASURED files only): this
+    /// is a separate counter, not folded into it (D3, #50).
+    pub unmeasurable_files: usize,
 }
 
 /// Resolve a raw dependency string (from `parse_file_dependencies`) to a file path.
