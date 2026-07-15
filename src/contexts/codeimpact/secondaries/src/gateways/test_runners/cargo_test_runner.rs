@@ -1484,6 +1484,15 @@ mod tests {
     // 3. the real summary line followed only by trailing blank lines ->
     //    true (trailing whitespace-only lines are not "more output")
     // 4. no "test result:" line anywhere -> false (unchanged crash case)
+    // 5. stdout is empty or entirely blank -> false (the `.rev().find()`
+    //    `None` branch — a binary that produced no output at all must
+    //    never be silently trusted as complete; QA #44 retry #1)
+
+    #[test]
+    fn has_test_summary_line_is_false_when_stdout_is_empty_or_blank() {
+        assert!(!CargoTestRunner::has_test_summary_line(""));
+        assert!(!CargoTestRunner::has_test_summary_line("   \n\n  \n"));
+    }
 
     #[test]
     fn has_test_summary_line_rejects_a_summary_line_not_printed_last() {
