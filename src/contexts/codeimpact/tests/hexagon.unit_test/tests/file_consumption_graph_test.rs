@@ -36,6 +36,14 @@ use codeimpact_hexagon::analysis::{
 //  21. aggregated_impacts_all_missing — None when no file has impacts
 //  22. hotspot_files_counts_only_critical — mixed critical/high/low files,
 //      hotspot_files counts only the "critical" ones (#46/#49 follow-up)
+//  23. median_differs_from_total_band — many tiny files + a couple huge
+//      ones: total lands "critical", median lands "low" (#60 — the total is
+//      off the per-file scale, the median stays on it)
+//  24. median_even_count_averages_middle_two_round_half_up — 4 files,
+//      middle two average to a .5 → rounds up
+//  25. median_empty_project_reports_none — zero measured files → median is
+//      0 and complexity_level() is "none", not the misleadingly clean "low"
+//      complexity_level_for(0) would give
 //
 // total_dependencies / max_depth:
 //  18. graph_with_chain — correct depth and count
@@ -385,6 +393,60 @@ fn aggregated_metrics_empty_project() {
     assert_eq!(metrics.total_transitive_complexity, 0);
     assert_eq!(metrics.max_call_depth, 0);
     assert!(metrics.files_with_cycles.is_empty());
+}
+
+// #60: the project `complexity_level` was reading `complexity_level_for`
+// (the PER-FILE scale, ceilings 10/20/40) against the PROJECT TOTAL — a
+// number that is off that scale by construction, so it reads "critical" for
+// almost any real project. The fix judges the scale against the MEDIAN
+// per-file complexity instead, which stays on the scale it was calibrated
+// against.
+#[test]
+fn median_differs_from_total_band() {
+    // 9 tiny files (cc=2) + 2 huge files (cc=200).
+    // total = 9*2 + 2*200 = 418 -> complexity_level_for(418) == "critical"
+    // sorted per-file values (11 of them): [2,2,2,2,2,2,2,2,2,200,200]
+    // median (6th of 11, odd count) = 2 -> complexity_level_for(2) == "low"
+    let mut files: Vec<(PathBuf, CodeMetrics)> = (0..9)
+        .map(|i| (path(&format!("tiny{i}.rs")), make_metrics(2, 2)))
+        .collect();
+    files.push((path("huge1.rs"), make_metrics(200, 200)));
+    files.push((path("huge2.rs"), make_metrics(200, 200)));
+
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let metrics = graph.aggregated_metrics();
+
+    assert_eq!(metrics.total_cyclomatic_complexity, 418);
+    assert_eq!(
+        metrics.median_file_cyclomatic_complexity, 2,
+        "median must reflect the typical file, not be dragged up by the two huge outliers"
+    );
+    assert_eq!(metrics.complexity_level(), "low");
+}
+
+#[test]
+fn median_even_count_averages_middle_two_round_half_up() {
+    // 4 files, cc = [1, 3, 4, 7]. Middle two are 3 and 4 -> average 3.5,
+    // rounds half-up to 4.
+    let files = vec![
+        (path("a.rs"), make_metrics(1, 1)),
+        (path("b.rs"), make_metrics(3, 3)),
+        (path("c.rs"), make_metrics(4, 4)),
+        (path("d.rs"), make_metrics(7, 7)),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let metrics = graph.aggregated_metrics();
+
+    assert_eq!(metrics.median_file_cyclomatic_complexity, 4);
+}
+
+#[test]
+fn median_empty_project_reports_none() {
+    let graph = FileConsumptionGraph::build(&[], vec![]).unwrap();
+    let metrics = graph.aggregated_metrics();
+
+    assert_eq!(metrics.median_file_cyclomatic_complexity, 0);
+    assert_eq!(metrics.complexity_level(), "none");
 }
 
 #[test]

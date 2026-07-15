@@ -1,6 +1,5 @@
 use std::time::SystemTime;
 
-use codeimpact_hexagon::analysis::complexity_level_for;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ComplexityWarning;
@@ -324,8 +323,7 @@ pub fn serialize_project_metrics(
             transitive_complexity: aggregated.total_transitive_complexity,
             hidden_complexity: aggregated.total_hidden_complexity,
             max_call_depth: aggregated.max_call_depth,
-            complexity_level: complexity_level_for(aggregated.total_cyclomatic_complexity)
-                .to_string(),
+            complexity_level: aggregated.complexity_level().to_string(),
             functions_with_cycles: aggregated
                 .files_with_cycles
                 .iter()
