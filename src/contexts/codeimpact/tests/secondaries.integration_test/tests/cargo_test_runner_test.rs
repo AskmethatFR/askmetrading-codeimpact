@@ -203,6 +203,7 @@ fn create_temp_crate_with_slow_build(name: &str) -> tempfile::TempDir {
 // difference in KIND of work (a fixed sleep vs. running two assertions),
 // not by a margin contention could close.
 #[test]
+#[ignore = "slow (~20s build.rs sleep floor, ADR-0010); runs in the dedicated `slow-tests` CI job on every PR — see #41"]
 fn cargo_test_runner_excludes_build_time_from_measured_duration() {
     let _guard = lock_cargo_spawn();
     let crate_dir = create_temp_crate_with_slow_build("slow_build_crate");
