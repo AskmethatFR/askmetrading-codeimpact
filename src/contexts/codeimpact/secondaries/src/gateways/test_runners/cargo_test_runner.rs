@@ -101,19 +101,29 @@ impl CargoTestRunner {
 
     /// Runs the already-compiled test binary directly — this, and only
     /// this, is what gets measured (#36 bug 2).
+    ///
+    /// Replays `confine_to_target_dir` here, at the actual execution point
+    /// (#40 AC#2): `build_test_binaries` already confines its candidates,
+    /// but that confinement held by caller convention only — this function
+    /// is the one that builds the `Command` that gets spawned, so the
+    /// invariant must be structural here too. Executes the CANONICAL path
+    /// returned by the check, never the raw `binary` argument
+    /// (validate-then-use-the-validated-value).
     fn measure_cmd(
         project_dir: &Path,
         binary: &Path,
         filter: Option<&str>,
         use_time: bool,
-    ) -> Command {
+    ) -> Result<Command, AnalysisError> {
+        let canonical = Self::confine_to_target_dir(project_dir, binary)?;
+
         let mut cmd = if use_time {
             let mut c = Command::new("/usr/bin/time");
             c.arg(Self::time_flag());
-            c.arg(binary);
+            c.arg(&canonical);
             c
         } else {
-            Command::new(binary)
+            Command::new(&canonical)
         };
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -123,7 +133,7 @@ impl CargoTestRunner {
             cmd.arg(f);
         }
 
-        cmd
+        Ok(cmd)
     }
 
     fn run_with_timeout(cmd: Command) -> Result<(Duration, Output), AnalysisError> {
@@ -449,7 +459,7 @@ impl CargoTestRunner {
         filter: Option<&str>,
         use_time: bool,
     ) -> Result<StressTestRun, AnalysisError> {
-        let cmd = Self::measure_cmd(project_dir, binary, filter, use_time);
+        let cmd = Self::measure_cmd(project_dir, binary, filter, use_time)?;
         let (elapsed, output) = Self::run_with_timeout(cmd)?;
 
         let duration_ms = elapsed.as_millis() as u64;
@@ -739,30 +749,110 @@ mod tests {
         assert!(!args.contains(&"--lib".to_string()));
     }
 
+    fn confined_fake_binary(project: &Path) -> PathBuf {
+        let target_dir = project.join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        let binary = target_dir.join("fake-test-binary");
+        std::fs::write(&binary, b"").expect("write fake binary");
+        binary
+    }
+
     #[test]
     fn measure_cmd_wraps_binary_in_time_when_sampler_available() {
-        let binary = Path::new("/tmp/fake-test-binary");
-        let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, true);
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let cmd = CargoTestRunner::measure_cmd(project.path(), &binary, None, true)
+            .expect("binary is inside target dir");
+
         assert_eq!(cmd.get_program(), "/usr/bin/time");
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert!(args.iter().any(|a| a.contains("fake-test-binary")));
+        // Exact match against the canonicalized path, not a substring
+        // (#40 follow-up, Dev B) — a substring check is true for BOTH the
+        // raw and the canonicalized path, so it cannot discriminate
+        // whether the sampler branch executed `canonical` or `binary`.
+        // Mirrors measure_cmd_runs_binary_directly_when_no_sampler.
+        let canonical_binary = std::fs::canonicalize(&binary).expect("canonicalize fake binary");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert!(args.iter().any(|a| *a == canonical_binary.as_os_str()));
     }
 
     #[test]
     fn measure_cmd_runs_binary_directly_when_no_sampler() {
-        let binary = Path::new("/tmp/fake-test-binary");
-        let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, false);
-        assert_eq!(cmd.get_program(), binary);
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let cmd = CargoTestRunner::measure_cmd(project.path(), &binary, None, false)
+            .expect("binary is inside target dir");
+
+        // Canonicalized, not the raw `binary` argument (#40 AC#2) — on
+        // macOS /tmp is a symlink to /private/tmp, so canonicalize()
+        // changes the path; comparing against the raw path here would be
+        // an intermittent cross-platform false negative.
+        assert_eq!(
+            cmd.get_program(),
+            std::fs::canonicalize(&binary).expect("canonicalize fake binary")
+        );
     }
 
     #[test]
     fn measure_cmd_never_reinvokes_cargo() {
-        let binary = Path::new("/tmp/fake-test-binary");
-        let cmd = CargoTestRunner::measure_cmd(Path::new("."), binary, None, true);
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let cmd = CargoTestRunner::measure_cmd(project.path(), &binary, None, true)
+            .expect("binary is inside target dir");
+
         assert_ne!(cmd.get_program(), "cargo");
+    }
+
+    // Test List (measure_cmd — replay confinement at the execution point,
+    // #40 AC#2): build_test_binaries confines candidates via
+    // confine_to_target_dir before the build handoff, but measure_cmd — the
+    // function that actually builds the Command that gets spawned — trusted
+    // its `binary` argument by caller convention only. The invariant must be
+    // structural, not conventional.
+    // 1. binary outside project/target -> Err
+    // 2. the rejection message leaks neither the binary nor the tempdir path
+    // 3. binary inside project/target -> Ok (guards against a naive
+    //    always-Err implementation)
+
+    #[test]
+    fn measure_cmd_rejects_a_binary_outside_the_target_dir() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let outside = tempfile::tempdir().expect("create temp dir");
+        let outside_binary = outside.path().join("evil-binary");
+        std::fs::write(&outside_binary, b"").expect("write fake binary");
+
+        let result = CargoTestRunner::measure_cmd(project.path(), &outside_binary, None, false);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn measure_cmd_rejection_message_leaks_no_path() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(project.path().join("target")).expect("create target dir");
+        let outside = tempfile::tempdir().expect("create temp dir");
+        let outside_binary = outside.path().join("evil-binary");
+        std::fs::write(&outside_binary, b"").expect("write fake binary");
+
+        let err = CargoTestRunner::measure_cmd(project.path(), &outside_binary, None, false)
+            .expect_err("should be rejected");
+
+        let message = err.to_string();
+        assert!(!message.contains(&outside_binary.to_string_lossy().to_string()));
+        assert!(!message.contains(&outside.path().to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn measure_cmd_accepts_a_binary_inside_the_target_dir() {
+        let project = tempfile::tempdir().expect("create temp dir");
+        let binary = confined_fake_binary(project.path());
+
+        let result = CargoTestRunner::measure_cmd(project.path(), &binary, None, false);
+
+        assert!(result.is_ok());
     }
 
     // Test List (run_with_timeout — drain stdout/stderr concurrently while
@@ -1291,8 +1381,10 @@ mod tests {
     fn measure_test_binary_with_sampler_no_sampler_yields_unmeasurable() {
         let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
+        let target_dir = dir.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
         let binary = write_executable_script(
-            dir.path(),
+            &target_dir,
             "fake_test_binary.sh",
             "#!/bin/sh\necho 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s'\nexit 0\n",
         );
@@ -1325,8 +1417,10 @@ mod tests {
     fn measure_test_binary_with_sampler_errors_when_binary_crashes_without_summary_line() {
         let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
+        let target_dir = dir.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
         let binary = write_executable_script(
-            dir.path(),
+            &target_dir,
             "crashes_mid_run.sh",
             "#!/bin/sh\necho 'test foo ... ok'\necho 'test bar ... ok'\nexit 134\n",
         );
@@ -1345,8 +1439,10 @@ mod tests {
     fn measure_test_binary_with_sampler_still_succeeds_when_tests_fail_but_complete() {
         let _guard = lock_fork_in_test_binary();
         let dir = tempfile::tempdir().expect("create temp dir");
+        let target_dir = dir.path().join("target/debug/deps");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
         let binary = write_executable_script(
-            dir.path(),
+            &target_dir,
             "fails_but_completes.sh",
             "#!/bin/sh\necho 'test foo ... ok'\necho 'test bar ... FAILED'\necho 'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\nexit 1\n",
         );
