@@ -454,3 +454,56 @@ fn project_with_oversized_file_marks_it_source_too_large() {
     let pm = graph.aggregated_metrics();
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
 }
+
+// build_project_graph (#62) is the shared path behind BOTH handle_project
+// (console, pinned above) and handle_project_json/handle_project_html
+// (--format json/html). Only the console twin was pinned; this mirrors it
+// through handle_project_json so the JSON/HTML reason-mapping branch is
+// pinned too.
+#[test]
+fn project_json_marks_oversized_file_source_too_large() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/huge.rs"), "OVERSIZED".into());
+    reader.add_rust_file(PathBuf::from("src/good.rs"));
+    reader.add_rust_file(PathBuf::from("src/huge.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![],
+    }])
+    .failing_when_source_contains(
+        "OVERSIZED",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+    );
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+
+    let result = use_case.handle_project_json(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_json should have been called");
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/huge.rs"));
+    assert_eq!(
+        unmeasurable[0].reason,
+        UnmeasurableReason::SourceTooLarge,
+        "must be SourceTooLarge, not the generic SourceUnparseable fallback"
+    );
+    let pm = graph.aggregated_metrics();
+    assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
+}
