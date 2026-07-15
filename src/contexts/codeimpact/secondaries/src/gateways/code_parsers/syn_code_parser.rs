@@ -1,3 +1,4 @@
+use codeimpact_hexagon::analysis::source_guard;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::LoopCall;
@@ -15,6 +16,8 @@ impl SynCodeParser {
 
 impl CodeParser for SynCodeParser {
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
+        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+
         let syntax_tree = syn::parse_file(source)
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
@@ -43,6 +46,8 @@ impl CodeParser for SynCodeParser {
     }
 
     fn parse_file_dependencies(&self, source: &str) -> Result<Vec<String>, AnalysisError> {
+        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+
         let syntax_tree = syn::parse_file(source)
             .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
 
