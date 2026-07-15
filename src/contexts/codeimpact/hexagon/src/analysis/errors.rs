@@ -9,8 +9,8 @@ pub enum AnalysisError {
     UnsupportedTarget(String),
     TestRunnerError(String),
     /// The source was refused by `source_guard::check_admissible` before
-    /// ever reaching the parser (#62, #63) — too large, or nested/reference
-    /// depth too great for a recursive-descent parse to survive.
+    /// ever reaching the parser (#62) — too large to safely offer to the
+    /// parser.
     Unmeasurable(UnmeasurableReason),
 }
 
