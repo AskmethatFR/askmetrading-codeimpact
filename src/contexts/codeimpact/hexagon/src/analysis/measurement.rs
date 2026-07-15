@@ -17,6 +17,14 @@ pub enum UnmeasurableReason {
     SourceUnparseable,
     /// The file could not be read from disk at all (D3, #50).
     SourceUnreadable,
+    /// The file's byte length exceeds `source_guard::MAX_MEASURABLE_SOURCE_BYTES`
+    /// (#62): refused before the parser ever sees it, to cap worst-case RSS.
+    SourceTooLarge,
+    /// The file's nesting depth or a run of consecutive `&` exceeds
+    /// `source_guard::MAX_MEASURABLE_NESTING_DEPTH` (#63): refused before the
+    /// parser ever sees it, because a deep-enough recursive-descent parse
+    /// aborts the whole process (uncatchable stack-overflow SIGABRT).
+    SourceTooComplex,
 }
 
 impl std::fmt::Display for UnmeasurableReason {
@@ -26,6 +34,8 @@ impl std::fmt::Display for UnmeasurableReason {
             Self::NoTestsExecuted => write!(f, "aucun test exécuté"),
             Self::SourceUnparseable => write!(f, "code source non analysable"),
             Self::SourceUnreadable => write!(f, "fichier illisible"),
+            Self::SourceTooLarge => write!(f, "code source trop volumineux pour être mesuré"),
+            Self::SourceTooComplex => write!(f, "code source trop complexe (imbrication excessive)"),
         }
     }
 }
