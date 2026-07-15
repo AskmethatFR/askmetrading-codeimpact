@@ -399,3 +399,106 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
     assert_eq!(pm.unmeasurable_files, 1);
 }
+
+// source_guard (#62, #63) — a file refused by check_admissible carries its
+// precise reason (SourceTooLarge / SourceTooComplex) through to the report,
+// instead of collapsing into the generic SourceUnparseable every other
+// parse failure gets.
+
+#[test]
+fn project_with_oversized_file_marks_it_source_too_large() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/huge.rs"), "OVERSIZED".into());
+    reader.add_rust_file(PathBuf::from("src/good.rs"));
+    reader.add_rust_file(PathBuf::from("src/huge.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![],
+    }])
+    .failing_when_source_contains(
+        "OVERSIZED",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+    );
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+    );
+    assert!(result.is_ok());
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    assert!(
+        graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/good.rs")),
+        "good.rs should still be measured"
+    );
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/huge.rs"));
+    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceTooLarge);
+    let pm = graph.aggregated_metrics();
+    assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
+}
+
+#[test]
+fn project_with_pathological_file_completes() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/pathological.rs"), "PATHOLOGICAL".into());
+    reader.add_rust_file(PathBuf::from("src/good.rs"));
+    reader.add_rust_file(PathBuf::from("src/pathological.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![],
+    }])
+    .failing_when_source_contains(
+        "PATHOLOGICAL",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooComplex),
+    );
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+    );
+    assert!(result.is_ok(), "process must stay alive: {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/pathological.rs"));
+    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceTooComplex);
+    assert!(
+        graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/good.rs")),
+        "good.rs should still be measured"
+    );
+}
