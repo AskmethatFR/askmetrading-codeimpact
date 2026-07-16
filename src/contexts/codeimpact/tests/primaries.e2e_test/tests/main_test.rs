@@ -443,6 +443,47 @@ fn e2e_analyze_method_call_io_in_loop_is_detected() {
     );
 }
 
+// #56 T2 — abstention (ADR-0010). `ctx.conn.connect()` is a field-access
+// receiver (never resolved) whose method name ("connect") is on the
+// human-approved suspicious-name list — the correct verdict is Unknown, not
+// a fabricated Io warning and not a silent NotIo either. The user-observable
+// outcome: the console shows an aggregate "non classifiables" counter ≥ 1,
+// while the genuine `file.read_to_string(..)` Io call in the SAME loop still
+// warns normally. Abstention is a NUMBER (ADR-0010/ADR-0014 §4), never a
+// per-line pseudo-warning — so "connect" must NOT appear as an
+// "I/O dans boucle" entry.
+#[test]
+fn e2e_analyze_unclassifiable_io_in_loop_is_counted_not_warned() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("unclassifiable_io_in_loop.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("I/O dans boucle: read_to_string"),
+        "the genuine Io call must still warn: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("I/O dans boucle: connect"),
+        "an Unknown call must never surface as a per-line I/O warning: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Appels en boucle non classifiables: 1"),
+        "expected the aggregate unclassifiable counter to show 1: {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_json_format_outputs_valid_json() {
     let binary = binary_path();

@@ -342,3 +342,78 @@ fn io_in_loops_rule_not_in_rules_returns_empty() {
     let io = metrics.io_in_loops();
     assert!(io.is_empty(), "IoInLoops not in rules should return empty");
 }
+
+#[test]
+fn io_in_loops_rule_counts_unclassifiable_calls() {
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "process".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![
+            LoopCall {
+                name: "std::fs::read".to_string(),
+                line: 5,
+                col: 9,
+                io: IoClassification::Io,
+            },
+            LoopCall {
+                name: "connect".to_string(),
+                line: 6,
+                col: 9,
+                io: IoClassification::Unknown,
+            },
+        ],
+    }]);
+    let metrics = proactive_analyzer::analyze(
+        "fn process() { for _ in 0..10 { std::fs::read(\"file\"); conn.connect(); } }",
+        &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops],
+        &parser,
+    )
+    .expect("analysis should succeed");
+    assert_eq!(
+        metrics.unclassifiable_io_in_loops_count(),
+        1,
+        "exactly the Unknown call should be counted, the Io call must not contribute"
+    );
+    assert_eq!(
+        metrics.io_in_loops().len(),
+        1,
+        "the Unknown call must never surface as a per-line warning"
+    );
+}
+
+#[test]
+fn io_in_loops_rule_not_in_rules_returns_zero_unclassifiable() {
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "process".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        match_arms: 0,
+        calls_in_loops: vec![LoopCall {
+            name: "connect".to_string(),
+            line: 6,
+            col: 9,
+            io: IoClassification::Unknown,
+        }],
+    }]);
+    let metrics = proactive_analyzer::analyze(
+        "fn process() { for _ in 0..10 { conn.connect(); } }",
+        &[AnalysisRule::CyclomaticComplexity],
+        &parser,
+    )
+    .expect("analysis should succeed");
+    assert_eq!(
+        metrics.unclassifiable_io_in_loops_count(),
+        0,
+        "IoInLoops not in rules should not compute the unclassifiable count either"
+    );
+}
