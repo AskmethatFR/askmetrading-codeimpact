@@ -20,6 +20,11 @@ pub enum UnmeasurableReason {
     /// The file's byte length exceeds `source_guard::MAX_MEASURABLE_SOURCE_BYTES`
     /// (#62): refused before the parser ever sees it, to cap worst-case RSS.
     SourceTooLarge,
+    /// The parse-probe canary process (#63) did not exit cleanly (code 0 or
+    /// 2) within its budget: pathological nesting overflowed its stack, hit
+    /// its memory limit, or ran past its timeout. The parent never re-runs
+    /// `syn::parse_file` in that case — the file is refused, not measured.
+    SourceTooComplex,
 }
 
 impl std::fmt::Display for UnmeasurableReason {
@@ -30,6 +35,7 @@ impl std::fmt::Display for UnmeasurableReason {
             Self::SourceUnparseable => write!(f, "code source non analysable"),
             Self::SourceUnreadable => write!(f, "fichier illisible"),
             Self::SourceTooLarge => write!(f, "code source trop volumineux pour être mesuré"),
+            Self::SourceTooComplex => write!(f, "code source trop complexe pour être mesuré"),
         }
     }
 }

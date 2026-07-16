@@ -3,79 +3,259 @@ use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use syn::spanned::Spanned;
 
-#[derive(Default)]
-pub struct SynCodeParser;
+/// The parent's re-parse budget once the canary (`codeimpact-parse-probe`)
+/// has proven a source terminates cleanly (exit 0 or 2). Deliberately
+/// double the probe's own 16 MiB (`PROBE_STACK_BYTES` in
+/// `src/bin/parse_probe.rs`) — stack *dominance*, not equality (D2, #63):
+/// the same computation under a strictly larger budget cannot newly
+/// overflow, closing the class rather than narrowing it.
+const PARENT_REPARSE_STACK_BYTES: usize = 32 * 1024 * 1024;
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeVerdict {
+    Admissible,
+    SyntaxError,
+    TooComplex,
+}
+
+/// Pure mapping from the canary's exit code to a verdict (D3, #63) — no
+/// signal introspection, no `#[cfg(unix)]` branch: `Some(0)`/`Some(2)` are
+/// the only codes the canary can emit for a proven-clean termination,
+/// everything else (a killed-by-signal `None`, a Windows structured
+/// exception code, a stray exit(7), a timeout-kill) is refused.
+fn verdict_from(status_code: Option<i32>) -> ProbeVerdict {
+    match status_code {
+        Some(0) => ProbeVerdict::Admissible,
+        Some(2) => ProbeVerdict::SyntaxError,
+        _ => ProbeVerdict::TooComplex,
+    }
+}
+
+fn hash_source(source: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Locates the `codeimpact-parse-probe` binary (#63): (1) an explicit
+/// override — also the escape hatch for fake probes in tests — (2) next to
+/// the current executable (production: both binaries ship side by side),
+/// (3) next to the current executable's *parent* directory (an
+/// integration-test binary lives one level deeper, under `target/*/deps/`,
+/// than the workspace's own bin artifacts).
+fn discover_probe_path() -> Option<PathBuf> {
+    if let Ok(configured) = std::env::var("CODEIMPACT_PARSE_PROBE") {
+        return Some(PathBuf::from(configured));
+    }
+
+    let exe_name = format!("codeimpact-parse-probe{}", std::env::consts::EXE_SUFFIX);
+    let current_exe = std::env::current_exe().ok()?;
+    let dir = current_exe.parent()?;
+
+    let sibling = dir.join(&exe_name);
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+
+    let cousin = dir.parent()?.join(&exe_name);
+    if cousin.is_file() {
+        return Some(cousin);
+    }
+
+    None
+}
+
+/// Spawns the canary, feeds it `source` over stdin, and waits up to
+/// `PROBE_TIMEOUT` — killing it on timeout, which is itself a difference of
+/// *nature* (the process never proved it terminates), not a timing margin
+/// (ADR-0010's lesson). Never returns an `Err` for the canary's own
+/// crash/timeout — only for the canary being unreachable at all, which is
+/// an installation problem the caller must surface loudly.
+fn probe_source(source: &str) -> Result<ProbeVerdict, AnalysisError> {
+    let probe_path = discover_probe_path().ok_or_else(probe_missing_error)?;
+
+    let mut child = std::process::Command::new(&probe_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| probe_missing_error())?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        // A broken pipe (child died before reading) is not this call's
+        // concern — the exit status collected below is what decides the
+        // verdict either way.
+        let _ = stdin.write_all(source.as_bytes());
+    }
+
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(verdict_from(status.code())),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(ProbeVerdict::TooComplex);
+            }
+            Err(_) => return Ok(ProbeVerdict::TooComplex),
+        }
+    }
+}
+
+fn probe_missing_error() -> AnalysisError {
+    AnalysisError::AnalysisFailed(
+        "sonde d'analyse introuvable (définissez CODEIMPACT_PARSE_PROBE)".to_string(),
+    )
+}
+
+/// Parses `source` and runs `extract` against the resulting `syn::File`,
+/// both inside one thread carrying `PARENT_REPARSE_STACK_BYTES` of stack.
+/// `syn::File` itself is not `Send` (it borrows through `proc_macro2`), so
+/// only `extract`'s Send-safe result — never the tree — crosses back out.
+fn parse_and_extract<F, T>(source: &str, extract: F) -> Result<T, AnalysisError>
+where
+    F: FnOnce(&syn::File) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let owned = source.to_string();
+    std::thread::Builder::new()
+        .stack_size(PARENT_REPARSE_STACK_BYTES)
+        .spawn(move || {
+            syn::parse_file(&owned)
+                .map(|tree| extract(&tree))
+                .map_err(|e| format!("erreur de syntaxe: {}", e))
+        })
+        .expect("failed to spawn parser thread")
+        .join()
+        .expect("parser thread panicked")
+        .map_err(AnalysisError::AnalysisFailed)
+}
+
+pub struct SynCodeParser {
+    /// Single-entry verdict cache (#63, T2): `parse` and
+    /// `parse_file_dependencies` are called back-to-back on the same
+    /// file's source, so remembering only the *last* probed source's hash
+    /// avoids a second fork+exec per file without the complexity of a full
+    /// map — nothing in this crate probes more than one file at a time.
+    probe_verdict_cache: Mutex<Option<(u64, ProbeVerdict)>>,
+}
+
+impl Default for SynCodeParser {
+    fn default() -> Self {
+        Self {
+            probe_verdict_cache: Mutex::new(None),
+        }
+    }
+}
 
 impl SynCodeParser {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    fn cached_probe(&self, source: &str) -> Result<ProbeVerdict, AnalysisError> {
+        let hash = hash_source(source);
+        if let Some((cached_hash, verdict)) = *self.probe_verdict_cache.lock().unwrap() {
+            if cached_hash == hash {
+                return Ok(verdict);
+            }
+        }
+        let verdict = probe_source(source)?;
+        *self.probe_verdict_cache.lock().unwrap() = Some((hash, verdict));
+        Ok(verdict)
+    }
+
+    /// The shared guard in front of both `CodeParser` entry points:
+    /// refuses an oversized source (#62), and asks the canary whether this
+    /// source is safe to parse (#63). `Ok(())` means the canary proved
+    /// this exact source terminates cleanly — the caller may now re-parse
+    /// it in a stack-dominant thread via `parse_and_extract`.
+    fn guard_admissible(&self, source: &str) -> Result<(), AnalysisError> {
+        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+
+        match self.cached_probe(source)? {
+            ProbeVerdict::TooComplex => Err(AnalysisError::Unmeasurable(
+                UnmeasurableReason::SourceTooComplex,
+            )),
+            ProbeVerdict::Admissible | ProbeVerdict::SyntaxError => Ok(()),
+        }
     }
 }
 
 impl CodeParser for SynCodeParser {
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
-        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+        self.guard_admissible(source)?;
 
-        let syntax_tree = syn::parse_file(source)
-            .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
+        parse_and_extract(source, |syntax_tree| {
+            let mut pending = Vec::new();
+            collect_functions(&syntax_tree.items, "", &mut pending);
+            dedupe_names(&mut pending);
 
-        let mut pending = Vec::new();
-        collect_functions(&syntax_tree.items, "", &mut pending);
-        dedupe_names(&mut pending);
-
-        let mut functions = Vec::new();
-        for pf in pending {
-            let mut visitor = FunctionVisitor::new(pf.enclosing_type);
-            visitor.visit_block(pf.block);
-            functions.push(ParsedFunction {
-                name: pf.name,
-                start_line: pf.start_line,
-                calls: visitor.calls,
-                has_loop: visitor.has_loop,
-                has_nested_loop: visitor.has_nested_loop,
-                decision_points: visitor.decision_points,
-                depth: visitor.max_depth,
-                match_arms: visitor.match_arms,
-                calls_in_loops: visitor.calls_in_loops,
-            });
-        }
-
-        Ok(functions)
+            let mut functions = Vec::new();
+            for pf in pending {
+                let mut visitor = FunctionVisitor::new(pf.enclosing_type);
+                visitor.visit_block(pf.block);
+                functions.push(ParsedFunction {
+                    name: pf.name,
+                    start_line: pf.start_line,
+                    calls: visitor.calls,
+                    has_loop: visitor.has_loop,
+                    has_nested_loop: visitor.has_nested_loop,
+                    decision_points: visitor.decision_points,
+                    depth: visitor.max_depth,
+                    match_arms: visitor.match_arms,
+                    calls_in_loops: visitor.calls_in_loops,
+                });
+            }
+            functions
+        })
     }
 
     fn parse_file_dependencies(&self, source: &str) -> Result<Vec<String>, AnalysisError> {
-        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+        self.guard_admissible(source)?;
 
-        let syntax_tree = syn::parse_file(source)
-            .map_err(|e| AnalysisError::AnalysisFailed(format!("erreur de syntaxe: {}", e)))?;
+        parse_and_extract(source, |syntax_tree| {
+            let mut deps = Vec::new();
 
-        let mut deps = Vec::new();
-
-        for item in &syntax_tree.items {
-            match item {
-                syn::Item::Mod(m) => {
-                    // `mod foo;` (path-style, external file) — no content, has semicolon
-                    if m.content.is_none() {
-                        deps.push(format!("mod:{}", m.ident));
+            for item in &syntax_tree.items {
+                match item {
+                    syn::Item::Mod(m) => {
+                        // `mod foo;` (path-style, external file) — no content, has semicolon
+                        if m.content.is_none() {
+                            deps.push(format!("mod:{}", m.ident));
+                        }
                     }
-                }
-                syn::Item::Use(u) => {
-                    let use_path = Self::format_use_tree(&u.tree);
-                    let lower = use_path.to_lowercase();
-                    if !lower.starts_with("std::")
-                        && !lower.starts_with("core::")
-                        && !lower.starts_with("alloc::")
-                    {
-                        deps.push(format!("use:{}", use_path));
+                    syn::Item::Use(u) => {
+                        let use_path = SynCodeParser::format_use_tree(&u.tree);
+                        let lower = use_path.to_lowercase();
+                        if !lower.starts_with("std::")
+                            && !lower.starts_with("core::")
+                            && !lower.starts_with("alloc::")
+                        {
+                            deps.push(format!("use:{}", use_path));
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
 
-        Ok(deps)
+            deps
+        })
     }
 }
 
@@ -583,7 +763,44 @@ impl FunctionVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codeimpact_hexagon::analysis::UnmeasurableReason;
+
+    /// Every test in this module now goes through the real canary (#63) —
+    /// `cargo test -p codeimpact_secondaries --lib` does not build sibling
+    /// bin targets on its own, so the probe must be built on demand, the
+    /// same way the e2e/integration test crates already do for the CLI
+    /// binary itself.
+    fn ensure_probe_built() {
+        let workspace_root = {
+            let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            for _ in 0..4 {
+                p.pop();
+            }
+            p
+        };
+        let probe = workspace_root.join("target").join("debug").join(format!(
+            "codeimpact-parse-probe{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        if !probe.exists() {
+            let status = std::process::Command::new("cargo")
+                .args([
+                    "build",
+                    "-p",
+                    "codeimpact_secondaries",
+                    "--bin",
+                    "codeimpact-parse-probe",
+                ])
+                .current_dir(&workspace_root)
+                .status()
+                .expect("failed to build probe binary");
+            assert!(status.success(), "probe binary build failed");
+        }
+    }
+
+    fn parser() -> SynCodeParser {
+        ensure_probe_built();
+        SynCodeParser::new()
+    }
 
     // ── Test List (source_guard wiring, #62) ──────────────────────────
     //   1. oversized_source_refused_before_syn_runs — >1 MB →
@@ -593,10 +810,30 @@ mod tests {
     //   3. normal_source_still_parses — regression: normal source still
     //      parses with the expected functions.
 
+    // ── Test List (verdict_from mapping, #63) ─────────────────────────
+    // One behavior — "only 0/2 are proven-clean, everything else is
+    // refused" — six rows, one parameterized cycle:
+    //   0 -> Admissible; 2 -> SyntaxError; None (killed by signal),
+    //   0xC00000FD (Windows STATUS_STACK_OVERFLOW), 101 (panic exit),
+    //   7 (arbitrary unknown code) -> TooComplex.
+
+    #[test]
+    fn verdict_from_maps_exit_codes() {
+        assert_eq!(verdict_from(Some(0)), ProbeVerdict::Admissible);
+        assert_eq!(verdict_from(Some(2)), ProbeVerdict::SyntaxError);
+        assert_eq!(verdict_from(None), ProbeVerdict::TooComplex);
+        assert_eq!(
+            verdict_from(Some(0xC00000FDu32 as i32)),
+            ProbeVerdict::TooComplex
+        );
+        assert_eq!(verdict_from(Some(101)), ProbeVerdict::TooComplex);
+        assert_eq!(verdict_from(Some(7)), ProbeVerdict::TooComplex);
+    }
+
     #[test]
     fn oversized_source_refused_before_syn_runs() {
         let source = "a".repeat(1024 * 1024 + 1);
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let result = parser.parse(&source);
         match result {
             Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
@@ -607,7 +844,7 @@ mod tests {
     #[test]
     fn parse_file_dependencies_refused_when_source_too_large() {
         let source = "a".repeat(1024 * 1024 + 1);
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let result = parser.parse_file_dependencies(&source);
         match result {
             Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
@@ -617,7 +854,7 @@ mod tests {
 
     #[test]
     fn normal_source_still_parses() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn a() { if x > 0 { } }\nfn b() { while true { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions.len(), 2);
@@ -627,14 +864,14 @@ mod tests {
 
     #[test]
     fn empty_source_returns_no_functions() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let functions = parser.parse("").unwrap();
         assert!(functions.is_empty());
     }
 
     #[test]
     fn no_branching_returns_no_decision_points() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn hello() { let x = 1; }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions.len(), 1);
@@ -644,7 +881,7 @@ mod tests {
 
     #[test]
     fn one_if_statement_counts_one_decision_point() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { if x > 0 { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 1);
@@ -652,7 +889,7 @@ mod tests {
 
     #[test]
     fn if_else_counts_one_decision_point() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { if x > 0 { } else { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 1);
@@ -660,7 +897,7 @@ mod tests {
 
     #[test]
     fn if_else_if_counts_two_decision_points() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { if x > 0 { } else if x < 0 { } else { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 2);
@@ -668,7 +905,7 @@ mod tests {
 
     #[test]
     fn while_loop_counts_one_decision_point() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { while x > 0 { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 1);
@@ -677,7 +914,7 @@ mod tests {
 
     #[test]
     fn for_loop_counts_one_decision_point() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { for i in 0..10 { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 1);
@@ -686,7 +923,7 @@ mod tests {
 
     #[test]
     fn match_arm_counts_per_arm() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { match x { 1 => {}, 2 => {}, _ => {} } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 3);
@@ -694,7 +931,7 @@ mod tests {
 
     #[test]
     fn and_operator_counts_as_decision_point() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { if x > 0 && y > 0 { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 2);
@@ -702,7 +939,7 @@ mod tests {
 
     #[test]
     fn or_operator_counts_as_decision_point() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { if x > 0 || y > 0 { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 2);
@@ -710,7 +947,7 @@ mod tests {
 
     #[test]
     fn catch_method_call_not_counted() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { let _ = std::fs::read(\"file\").catch(|_| {}); }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 0);
@@ -718,7 +955,7 @@ mod tests {
 
     #[test]
     fn and_in_string_not_counted() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { let s = \"a && b\"; }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].decision_points, 0);
@@ -726,7 +963,7 @@ mod tests {
 
     #[test]
     fn function_calls_are_tracked() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { foo(); bar::baz(); }";
         let functions = parser.parse(source).unwrap();
         assert!(functions[0].calls.contains(&"foo".to_string()));
@@ -735,7 +972,7 @@ mod tests {
 
     #[test]
     fn method_calls_are_tracked() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { let _ = x.foo().bar(); }";
         let functions = parser.parse(source).unwrap();
         assert!(functions[0].calls.contains(&"foo".to_string()));
@@ -744,7 +981,7 @@ mod tests {
 
     #[test]
     fn nested_loop_detected() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { for i in 0..10 { while true { } } }";
         let functions = parser.parse(source).unwrap();
         assert!(functions[0].has_loop);
@@ -753,7 +990,7 @@ mod tests {
 
     #[test]
     fn nesting_depth_tracked() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn test() { if x > 0 { if y > 0 { if z > 0 { } } } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions[0].depth, 3);
@@ -761,7 +998,7 @@ mod tests {
 
     #[test]
     fn multiple_functions_parsed_separately() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = "fn a() { if x > 0 { } }\nfn b() { while true { } }";
         let functions = parser.parse(source).unwrap();
         assert_eq!(functions.len(), 2);
@@ -774,7 +1011,7 @@ mod tests {
 
     #[test]
     fn complex_function_accumulates_all_decision_points() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let source = r#"
 fn complex(x: i32) {
     if x > 0 {
@@ -805,7 +1042,7 @@ fn complex(x: i32) {
 
     #[test]
     fn non_rust_syntax_returns_error() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let result = parser.parse("this is not valid rust code @@@");
         assert!(result.is_err());
     }
@@ -814,14 +1051,14 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_mod_foo_extracted() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser.parse_file_dependencies("mod foo;").unwrap();
         assert_eq!(deps, vec!["mod:foo"]);
     }
 
     #[test]
     fn deps_mod_with_inline_content_skipped() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("mod foo { fn bar() {} }")
             .unwrap();
@@ -830,7 +1067,7 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_use_std_filtered() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("use std::collections::HashMap;")
             .unwrap();
@@ -839,21 +1076,21 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_use_core_filtered() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser.parse_file_dependencies("use core::mem;").unwrap();
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_alloc_filtered() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser.parse_file_dependencies("use alloc::vec;").unwrap();
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_crate_extracted() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("use crate::foo::bar;")
             .unwrap();
@@ -862,7 +1099,7 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_use_super_extracted() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("use super::foo::bar;")
             .unwrap();
@@ -871,7 +1108,7 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_use_relative_extracted() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("use foo::bar::Baz;")
             .unwrap();
@@ -880,7 +1117,7 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_use_group_expanded() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("use foo::{bar, baz};")
             .unwrap();
@@ -889,14 +1126,14 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_empty_source_returns_empty() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser.parse_file_dependencies("").unwrap();
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_no_mod_or_use_returns_empty() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("fn foo() { let x = 1; }")
             .unwrap();
@@ -905,14 +1142,14 @@ fn complex(x: i32) {
 
     #[test]
     fn deps_use_glob() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser.parse_file_dependencies("use foo::*;").unwrap();
         assert_eq!(deps, vec!["use:foo::*"]);
     }
 
     #[test]
     fn parse_use_rename_is_captured() {
-        let parser = SynCodeParser::new();
+        let parser = parser();
         let deps = parser
             .parse_file_dependencies("use foo::bar as baz;\nfn main() {}")
             .unwrap();

@@ -3,6 +3,11 @@ name = "codeimpact_secondaries"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "codeimpact-parse-probe"
+path = "src/bin/parse_probe.rs"
+required-features = ["syn-parser"]
+
 [dependencies]
 codeimpact_hexagon = { path = "../hexagon" }
 serde = { version = "1", features = ["derive"] }

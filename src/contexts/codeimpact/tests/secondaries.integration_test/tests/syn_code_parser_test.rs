@@ -4,17 +4,26 @@ use codeimpact_hexagon::analysis::ComplexityDetector;
 use codeimpact_hexagon::analysis::DetectionConfig;
 use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
+use codeimpact_secondaries_integration_test::support::ensure_probe_built;
+
+/// Every test below now goes through the real canary (#63) — this crate
+/// only depends on `codeimpact_secondaries`'s lib target, so the probe bin
+/// is not built automatically and must be ensured on demand.
+fn parser() -> SynCodeParser {
+    ensure_probe_built();
+    SynCodeParser::new()
+}
 
 #[test]
 fn empty_source_returns_no_functions() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let functions = parser.parse("").unwrap();
     assert!(functions.is_empty());
 }
 
 #[test]
 fn no_branching_returns_no_decision_points() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn hello() { let x = 1; }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -24,7 +33,7 @@ fn no_branching_returns_no_decision_points() {
 
 #[test]
 fn one_if_statement_counts_one_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { if x > 0 { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].decision_points, 1);
@@ -32,7 +41,7 @@ fn one_if_statement_counts_one_decision_point() {
 
 #[test]
 fn if_else_counts_one_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { if x > 0 { } else { } }";
     let functions = parser.parse(source).unwrap();
     // if + else = 1 decision point (else is not a branch, just the alternative)
@@ -41,7 +50,7 @@ fn if_else_counts_one_decision_point() {
 
 #[test]
 fn if_else_if_counts_two_decision_points() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { if x > 0 { } else if x < 0 { } else { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].decision_points, 2);
@@ -49,7 +58,7 @@ fn if_else_if_counts_two_decision_points() {
 
 #[test]
 fn while_loop_counts_one_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { while x > 0 { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].decision_points, 1);
@@ -58,7 +67,7 @@ fn while_loop_counts_one_decision_point() {
 
 #[test]
 fn for_loop_counts_one_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { for i in 0..10 { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].decision_points, 1);
@@ -67,7 +76,7 @@ fn for_loop_counts_one_decision_point() {
 
 #[test]
 fn match_arms_count_per_arm() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { match x { 1 => {}, 2 => {}, _ => {} } }";
     let functions = parser.parse(source).unwrap();
     // 3 match arms = 3 decision points
@@ -76,7 +85,7 @@ fn match_arms_count_per_arm() {
 
 #[test]
 fn and_operator_counts_as_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { if x > 0 && y > 0 { } }";
     let functions = parser.parse(source).unwrap();
     // 1 if + 1 && = 2
@@ -85,7 +94,7 @@ fn and_operator_counts_as_decision_point() {
 
 #[test]
 fn or_operator_counts_as_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { if x > 0 || y > 0 { } }";
     let functions = parser.parse(source).unwrap();
     // 1 if + 1 || = 2
@@ -94,7 +103,7 @@ fn or_operator_counts_as_decision_point() {
 
 #[test]
 fn catch_method_call_not_counted() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { let _ = std::fs::read(\"file\").catch(|_| {}); }";
     let functions = parser.parse(source).unwrap();
     // catch is a method call, not a keyword — no decision point
@@ -103,7 +112,7 @@ fn catch_method_call_not_counted() {
 
 #[test]
 fn string_and_operator_not_counted() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { let s = \"a && b\"; }";
     let functions = parser.parse(source).unwrap();
     // && in string literal — not a binary operator
@@ -112,7 +121,7 @@ fn string_and_operator_not_counted() {
 
 #[test]
 fn function_calls_are_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { foo(); bar::baz(); }";
     let functions = parser.parse(source).unwrap();
     assert!(functions[0].calls.contains(&"foo".to_string()));
@@ -121,7 +130,7 @@ fn function_calls_are_tracked() {
 
 #[test]
 fn method_calls_are_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { let _ = x.foo().bar(); }";
     let functions = parser.parse(source).unwrap();
     assert!(functions[0].calls.contains(&"foo".to_string()));
@@ -130,7 +139,7 @@ fn method_calls_are_tracked() {
 
 #[test]
 fn nested_loop_detected() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { for i in 0..10 { while true { } } }";
     let functions = parser.parse(source).unwrap();
     assert!(functions[0].has_loop);
@@ -139,7 +148,7 @@ fn nested_loop_detected() {
 
 #[test]
 fn nesting_depth_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { if x > 0 { if y > 0 { if z > 0 { } } } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].depth, 3);
@@ -147,7 +156,7 @@ fn nesting_depth_tracked() {
 
 #[test]
 fn multiple_functions_parsed_separately() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn a() { if x > 0 { } }\nfn b() { while true { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 2);
@@ -160,7 +169,7 @@ fn multiple_functions_parsed_separately() {
 
 #[test]
 fn complex_function_accumulates_all_decision_points() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = r#"
 fn complex(x: i32) {
     if x > 0 {
@@ -192,14 +201,14 @@ fn complex(x: i32) {
 
 #[test]
 fn non_rust_syntax_returns_error() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let result = parser.parse("this is not valid rust code @@@");
     assert!(result.is_err());
 }
 
 #[test]
 fn triple_nested_loops_detected() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { for i in 0..10 { for j in 0..10 { for k in 0..10 { } } } }";
     let functions = parser.parse(source).unwrap();
     assert!(functions[0].has_loop);
@@ -210,7 +219,7 @@ fn triple_nested_loops_detected() {
 
 #[test]
 fn loop_expression_counts_as_decision_point() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { loop { break; } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].decision_points, 1);
@@ -219,7 +228,7 @@ fn loop_expression_counts_as_decision_point() {
 
 #[test]
 fn closure_inside_if_does_not_create_false_positive() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() { let f = |x| if x > 0 { 1 } else { 0 }; }";
     let functions = parser.parse(source).unwrap();
     // 1 if inside closure = 1 decision point
@@ -229,7 +238,7 @@ fn closure_inside_if_does_not_create_false_positive() {
 
 #[test]
 fn io_call_in_loop_is_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source =
         "fn test() {\n    for _ in 0..10 {\n        std::fs::read_to_string(\"f\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
@@ -241,7 +250,7 @@ fn io_call_in_loop_is_tracked() {
 
 #[test]
 fn non_io_call_in_loop_not_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    for _ in 0..10 {\n        println!(\"x\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert!(
@@ -252,7 +261,7 @@ fn non_io_call_in_loop_not_tracked() {
 
 #[test]
 fn io_call_not_in_loop_not_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    std::fs::read_to_string(\"f\");\n}\n";
     let functions = parser.parse(source).unwrap();
     assert!(
@@ -263,7 +272,7 @@ fn io_call_not_in_loop_not_tracked() {
 
 #[test]
 fn multiple_io_calls_in_loop_all_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    for _ in 0..10 {\n        std::fs::read(\"a\");\n        std::net::TcpStream::connect(\"b\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 2);
@@ -276,7 +285,7 @@ fn multiple_io_calls_in_loop_all_tracked() {
 
 #[test]
 fn tokio_fs_call_in_loop_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source =
         "fn test() {\n    for _ in 0..10 {\n        tokio::fs::read_to_string(\"f\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
@@ -289,7 +298,7 @@ fn tokio_fs_call_in_loop_tracked() {
 
 #[test]
 fn reqwest_call_in_loop_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    for _ in 0..10 {\n        reqwest::get(\"url\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
@@ -314,7 +323,7 @@ fn reqwest_call_in_loop_tracked() {
 
 #[test]
 fn non_io_plain_call_in_loop_is_tracked_with_is_io_false() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    for _ in 0..10 {\n        validate();\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
@@ -325,7 +334,7 @@ fn non_io_plain_call_in_loop_is_tracked_with_is_io_false() {
 
 #[test]
 fn method_call_in_loop_is_tracked_with_is_io_false() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    for x in &xs {\n        x.helper();\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
@@ -336,7 +345,7 @@ fn method_call_in_loop_is_tracked_with_is_io_false() {
 
 #[test]
 fn non_io_call_after_loop_is_not_tracked() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn test() {\n    for _ in 0..10 { }\n    validate();\n}\n";
     let functions = parser.parse(source).unwrap();
     assert!(
@@ -365,7 +374,7 @@ fn non_io_call_after_loop_is_not_tracked() {
 
 #[test]
 fn impl_method_is_qualified_by_type_name() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl S { fn foo(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -375,7 +384,7 @@ fn impl_method_is_qualified_by_type_name() {
 
 #[test]
 fn impl_trait_for_type_uses_type_name_not_trait_name() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl Display for S { fn fmt(&self) { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -384,7 +393,7 @@ fn impl_trait_for_type_uses_type_name_not_trait_name() {
 
 #[test]
 fn impl_with_generics_erases_generic_params() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct Wrapper<T>(T); impl<T> Wrapper<T> { fn get(&self) { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -393,7 +402,7 @@ fn impl_with_generics_erases_generic_params() {
 
 #[test]
 fn trait_default_method_is_qualified_by_trait_name_abstract_method_excluded() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "trait Tr { fn hook(&self) { if x { } } fn abstract_(&self); }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -402,7 +411,7 @@ fn trait_default_method_is_qualified_by_trait_name_abstract_method_excluded() {
 
 #[test]
 fn inline_mod_free_fn_is_qualified_by_mod_path() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "mod inner { fn helper() { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -411,7 +420,7 @@ fn inline_mod_free_fn_is_qualified_by_mod_path() {
 
 #[test]
 fn inline_mod_impl_method_is_qualified_by_mod_and_type_path() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "mod inner { struct S; impl S { fn m() { } } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -420,7 +429,7 @@ fn inline_mod_impl_method_is_qualified_by_mod_and_type_path() {
 
 #[test]
 fn duplicate_qualified_names_are_suffixed_not_clobbered() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl S { fn f() { } } impl Default for S { fn f() { } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 2);
@@ -430,7 +439,7 @@ fn duplicate_qualified_names_are_suffixed_not_clobbered() {
 
 #[test]
 fn free_fn_names_stay_bare() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn a() { if x > 0 { } }\nfn b() { }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 2);
@@ -442,7 +451,7 @@ fn free_fn_names_stay_bare() {
 
 #[test]
 fn nested_fn_stays_folded_into_parent() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn outer() { fn inner() { if x > 0 { } } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1);
@@ -452,7 +461,7 @@ fn nested_fn_stays_folded_into_parent() {
 
 #[test]
 fn self_method_call_resolves_to_qualified_callee() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl S { fn a(&self) { self.b(); } fn b(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
     let a = functions.iter().find(|f| f.name == "S::a").unwrap();
@@ -470,7 +479,7 @@ fn self_method_call_resolves_to_qualified_callee() {
 
 #[test]
 fn self_colon_colon_method_call_resolves_to_qualified_callee() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl S { fn a() { Self::b(); } fn b() { if x { } } }";
     let functions = parser.parse(source).unwrap();
     let a = functions.iter().find(|f| f.name == "S::a").unwrap();
@@ -483,7 +492,7 @@ fn self_colon_colon_method_call_resolves_to_qualified_callee() {
 
 #[test]
 fn mutual_self_recursion_is_detected_as_a_cycle() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl S { fn a(&self) { self.b(); } fn b(&self) { self.a(); } }";
     let functions = parser.parse(source).unwrap();
     let graph = CallGraph::build(&functions);
@@ -493,7 +502,7 @@ fn mutual_self_recursion_is_detected_as_a_cycle() {
 
 #[test]
 fn non_self_receiver_method_call_stays_bare() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source =
         "struct S; impl S { fn a(&self, v: Vec<u8>) { v.len(); } fn len(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
@@ -530,7 +539,7 @@ fn non_self_receiver_method_call_stays_bare() {
 
 #[test]
 fn cfg_test_mod_is_excluded_from_parsing() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "fn prod() {} #[cfg(test)] mod tests { fn t1() { if x {} } }";
     let functions = parser.parse(source).unwrap();
 
@@ -550,7 +559,7 @@ fn cfg_test_mod_is_excluded_from_parsing() {
 
 #[test]
 fn inline_mod_without_cfg_test_attribute_is_still_parsed() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "mod util { fn helper() {} }";
     let functions = parser.parse(source).unwrap();
 
@@ -560,7 +569,7 @@ fn inline_mod_without_cfg_test_attribute_is_still_parsed() {
 
 #[test]
 fn quadratic_loop_detected_through_resolved_self_call() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct S; impl S { \
         fn a(&self) { for i in 0..n { self.b(); } } \
         fn b(&self) { for j in 0..n { } } \
@@ -598,7 +607,7 @@ fn quadratic_loop_detected_through_resolved_self_call() {
 
 #[test]
 fn impl_trait_for_reference_type_dereferences_to_last_segment() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source =
         "struct S; trait Fmt { fn fmt(&self); } impl Fmt for &S { fn fmt(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
@@ -612,7 +621,7 @@ fn impl_trait_for_reference_type_dereferences_to_last_segment() {
 
 #[test]
 fn impl_trait_for_parenthesized_type_dereferences_to_last_segment() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source =
         "struct S; trait Fmt { fn fmt(&self); } impl Fmt for (S) { fn fmt(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
@@ -626,7 +635,7 @@ fn impl_trait_for_parenthesized_type_dereferences_to_last_segment() {
 
 #[test]
 fn impl_for_generic_collection_type_uses_container_name() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source = "struct Vec<T> { items: Vec<T> } impl<T> Vec<T> { fn push(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions.len(), 1, "got {:?}", functions);
@@ -639,7 +648,7 @@ fn impl_for_generic_collection_type_uses_container_name() {
 
 #[test]
 fn impl_trait_for_non_nameable_type_falls_back_to_trait_name() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     // (i32, i32) is a tuple type: `type_last_segment` has no nameable
     // segment for it (falls to `_ => None`). The abstract trait method
     // has no default body, so only the impl's override is collected.
@@ -656,7 +665,7 @@ fn impl_trait_for_non_nameable_type_falls_back_to_trait_name() {
 
 #[test]
 fn inherent_impl_for_non_nameable_type_falls_back_to_bare_name() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     // An inherent impl (no `for Trait`) on a non-nameable self_ty (a fixed-
     // size array type) has no trait to fall back to either — the bare
     // method name is the only option left.
@@ -679,7 +688,7 @@ fn inherent_impl_for_non_nameable_type_falls_back_to_bare_name() {
 // method happens to share that short name (D2 forbids exactly this).
 #[test]
 fn self_field_method_call_stays_bare_not_resolved_to_enclosing_type() {
-    let parser = SynCodeParser::new();
+    let parser = parser();
     let source =
         "struct S { inner: T } impl S { fn a(&self) { self.inner.m(); } fn m(&self) { if x { } } }";
     let functions = parser.parse(source).unwrap();
