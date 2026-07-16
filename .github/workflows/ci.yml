@@ -69,10 +69,13 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo build --workspace
-      # Proves the #63 canary (probe discovery, exit-code mapping,
-      # timeout-kill) on both non-Linux OSes the linux-only `test` job
-      # never exercises. Scoped to this crate, not `--workspace`, since
-      # that job already covers the rest on Linux.
+      # Proves the #63 canary (probe discovery, exit-code mapping) on both
+      # non-Linux OSes the linux-only `test` job never exercises. Does NOT
+      # run the timeout-kill path — that test is #[ignore]d (see
+      # slow-tests) and this job runs plain `cargo test`, without
+      # `--ignored` — so timeout-kill stays Linux-only in CI (slow-tests).
+      # Scoped to this crate, not `--workspace`, since the linux `test`
+      # job already covers the rest on Linux.
       - run: cargo test -p codeimpact_secondaries_integration_test
 
   coverage:
