@@ -2,6 +2,7 @@ use codeimpact_hexagon::analysis::CallGraph;
 use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::ComplexityDetector;
 use codeimpact_hexagon::analysis::DetectionConfig;
+use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries_integration_test::support::ensure_probe_built;
@@ -311,29 +312,37 @@ fn reqwest_call_in_loop_tracked() {
 // (`method_call.method.to_string()`) — structurally it can never start with
 // a qualified prefix, so `is_io` was `false` for every method call, always.
 // C1 (tech spec): the TYPE asserts, the NAME abstains — a method call is
-// `is_io: true` only if the receiver's declared type is resolved AND is a
-// known I/O type. Resolution (C3, intra-file + syntactic only):
+// `Io` only if the receiver's declared type is resolved AND is a known I/O
+// type. Resolution (C3, intra-file + syntactic only):
 // (1) signature parameters, (2) `let x: T = ..;` annotations,
 // (3) `let x = T::ctor(..)` unwrapped through a bounded `?`/`.unwrap()`/
 // `.expect()`/`.await` chain, (4) shadowing by overwrite (documented
 // limitation, not scope-restored).
 //
+// #56 T2 — three states, not two (ADR-0010). Introducing `IoClassification`
+// changed the expected outcome of three T1 tests that used to assert
+// `!is_io` — an unresolved receiver + a SUSPICIOUS method name (T2,
+// human-approved Q3) is now `Unknown`, not `NotIo`. Renamed/updated below,
+// each flip called out where it happens.
+//
 // Test List:
-// 1. method_call_on_file_param_in_loop_is_detected_as_io — (1) File param
+// 1. method_call_on_file_param_in_loop_is_detected_as_io — (1) File param -> Io
 // 2. method_call_on_tcpstream_param_in_loop_is_detected_as_io — (1) TcpStream
-//    param, write_all (2nd acceptance criterion form)
-// 3. method_call_on_let_annotated_io_receiver_is_detected — (2)
-// 4. method_call_on_constructor_bound_receiver_is_detected — (3), unwrap()
+//    param, write_all (2nd acceptance criterion form) -> Io
+// 3. method_call_on_let_annotated_io_receiver_is_detected — (2) -> Io
+// 4. method_call_on_constructor_bound_receiver_is_detected — (3), unwrap() -> Io
 // 5. method_call_on_qualified_constructor_receiver_is_detected — (3),
-//    qualified path (std::net::TcpStream::connect), expect()
-// 6. method_call_on_unresolved_receiver_stays_non_io — no binding at all
-// 7. method_call_on_non_io_type_receiver_stays_non_io — resolved, non-I/O
-// 8. shadowed_receiver_rebound_to_non_io_type_stops_being_io — (4), annotated
-// 9. shadowed_receiver_rebound_to_unresolved_type_stops_being_io — (4),
-//    mutation-testing gap found in self-review: #8 only exercises the
-//    "overwrite with a newly-resolved type" path (`bind_let`'s `Some` arm);
-//    nothing pinned the `None` arm (`type_env.remove`) that clears a stale
-//    binding when the rebind's type cannot be resolved at all.
+//    qualified path (std::net::TcpStream::connect), expect() -> Io
+// 6. method_call_on_receiver_resolved_to_non_known_type_stays_not_io —
+//    (T2 rename: was "unresolved_receiver_stays_non_io", but the receiver IS
+//    resolved via its signature param — just to a type outside the known-I/O
+//    list) -> NotIo
+// 7. method_call_on_non_io_type_receiver_stays_non_io — resolved, non-I/O -> NotIo
+// 8. shadowed_receiver_rebound_to_non_io_type_stops_being_io — (4), annotated -> NotIo
+// 9. shadowed_receiver_rebound_to_unresolved_type_is_unknown — (4). T2 FLIP:
+//    the rebind clears the earlier File binding (mutation-testing gap found
+//    in retry 1); the receiver is then genuinely unresolved AND
+//    "read_to_string" is suspicious -> Unknown, not NotIo as under T1.
 //
 // QA review (retry 1) — mutation-proven gap: QA deleted `unwrap_result_chain`'s
 // `Try` and `Await` arms and the full suite stayed green. #4/#5 above only
@@ -341,14 +350,40 @@ fn reqwest_call_in_loop_tracked() {
 // (`File::open(path)?` — the single most idiomatic Rust I/O-open pattern) and
 // the bare `.await` form were completely unverified. Closed by:
 // 10. method_call_on_try_operator_bound_receiver_is_detected — (3), `?` alone,
-//     isolated from `.unwrap()`/`.expect()` so it pins ONLY the `Try` arm
+//     isolated from `.unwrap()`/`.expect()` so it pins ONLY the `Try` arm -> Io
 // 11. method_call_on_await_bound_receiver_is_detected — (3), `.await` alone,
-//     isolated the same way, pins ONLY the `Await` arm
-// Non-blocking (QA-recommended, cheap): the two other unexercised branches —
-// 12. method_call_on_literal_bound_receiver_stays_non_io —
-//     `constructor_type_name`'s "not a `Call`" else arm
-// 13. method_call_on_field_access_receiver_in_loop_stays_non_io —
-//     `receiver_is_io_type`'s "not a `Path`" else arm
+//     isolated the same way, pins ONLY the `Await` arm -> Io
+// 12. method_call_on_literal_bound_receiver_is_unknown — T2 FLIP (was
+//     "..._stays_non_io" under T1): `constructor_type_name`'s "not a `Call`"
+//     else arm leaves `file` unresolved, and "read_to_string" is suspicious
+//     -> Unknown, not NotIo.
+// 13. method_call_on_field_access_receiver_in_loop_is_unknown — T2 FLIP (was
+//     "..._stays_non_io" under T1): a field-access receiver never resolves,
+//     and "read_to_string" is suspicious -> Unknown, not NotIo.
+//
+// #56 T2 — new classification rules (suspicious-name Unknown, locally-
+// declared-type collision guard), each pinned fresh:
+// 14. method_call_on_unresolved_receiver_with_non_suspicious_name_is_not_io —
+//     rule 4: unresolved + name NOT on the suspicious list -> NotIo
+// 15. method_call_on_locally_declared_type_matching_known_io_name_is_not_io —
+//     rule 1's guard: receiver resolves to a type NAMED like a known I/O
+//     type ("Client"), but THIS FILE declares that struct itself -> NotIo,
+//     never Io by name collision alone
+//
+// QA review (retry 1) — mutation-proven gap: AC2's explicit exclusion list
+// ("deliberately WITHOUT get/post/fetch/open/create") had zero test
+// coverage. QA added all five to SUSPICIOUS_METHOD_NAMES and the full suite
+// stayed green. Closed by:
+// 16. method_call_on_unresolved_receiver_with_excluded_name_stays_not_io —
+//     one parameterized cycle (a Rust `for` loop over the five names inside
+//     a single #[test], no rstest dependency added — matches house style
+//     of plain #[test] fns) pinning ALL FIVE excluded names at once; must
+//     go red if any one of them is re-added to SUSPICIOUS_METHOD_NAMES.
+// Non-blocking (QA-recommended, cheap): the nested-mod recursion arm of
+// collect_locally_declared_type_names, unexercised by #15 (a top-level decl)
+// 17. method_call_on_locally_declared_type_inside_inline_mod_is_not_io —
+//     the same collision guard as #15, but the colliding struct is declared
+//     INSIDE an inline `mod`, exercising the `Item::Mod` recursion arm
 
 #[test]
 fn method_call_on_file_param_in_loop_is_detected_as_io() {
@@ -359,7 +394,7 @@ fn method_call_on_file_param_in_loop_is_detected_as_io() {
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     let call = &functions[0].calls_in_loops[0];
     assert_eq!(call.name, "read_to_string");
-    assert!(call.is_io);
+    assert_eq!(call.io, IoClassification::Io);
 }
 
 #[test]
@@ -371,7 +406,7 @@ fn method_call_on_tcpstream_param_in_loop_is_detected_as_io() {
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     let call = &functions[0].calls_in_loops[0];
     assert_eq!(call.name, "write_all");
-    assert!(call.is_io);
+    assert_eq!(call.io, IoClassification::Io);
 }
 
 #[test]
@@ -380,7 +415,7 @@ fn method_call_on_let_annotated_io_receiver_is_detected() {
     let source = "fn test() {\n    let file: File = open_it();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(functions[0].calls_in_loops[0].is_io);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Io);
 }
 
 #[test]
@@ -389,7 +424,7 @@ fn method_call_on_constructor_bound_receiver_is_detected() {
     let source = "fn test(path: &str) {\n    let mut file = File::open(path).unwrap();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(functions[0].calls_in_loops[0].is_io);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Io);
 }
 
 #[test]
@@ -398,16 +433,22 @@ fn method_call_on_qualified_constructor_receiver_is_detected() {
     let source = "fn test(addr: &str) {\n    let mut stream = std::net::TcpStream::connect(addr).expect(\"connect\");\n    for _ in 0..10 {\n        stream.write_all(&buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(functions[0].calls_in_loops[0].is_io);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Io);
 }
 
 #[test]
-fn method_call_on_unresolved_receiver_stays_non_io() {
+fn method_call_on_receiver_resolved_to_non_known_type_stays_not_io() {
     let parser = parser();
     let source = "fn test(file: SomeUnknownHandle) {\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(!functions[0].calls_in_loops[0].is_io);
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::NotIo,
+        "the receiver IS resolved (via its signature param) to \"SomeUnknownHandle\" \
+         — resolved-but-unknown-type is NotIo, never Unknown; Unknown is reserved \
+         for a receiver that could not be resolved at all"
+    );
 }
 
 #[test]
@@ -416,7 +457,7 @@ fn method_call_on_non_io_type_receiver_stays_non_io() {
     let source = "fn test() {\n    let name: String = compute();\n    for _ in 0..10 {\n        name.push_str(\"x\");\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(!functions[0].calls_in_loops[0].is_io);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::NotIo);
 }
 
 #[test]
@@ -425,21 +466,25 @@ fn shadowed_receiver_rebound_to_non_io_type_stops_being_io() {
     let source = "fn test(mut file: File) {\n    let file: String = compute();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(
-        !functions[0].calls_in_loops[0].is_io,
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::NotIo,
         "shadowing `file` with a non-I/O type must overwrite the earlier I/O binding"
     );
 }
 
 #[test]
-fn shadowed_receiver_rebound_to_unresolved_type_stops_being_io() {
+fn shadowed_receiver_rebound_to_unresolved_type_is_unknown() {
     let parser = parser();
     let source = "fn test(mut file: File) {\n    let file = compute();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(
-        !functions[0].calls_in_loops[0].is_io,
-        "rebinding `file` to an unresolvable init expression must clear the earlier I/O binding, not leave it stale"
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::Unknown,
+        "rebinding `file` to an unresolvable init expression must clear the earlier \
+         Io binding — the receiver is then genuinely unresolved, and \"read_to_string\" \
+         is a suspicious name (T2), so the correct verdict is Unknown, not NotIo"
     );
 }
 
@@ -452,8 +497,9 @@ fn method_call_on_try_operator_bound_receiver_is_detected() {
     let source = "fn test(path: &str) -> Result<(), ()> {\n    let mut file = File::open(path)?;\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n    Ok(())\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(
-        functions[0].calls_in_loops[0].is_io,
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::Io,
         "File::open(path)? must resolve `file` to a known I/O type via the Try arm"
     );
 }
@@ -466,32 +512,109 @@ fn method_call_on_await_bound_receiver_is_detected() {
     let source = "async fn test(addr: &str) {\n    let mut stream = TcpStream::connect(addr).await;\n    for _ in 0..10 {\n        stream.write_all(&buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(
-        functions[0].calls_in_loops[0].is_io,
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::Io,
         "TcpStream::connect(addr).await must resolve `stream` to a known I/O type via the Await arm"
     );
 }
 
 #[test]
-fn method_call_on_literal_bound_receiver_stays_non_io() {
+fn method_call_on_literal_bound_receiver_is_unknown() {
     let parser = parser();
     // `constructor_type_name`'s "not a `Call`" else arm — a literal init
-    // expression, not a constructor call at all.
+    // expression, not a constructor call at all, leaves `file` unresolved.
+    // "read_to_string" is a suspicious name (T2) -> Unknown, not NotIo.
     let source = "fn test() {\n    let file = 5;\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(!functions[0].calls_in_loops[0].is_io);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Unknown);
 }
 
 #[test]
-fn method_call_on_field_access_receiver_in_loop_stays_non_io() {
+fn method_call_on_field_access_receiver_in_loop_is_unknown() {
     let parser = parser();
-    // `receiver_is_io_type`'s "not a `Path`" else arm — a field-access
-    // receiver (`state.file`), never resolved in T1 (C1: unresolved abstains).
+    // `resolved_receiver_type`'s "not a `Path`" else arm — a field-access
+    // receiver (`state.file`), never resolved. "read_to_string" is a
+    // suspicious name (T2) -> Unknown, not NotIo.
     let source = "fn test(state: State) {\n    for _ in 0..10 {\n        state.file.read_to_string(&mut buf);\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
-    assert!(!functions[0].calls_in_loops[0].is_io);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Unknown);
+}
+
+#[test]
+fn method_call_on_unresolved_receiver_with_non_suspicious_name_is_not_io() {
+    let parser = parser();
+    // Field-access receiver never resolves, but "helper" is not on the
+    // suspicious-name list (T2 rule 4) -> NotIo, bounding abstention noise.
+    let source =
+        "fn test(state: State) {\n    for _ in 0..10 {\n        state.file.helper();\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::NotIo);
+}
+
+#[test]
+fn method_call_on_locally_declared_type_matching_known_io_name_is_not_io() {
+    let parser = parser();
+    // `Client` is a KNOWN_IO_TYPES name (reqwest), but THIS file declares
+    // its own `struct Client` — rule 1's guard must refuse to assert `Io`
+    // by name collision alone, even though "connect" is also a suspicious
+    // method name that would otherwise tempt an Unknown/Io verdict.
+    let source = "struct Client;\nfn test(mut client: Client) {\n    for _ in 0..10 {\n        client.connect();\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::NotIo,
+        "a locally-declared `Client` must never be classified Io by name collision \
+         with reqwest's Client"
+    );
+}
+
+#[test]
+fn method_call_on_unresolved_receiver_with_excluded_name_stays_not_io() {
+    // AC2 (human-approved Q3): "deliberately WITHOUT get/post/fetch/open/
+    // create (name-collision noise)". A receiver that never resolves must
+    // stay NotIo for every one of these five names — none of them is
+    // suspicious enough to warrant Unknown.
+    let parser = parser();
+    for excluded in ["get", "post", "fetch", "open", "create"] {
+        let source = format!(
+            "fn test(state: State) {{\n    for _ in 0..10 {{\n        state.file.{excluded}();\n    }}\n}}\n"
+        );
+        let functions = parser.parse(&source).unwrap();
+        assert_eq!(
+            functions[0].calls_in_loops.len(),
+            1,
+            "excluded name \"{excluded}\" should still be tracked in calls_in_loops"
+        );
+        assert_eq!(
+            functions[0].calls_in_loops[0].io,
+            IoClassification::NotIo,
+            "excluded name \"{excluded}\" must stay NotIo on an unresolved receiver \
+             — it is not on the suspicious-name list"
+        );
+    }
+}
+
+#[test]
+fn method_call_on_locally_declared_type_inside_inline_mod_is_not_io() {
+    let parser = parser();
+    // Same collision guard as method_call_on_locally_declared_type_matching_
+    // known_io_name_is_not_io, but the colliding struct is declared INSIDE
+    // an inline `mod` — exercises collect_locally_declared_type_names's
+    // Item::Mod recursion arm, which the top-level-only test above cannot.
+    let source = "mod inner {\n    struct Client;\n    fn test(mut client: Client) {\n        for _ in 0..10 {\n            client.connect();\n        }\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::NotIo,
+        "a `Client` declared inside an inline mod must still guard against the \
+         known-I/O-type name collision — the recursion into Item::Mod must collect it"
+    );
 }
 
 // #47 retry 2 — calls_in_loops must record EVERY call nested in a loop as a
@@ -511,25 +634,25 @@ fn method_call_on_field_access_receiver_in_loop_stays_non_io() {
 //    stays absent regardless of is_io (regression pin, already true today)
 
 #[test]
-fn non_io_plain_call_in_loop_is_tracked_with_is_io_false() {
+fn non_io_plain_call_in_loop_is_tracked_as_not_io() {
     let parser = parser();
     let source = "fn test() {\n    for _ in 0..10 {\n        validate();\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     let call = &functions[0].calls_in_loops[0];
     assert_eq!(call.name, "validate");
-    assert!(!call.is_io);
+    assert_eq!(call.io, IoClassification::NotIo);
 }
 
 #[test]
-fn method_call_in_loop_is_tracked_with_is_io_false() {
+fn method_call_in_loop_is_tracked_as_not_io() {
     let parser = parser();
     let source = "fn test() {\n    for x in &xs {\n        x.helper();\n    }\n}\n";
     let functions = parser.parse(source).unwrap();
     assert_eq!(functions[0].calls_in_loops.len(), 1);
     let call = &functions[0].calls_in_loops[0];
     assert_eq!(call.name, "helper");
-    assert!(!call.is_io);
+    assert_eq!(call.io, IoClassification::NotIo);
 }
 
 #[test]

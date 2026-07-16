@@ -68,6 +68,8 @@ pub fn analyze(
     if rules.contains(&AnalysisRule::IoInLoops) {
         let io_warnings = IoInLoopsDetector::detect(&functions);
         metrics = metrics.with_io_in_loops(io_warnings);
+        let unclassifiable_count = IoInLoopsDetector::count_unclassifiable(&functions);
+        metrics = metrics.with_unclassifiable_io_in_loops_count(unclassifiable_count);
     }
 
     let economic = EconomicImpactEstimator::estimate(&metrics, &functions, &call_graph);

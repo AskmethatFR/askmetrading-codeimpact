@@ -1,12 +1,15 @@
 use codeimpact_hexagon::analysis::source_guard;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use syn::spanned::Spanned;
@@ -186,9 +189,14 @@ pub fn exercise_full_pipeline(source: &str) -> Result<(), String> {
     let mut pending = Vec::new();
     collect_functions(&syntax_tree.items, "", &mut pending);
     dedupe_names(&mut pending);
+    let locally_declared_types = Rc::new(collect_locally_declared_type_names(&syntax_tree.items));
 
     for pf in pending {
-        let mut visitor = FunctionVisitor::new(pf.enclosing_type, pf.params);
+        let mut visitor = FunctionVisitor::new(
+            pf.enclosing_type,
+            pf.params,
+            Rc::clone(&locally_declared_types),
+        );
         visitor.visit_block(pf.block);
     }
 
@@ -265,10 +273,16 @@ impl CodeParser for SynCodeParser {
             let mut pending = Vec::new();
             collect_functions(&syntax_tree.items, "", &mut pending);
             dedupe_names(&mut pending);
+            let locally_declared_types =
+                Rc::new(collect_locally_declared_type_names(&syntax_tree.items));
 
             let mut functions = Vec::new();
             for pf in pending {
-                let mut visitor = FunctionVisitor::new(pf.enclosing_type, pf.params);
+                let mut visitor = FunctionVisitor::new(
+                    pf.enclosing_type,
+                    pf.params,
+                    Rc::clone(&locally_declared_types),
+                );
                 visitor.visit_block(pf.block);
                 functions.push(ParsedFunction {
                     name: pf.name,
@@ -348,6 +362,122 @@ const KNOWN_IO_TYPES: &[&str] = &[
 
 fn is_io_type(type_name: &str) -> bool {
     KNOWN_IO_TYPES.contains(&type_name)
+}
+
+/// Method names suspicious enough that an UNRESOLVED receiver is reported
+/// `Unknown` rather than silently written off as `NotIo` (#56 T2,
+/// human-approved Q3). Deliberately narrow — `get`/`post`/`fetch`/`open`/
+/// `create` are common non-I/O method names on ordinary types (builders,
+/// options, factories) and would flood `Unknown` with name-collision noise.
+/// Pruned by T3 measurement; kept as a named constant, never inlined.
+const SUSPICIOUS_METHOD_NAMES: &[&str] = &[
+    "read",
+    "read_to_string",
+    "read_to_end",
+    "read_exact",
+    "read_line",
+    "write",
+    "write_all",
+    "flush",
+    "send",
+    "recv",
+    "query",
+    "execute",
+    "connect",
+    "accept",
+    "sync_all",
+    "copy",
+];
+
+fn is_suspicious_method_name(method_name: &str) -> bool {
+    SUSPICIOUS_METHOD_NAMES.contains(&method_name)
+}
+
+/// Free-function classification (#56 T2) — unchanged semantics from T1's
+/// `is_io_call`, now wrapped in the three-state `IoClassification`.
+fn classify_free_function_call(call_name: &str) -> IoClassification {
+    if is_io_call(call_name) {
+        IoClassification::Io
+    } else {
+        IoClassification::NotIo
+    }
+}
+
+/// Method-call classification (#56 T2). Four rules, in order:
+/// 1. Receiver resolved AND its type is a known I/O type AND that type is
+///    NOT declared in this same file (a locally-declared `struct Client`
+///    shadowing reqwest's `Client` must never assert `Io` by name alone) →
+///    `Io`.
+/// 2. Receiver resolved and anything else (unknown type, or a known-I/O
+///    type name that is actually a local declaration) → `NotIo`.
+/// 3. Receiver unresolved AND the method name is on the suspicious list →
+///    `Unknown` — enough doubt to withhold `NotIo`, not enough evidence for
+///    `Io`.
+/// 4. Receiver unresolved and the name gives no reason for suspicion →
+///    `NotIo` (bounds abstention noise, C4).
+fn classify_method_call(
+    receiver: &syn::Expr,
+    method_name: &str,
+    type_env: &std::collections::HashMap<String, String>,
+    locally_declared_types: &HashSet<String>,
+) -> IoClassification {
+    if let Some(receiver_type) = resolved_receiver_type(receiver, type_env) {
+        return if is_io_type(&receiver_type) && !locally_declared_types.contains(&receiver_type) {
+            IoClassification::Io
+        } else {
+            IoClassification::NotIo
+        };
+    }
+
+    if is_suspicious_method_name(method_name) {
+        IoClassification::Unknown
+    } else {
+        IoClassification::NotIo
+    }
+}
+
+/// The resolved type name of a bare-identifier receiver, looked up in
+/// `type_env` — `None` for anything else (field access, a chained method
+/// call, or a bare identifier with no binding at all). Generalizes T1's
+/// `receiver_is_io_type`: this returns the type name itself (whether or not
+/// it is a known I/O type), so the caller can also check whether that type
+/// is a local declaration (rule 1 above).
+fn resolved_receiver_type(
+    receiver: &syn::Expr,
+    type_env: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let syn::Expr::Path(path) = receiver else {
+        return None;
+    };
+    let ident = path.path.get_ident()?;
+    type_env.get(&ident.to_string()).cloned()
+}
+
+/// Names of every `struct`/`enum` declared anywhere in this file — including
+/// inside inline `mod`s, mirroring `collect_functions`'s own recursion (#56
+/// T2). Used to guard against a locally-declared type whose name collides
+/// with a known I/O type (e.g. a hand-rolled `struct Client`) — the type
+/// resolves, but it is provably NOT reqwest's `Client` because this file
+/// declares it itself.
+fn collect_locally_declared_type_names(items: &[syn::Item]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for item in items {
+        match item {
+            syn::Item::Struct(item_struct) => {
+                names.insert(item_struct.ident.to_string());
+            }
+            syn::Item::Enum(item_enum) => {
+                names.insert(item_enum.ident.to_string());
+            }
+            syn::Item::Mod(item_mod) => {
+                if let Some((_, sub_items)) = &item_mod.content {
+                    names.extend(collect_locally_declared_type_names(sub_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// Unwraps a bounded, syntactic chain of `?` / `.unwrap()` / `.expect(..)` /
@@ -597,53 +727,48 @@ struct FunctionVisitor {
     /// a name overwrites the earlier entry outright (shadowing-by-overwrite,
     /// a documented limitation, not block-scope restored).
     type_env: std::collections::HashMap<String, String>,
+    /// Names of every `struct`/`enum` declared in this same file (#56 T2) —
+    /// shared (`Rc`, cheap clone) across every `FunctionVisitor` walking the
+    /// same file, including nested `fn` visitors. See `classify_method_call`
+    /// rule 1.
+    locally_declared_types: Rc<HashSet<String>>,
 }
 
 impl FunctionVisitor {
-    fn new(enclosing_type: Option<String>, params: Vec<(String, String)>) -> Self {
+    fn new(
+        enclosing_type: Option<String>,
+        params: Vec<(String, String)>,
+        locally_declared_types: Rc<HashSet<String>>,
+    ) -> Self {
         Self {
             enclosing_type,
             type_env: params.into_iter().collect(),
+            locally_declared_types,
             ..Self::default()
         }
     }
 
     /// Records a call — free-function or method — reached at any nesting
     /// level. When nested inside a loop, it is also recorded as a
-    /// `LoopCall` fact, classified (not filtered) by `is_io`: every
-    /// detector reading `calls_in_loops` decides for itself which facts it
-    /// cares about. `is_io` is supplied by the caller — a free-function
-    /// call classifies by qualified-name prefix (`is_io_call`), a method
-    /// call by its receiver's resolved type (`receiver_is_io_type`); the
-    /// bare method identifier recorded here can never itself match a
-    /// qualified prefix (#56 root cause).
-    fn record_call<S: Spanned>(&mut self, name: String, spanned: &S, is_io: bool) {
+    /// `LoopCall` fact, classified (not filtered) by `io`: every detector
+    /// reading `calls_in_loops` decides for itself which facts it cares
+    /// about. `io` is supplied by the caller — a free-function call
+    /// classifies by qualified-name prefix (`classify_free_function_call`),
+    /// a method call by its receiver's resolved type and the suspicious-name
+    /// list (`classify_method_call`, #56 T2); the bare method identifier
+    /// recorded here can never itself match a qualified prefix (#56 T1 root
+    /// cause).
+    fn record_call<S: Spanned>(&mut self, name: String, spanned: &S, io: IoClassification) {
         if self.loop_depth > 0 {
             let line_col = spanned.span().start();
             self.calls_in_loops.push(LoopCall {
                 name: name.clone(),
                 line: line_col.line,
                 col: line_col.column,
-                is_io,
+                io,
             });
         }
         self.calls.push(name);
-    }
-
-    /// Whether `receiver` is a bare identifier resolved (C1) to a known I/O
-    /// type. Anything else — a field access, a chained method call, an
-    /// unresolved name — stays `false`: an unresolved receiver abstains in
-    /// T1, it does not assert (C1).
-    fn receiver_is_io_type(&self, receiver: &syn::Expr) -> bool {
-        let syn::Expr::Path(path) = receiver else {
-            return false;
-        };
-        let Some(ident) = path.path.get_ident() else {
-            return false;
-        };
-        self.type_env
-            .get(&ident.to_string())
-            .is_some_and(|ty| is_io_type(ty))
     }
 
     /// Updates the type environment for a `let` binding — annotated
@@ -700,7 +825,11 @@ impl FunctionVisitor {
                 // which shares this same visitor instance and its context.
                 // Its own signature still seeds its own type environment
                 // (#56 T1) — same rule as any other function body.
-                let mut inner = FunctionVisitor::new(None, param_type_bindings(&func.sig));
+                let mut inner = FunctionVisitor::new(
+                    None,
+                    param_type_bindings(&func.sig),
+                    Rc::clone(&self.locally_declared_types),
+                );
                 inner.visit_block(&func.block);
                 self.decision_points += inner.decision_points;
                 self.calls.extend(inner.calls);
@@ -827,8 +956,8 @@ impl FunctionVisitor {
                         }
                     }
                     let name = segments.join("::");
-                    let is_io = is_io_call(&name);
-                    self.record_call(name, call.func.as_ref(), is_io);
+                    let io = classify_free_function_call(&name);
+                    self.record_call(name, call.func.as_ref(), io);
                 }
                 for arg in &call.args {
                     self.visit_expr(arg);
@@ -836,6 +965,12 @@ impl FunctionVisitor {
             }
             syn::Expr::MethodCall(method_call) => {
                 let method_name = method_call.method.to_string();
+                let io = classify_method_call(
+                    &method_call.receiver,
+                    &method_name,
+                    &self.type_env,
+                    &self.locally_declared_types,
+                );
                 // Only a bare `self.m()` — receiver is exactly `self`, no
                 // field/deref in between — is resolved to the enclosing
                 // type's declaration. `self.field.m()` or `x.m()` stay bare:
@@ -847,8 +982,7 @@ impl FunctionVisitor {
                     }
                     _ => method_name,
                 };
-                let is_io = self.receiver_is_io_type(&method_call.receiver);
-                self.record_call(name, &method_call.method, is_io);
+                self.record_call(name, &method_call.method, io);
                 self.visit_expr(&method_call.receiver);
                 for arg in &method_call.args {
                     self.visit_expr(arg);

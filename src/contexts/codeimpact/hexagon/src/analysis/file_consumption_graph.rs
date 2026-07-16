@@ -167,6 +167,7 @@ impl FileConsumptionGraph {
         let mut total_warnings = 0usize;
         let mut critical_warnings = 0usize;
         let mut total_io_in_loops = 0usize;
+        let mut total_unclassifiable_io_in_loops = 0usize;
         let mut hotspot_files = 0usize;
 
         for metrics in self.per_file_metrics.values() {
@@ -181,6 +182,7 @@ impl FileConsumptionGraph {
                 .filter(|w| w.severity == WarningSeverity::Critical)
                 .count();
             total_io_in_loops += metrics.io_in_loops().len();
+            total_unclassifiable_io_in_loops += metrics.unclassifiable_io_in_loops_count();
             if metrics.complexity_level() == "critical" {
                 hotspot_files += 1;
             }
@@ -211,6 +213,7 @@ impl FileConsumptionGraph {
             total_warnings,
             critical_warnings,
             total_io_in_loops,
+            total_unclassifiable_io_in_loops,
             hotspot_files,
             total_economic_impact,
             total_ecological_impact,
@@ -383,6 +386,12 @@ pub struct ProjectMetrics {
     pub critical_warnings: usize,
     /// Total `IoInLoopWarning` count across all files — its own category.
     pub total_io_in_loops: usize,
+    /// Sum of each file's `CodeMetrics::unclassifiable_io_in_loops_count()`
+    /// (#56 T2) — calls whose receiver could not be classified at all
+    /// (`IoClassification::Unknown`). An aggregate signal only (ADR-0010/
+    /// ADR-0014 §4): abstention is a NUMBER, never a per-line pseudo-warning,
+    /// and it must reach the project surface, not just the per-file one.
+    pub total_unclassifiable_io_in_loops: usize,
     /// Number of files whose `complexity_level()` is `"critical"`.
     pub hotspot_files: usize,
     pub total_economic_impact: Option<EconomicImpact>,
@@ -738,5 +747,25 @@ mod tests {
         assert_eq!(pm.total_files, 2);
         assert_eq!(pm.total_cyclomatic_complexity, 8);
         assert_eq!(pm.total_transitive_complexity, 17);
+    }
+
+    #[test]
+    fn aggregated_metrics_sums_unclassifiable_io_in_loops_across_files() {
+        // #56 T2 — the project total is a per-file SUM, additive at the
+        // atom, same shape as total_io_in_loops (ADR-0010/ADR-0014 §4: the
+        // signal must reach the project surface too, not just per-file).
+        let files = vec![
+            (
+                path("a.rs"),
+                make_metrics(5, 10).with_unclassifiable_io_in_loops_count(2),
+            ),
+            (
+                path("b.rs"),
+                make_metrics(3, 7).with_unclassifiable_io_in_loops_count(1),
+            ),
+        ];
+        let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+        let pm = graph.aggregated_metrics();
+        assert_eq!(pm.total_unclassifiable_io_in_loops, 3);
     }
 }

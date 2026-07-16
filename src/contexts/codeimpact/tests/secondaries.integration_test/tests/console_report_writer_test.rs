@@ -149,6 +149,22 @@ fn write_console_with_io_in_loops() {
     assert!(result.is_ok());
 }
 
+// #56 T2 — abstention (ADR-0010/ADR-0014 §4): a synthesis line, never
+// per-line detail — abstention must not become a pseudo-warning.
+#[test]
+fn write_console_shows_unclassifiable_io_in_loops_count() {
+    let writer = ConsoleReportWriter::new();
+    let metrics = CodeMetrics::new(5).with_unclassifiable_io_in_loops_count(2);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Appels en boucle non classifiables: 2"),
+        "expected the unclassifiable synthesis line, got: {}",
+        output
+    );
+}
+
 #[test]
 fn write_console_shows_pattern_name() {
     let writer = ConsoleReportWriter::new();
@@ -214,6 +230,30 @@ fn write_project_report_shows_per_file_io_in_loops() {
     assert!(
         output.contains("I/O dans boucle"),
         "expected I/O warning in output, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_shows_unclassifiable_io_in_loops_total() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (
+            path("a.rs"),
+            CodeMetrics::new(5).with_unclassifiable_io_in_loops_count(2),
+        ),
+        (
+            path("b.rs"),
+            CodeMetrics::new(3).with_unclassifiable_io_in_loops_count(1),
+        ),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Appels en boucle non classifiables (total): 3"),
+        "expected the aggregate unclassifiable synthesis line, got: {}",
         output
     );
 }

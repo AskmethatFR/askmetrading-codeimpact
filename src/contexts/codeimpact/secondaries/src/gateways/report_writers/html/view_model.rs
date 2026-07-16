@@ -214,6 +214,11 @@ struct RawNode {
     direct: u32,
     transitive: u32,
     hidden: u32,
+    /// Postorder-summed count of loop-nested calls whose receiver could not
+    /// be classified at all (#56 T2, `IoClassification::Unknown`) — a
+    /// scalar aggregate, same shape as `hidden`, deliberately NOT a `Vec`
+    /// like `warnings`/`ios`: abstention must never become per-line detail.
+    unclassifiable: u32,
     depth: usize,
     score: u32,
     level_rank: u8,
@@ -234,6 +239,7 @@ impl RawNode {
             direct: 0,
             transitive: 0,
             hidden: 0,
+            unclassifiable: 0,
             depth: 0,
             score: 0,
             level_rank: 0,
@@ -317,17 +323,19 @@ fn root_name(target: &str) -> String {
         .unwrap_or_else(|| target.to_string())
 }
 
-/// Postorder aggregation (spec §3): direct/transitive/hidden SUM, depth and
-/// score MAX, level the worst (max-ordinal) descendant level. Returns the
-/// computed tuple for the caller's own aggregation, and also writes it into
-/// `raw[id]` as the aggregation's single source of truth.
-fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, usize, u32, u8) {
+/// Postorder aggregation (spec §3): direct/transitive/hidden/unclassifiable
+/// SUM, depth and score MAX, level the worst (max-ordinal) descendant level.
+/// Returns the computed tuple for the caller's own aggregation, and also
+/// writes it into `raw[id]` as the aggregation's single source of truth.
+#[allow(clippy::type_complexity)]
+fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, u32, usize, u32, u8) {
     if raw[id].kind == NodeKind::File {
         let n = &raw[id];
         return (
             n.direct,
             n.transitive,
             n.hidden,
+            n.unclassifiable,
             n.depth,
             n.score,
             n.level_rank,
@@ -341,6 +349,7 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
     let mut direct = 0u32;
     let mut transitive = 0u32;
     let mut hidden = 0u32;
+    let mut unclassifiable = 0u32;
     let mut depth = 0usize;
     let mut score = 0u32;
     let mut level_rank = 0u8;
@@ -350,10 +359,11 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
     let mut ecological: Option<EcologicalImpact> = None;
 
     for child_id in &child_ids {
-        let (cd, ct, ch, cdepth, cscore, clevel) = aggregate(raw, child_id);
+        let (cd, ct, ch, cu, cdepth, cscore, clevel) = aggregate(raw, child_id);
         direct = direct.saturating_add(cd);
         transitive = transitive.saturating_add(ct);
         hidden = hidden.saturating_add(ch);
+        unclassifiable = unclassifiable.saturating_add(cu);
         depth = depth.max(cdepth);
         score = score.max(cscore);
         level_rank = level_rank.max(clevel);
@@ -369,6 +379,7 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
     node.direct = direct;
     node.transitive = transitive;
     node.hidden = hidden;
+    node.unclassifiable = unclassifiable;
     node.depth = depth;
     node.score = score;
     node.level_rank = level_rank;
@@ -376,7 +387,15 @@ fn aggregate(raw: &mut HashMap<String, RawNode>, id: &str) -> (u32, u32, u32, us
     node.ios = ios;
     node.economic = economic;
     node.ecological = ecological;
-    (direct, transitive, hidden, depth, score, level_rank)
+    (
+        direct,
+        transitive,
+        hidden,
+        unclassifiable,
+        depth,
+        score,
+        level_rank,
+    )
 }
 
 /// Folds via the domain's own `EconomicImpact::Add` (spec §0 finding 2) —
@@ -493,6 +512,7 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                 direct: metrics.cyclomatic_complexity(),
                 transitive: metrics.transitive_complexity(),
                 hidden: metrics.hidden_complexity(),
+                unclassifiable: metrics.unclassifiable_io_in_loops_count() as u32,
                 depth: metrics.max_call_depth(),
                 score: metrics.transitive_complexity(),
                 level_rank: level_rank(level),
@@ -582,6 +602,15 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                         value: n.depth.to_string(),
                         pct: pct(n.depth as u64, scale_depth as u64),
                     },
+                    MetricVm {
+                        label: "Unclassifiable I/O calls".to_string(),
+                        value: n.unclassifiable.to_string(),
+                        // Deliberately no proportional bar (#56 T2):
+                        // abstention is a NUMBER, never a per-line
+                        // pseudo-warning — a filled bar would visually
+                        // read as a severity signal the count is not.
+                        pct: 0,
+                    },
                 ],
                 functions: n.functions.clone(),
                 warnings: n.warnings.clone(),
@@ -648,6 +677,11 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
             label: "I/O in loops".to_string(),
             value: aggregated.total_io_in_loops.to_string(),
             sub: "in loops".to_string(),
+        },
+        StatVm {
+            label: "Unclassifiable".to_string(),
+            value: aggregated.total_unclassifiable_io_in_loops.to_string(),
+            sub: "io calls".to_string(),
         },
         StatVm {
             label: "Max depth".to_string(),

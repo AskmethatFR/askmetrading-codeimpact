@@ -373,8 +373,8 @@ fn stat_grid_has_nine_tiles_with_aggregated_values() {
     // instead — that field only exists on StatVm.
     assert_eq!(
         html.matches("\"sub\":").count(),
-        9,
-        "expected exactly 9 stat tiles (Warnings and I/O in loops are now separate): {}",
+        10,
+        "expected exactly 10 stat tiles (#56 T2 adds Unclassifiable): {}",
         html
     );
     assert!(
@@ -421,6 +421,61 @@ fn stat_grid_io_tile_counts_io_in_loops() {
         html.contains("\"label\":\"I/O in loops\",\"value\":\"2\",\"sub\":\"in loops\""),
         "I/O in loops must have its own tile, separate from Warnings: {}",
         html
+    );
+}
+
+// #56 T2 — abstention (ADR-0010/ADR-0014 §4): project-total tile AND
+// per-node aggregate, mirroring the Direct/Transitive/Hidden pattern (a
+// scalar summed postorder), NOT the Warnings/I-O-in-loops pattern (a
+// per-call Vec) — abstention must never become a per-line pseudo-warning,
+// so there is deliberately no Vec here, only counts.
+#[test]
+fn stat_grid_unclassifiable_tile_shows_project_total() {
+    let writer = HtmlReportWriter::new();
+    let a = make_metrics(5, 5).with_unclassifiable_io_in_loops_count(2);
+    let b = make_metrics(3, 3).with_unclassifiable_io_in_loops_count(1);
+    let graph = graph_from(vec![("a.rs", a), ("b.rs", b)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("\"label\":\"Unclassifiable\",\"value\":\"3\""),
+        "Unclassifiable tile must show the project SUM (2+1=3): {}",
+        html
+    );
+}
+
+#[test]
+fn node_metrics_include_unclassifiable_io_calls_aggregated_to_root() {
+    let writer = HtmlReportWriter::new();
+    let a = make_metrics(5, 5).with_unclassifiable_io_in_loops_count(2);
+    let b = make_metrics(3, 3).with_unclassifiable_io_in_loops_count(1);
+    let graph = graph_from(vec![("a.rs", a), ("b.rs", b)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+
+    let root = data["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .find(|n| n["id"] == "")
+        .expect("root node with id \"\"");
+    let root_metric = root["metrics"]
+        .as_array()
+        .expect("root metrics array")
+        .iter()
+        .find(|m| m["label"] == "Unclassifiable I/O calls")
+        .expect("root metric 'Unclassifiable I/O calls' not found");
+
+    assert_eq!(
+        root_metric["value"], "3",
+        "the root node's own detail must show the SAME postorder-summed total \
+         (2+1=3) as the project stat tile"
     );
 }
 
@@ -697,9 +752,10 @@ fn metric_pct_is_zero_when_scale_is_zero() {
 
     assert!(
         html.contains(
-            r#""metrics":[{"label":"Direct complexity","value":"0","pct":0},{"label":"Transitive complexity","value":"0","pct":0},{"label":"Hidden complexity","value":"0","pct":0},{"label":"Max call depth","value":"0","pct":0}]"#
+            r#""metrics":[{"label":"Direct complexity","value":"0","pct":0},{"label":"Transitive complexity","value":"0","pct":0},{"label":"Hidden complexity","value":"0","pct":0},{"label":"Max call depth","value":"0","pct":0},{"label":"Unclassifiable I/O calls","value":"0","pct":0}]"#
         ),
-        "all-zero metrics (scale == 0) must yield pct 0 for every metric, not divide by zero: {}",
+        "all-zero metrics (scale == 0) must yield pct 0 for every metric, not divide by zero \
+         (#56 T2 adds the Unclassifiable I/O calls metric, always pct 0 by design): {}",
         html
     );
 }

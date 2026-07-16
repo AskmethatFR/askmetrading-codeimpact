@@ -292,3 +292,50 @@ fn file_json_reports_zero_unmeasurable_files() {
         "a single-file report has no notion of other unmeasurable files"
     );
 }
+
+// #56 T2 — abstention (ADR-0010/ADR-0014 §4): the count is never skipped,
+// same convention as unmeasurable_files_count. Additive field (ADR-0007).
+#[test]
+fn file_json_includes_unclassifiable_io_in_loops_count() {
+    let writer = JsonReportWriter::new();
+    let metrics = make_metrics_with_impacts().with_unclassifiable_io_in_loops_count(2);
+
+    let json_str = writer.write_json(&metrics, "test.rs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 2);
+}
+
+#[test]
+fn file_json_reports_zero_unclassifiable_io_in_loops_by_default() {
+    let writer = JsonReportWriter::new();
+    let metrics = make_metrics_with_impacts();
+
+    let json_str = writer.write_json(&metrics, "test.rs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 0);
+}
+
+#[test]
+fn project_json_sums_unclassifiable_io_in_loops_count_across_files() {
+    let writer = JsonReportWriter::new();
+    let files = vec![
+        (
+            PathBuf::from("a.rs"),
+            make_measured_file(5).with_unclassifiable_io_in_loops_count(2),
+        ),
+        (
+            PathBuf::from("b.rs"),
+            make_measured_file(3).with_unclassifiable_io_in_loops_count(1),
+        ),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 3);
+}

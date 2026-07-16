@@ -1,16 +1,17 @@
 use super::errors::AnalysisError;
+use super::io_classification::IoClassification;
 
 /// A call — method or free-function — recorded at `loop_depth > 0`.
 ///
-/// `is_io` classifies the call; it does not filter it. The parser records
+/// `io` classifies the call; it does not filter it. The parser records
 /// every nested call as a fact, and each detector decides which facts it
-/// cares about.
+/// cares about. Three states, not a `bool` (#56 T2) — see `IoClassification`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoopCall {
     pub name: String,
     pub line: usize,
     pub col: usize,
-    pub is_io: bool,
+    pub io: IoClassification,
 }
 
 #[derive(Clone, Debug, PartialEq)]

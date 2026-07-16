@@ -1,6 +1,6 @@
 use codeimpact_hexagon::analysis::{
-    CallGraph, ComplexityDetector, ComplexityWarning, DetectionConfig, LoopCall, ParsedFunction,
-    WarningPattern, WarningSeverity,
+    CallGraph, ComplexityDetector, ComplexityWarning, DetectionConfig, IoClassification, LoopCall,
+    ParsedFunction, WarningPattern, WarningSeverity,
 };
 
 // Test List:
@@ -60,14 +60,14 @@ fn make_fn(
     }
 }
 
-/// A nested call, as `detect_quadratic_loops` sees it. `is_io` is
+/// A nested call, as `detect_quadratic_loops` sees it. `io` is
 /// irrelevant here — this detector only cares about the callee's name.
 fn lc(name: &str, line: usize, col: usize) -> LoopCall {
     LoopCall {
         name: name.to_string(),
         line,
         col,
-        is_io: false,
+        io: IoClassification::NotIo,
     }
 }
 

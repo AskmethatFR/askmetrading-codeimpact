@@ -283,6 +283,7 @@ impl ComplexityDetector {
 mod tests {
     use super::super::call_graph::CallGraph;
     use super::super::code_parser::{LoopCall, ParsedFunction};
+    use super::super::io_classification::IoClassification;
     use super::*;
 
     // Test List — detect_quadratic_loops (#47 retry 1, nesting-aware rewrite):
@@ -331,14 +332,14 @@ mod tests {
         }
     }
 
-    /// A nested call, as `detect_quadratic_loops` sees it. `is_io` is
+    /// A nested call, as `detect_quadratic_loops` sees it. `io` is
     /// irrelevant here — this detector only cares about the callee's name.
     fn lc(name: &str, line: usize, col: usize) -> LoopCall {
         LoopCall {
             name: name.to_string(),
             line,
             col,
-            is_io: false,
+            io: IoClassification::NotIo,
         }
     }
 
