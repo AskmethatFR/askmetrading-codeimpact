@@ -56,17 +56,26 @@ fn main() {
         std::process::exit(EXIT_NOT_PROVEN_SAFE);
     }
 
+    // Runs the SAME parse-and-walk pipeline the parent will run on
+    // success (Security finding retry 1, CWE-674) — not a bare
+    // `syn::parse_file` — so this canary's stack budget is measured
+    // against the actual recursion the parent re-parse performs, not just
+    // its first stage.
     let exit_code = std::thread::Builder::new()
         .stack_size(PROBE_STACK_BYTES)
-        .spawn(move || match syn::parse_file(&source) {
-            Ok(_) => EXIT_ADMISSIBLE,
-            Err(_) => EXIT_SYNTAX_ERROR,
+        .spawn(move || {
+            match codeimpact_secondaries::gateways::code_parsers::syn_code_parser::exercise_full_pipeline(
+                &source,
+            ) {
+                Ok(()) => EXIT_ADMISSIBLE,
+                Err(_) => EXIT_SYNTAX_ERROR,
+            }
         })
         .expect("failed to spawn probe thread")
         .join()
         // A genuine stack overflow aborts the whole process before this
         // join could ever return Err — this only guards a plain panic
-        // inside the parse thread, which did NOT run `syn::parse_file` to
+        // inside the parse thread, which did NOT run the pipeline to
         // completion and therefore cannot claim EXIT_SYNTAX_ERROR's
         // safe-to-reparse guarantee.
         .unwrap_or(EXIT_NOT_PROVEN_SAFE);

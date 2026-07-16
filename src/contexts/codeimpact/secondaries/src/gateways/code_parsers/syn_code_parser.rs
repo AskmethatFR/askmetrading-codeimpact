@@ -143,6 +143,32 @@ where
         .map_err(AnalysisError::AnalysisFailed)
 }
 
+/// Runs the SAME parse-and-walk work `parse()` performs — `syn::parse_file`
+/// followed by function collection and expression-tree visiting — but
+/// discards the result. Used by the canary (`src/bin/parse_probe.rs`,
+/// Security finding retry 1, CWE-674): "child survived the canary's 16 MiB
+/// ⇒ parent survives its 32 MiB" only holds when the child exercises the
+/// SAME recursion the parent will actually run. A canary that only proved
+/// `syn::parse_file` succeeds said nothing about `collect_functions`'s
+/// mod-nesting walk or `FunctionVisitor`'s expression-tree recursion — a
+/// DIFFERENT recursion whose per-frame cost the bare parse never measured.
+/// Routing the canary through this exact function closes that gap by
+/// construction instead of assuming it.
+pub fn exercise_full_pipeline(source: &str) -> Result<(), String> {
+    let syntax_tree = syn::parse_file(source).map_err(|e| format!("erreur de syntaxe: {}", e))?;
+
+    let mut pending = Vec::new();
+    collect_functions(&syntax_tree.items, "", &mut pending);
+    dedupe_names(&mut pending);
+
+    for pf in pending {
+        let mut visitor = FunctionVisitor::new(pf.enclosing_type);
+        visitor.visit_block(pf.block);
+    }
+
+    Ok(())
+}
+
 pub struct SynCodeParser {
     /// Single-entry verdict cache (#63, T2): `parse` and
     /// `parse_file_dependencies` are called back-to-back on the same
@@ -836,6 +862,31 @@ mod tests {
         );
         assert_eq!(verdict_from(Some(101)), ProbeVerdict::TooComplex);
         assert_eq!(verdict_from(Some(7)), ProbeVerdict::TooComplex);
+    }
+
+    // ── Test List (exercise_full_pipeline, #63 security retry 1, CWE-674) ──
+    //   1. exercise_full_pipeline_succeeds_on_normal_source — a small,
+    //      shallow source (no crash risk in-process) walks cleanly.
+    //   2. exercise_full_pipeline_reports_syntax_errors — a syntax error
+    //      surfaces as Err, mirroring parse()'s own message.
+
+    #[test]
+    fn exercise_full_pipeline_succeeds_on_normal_source() {
+        let result = exercise_full_pipeline("fn f() { if x > 0 { for i in 0..3 {} } }");
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[test]
+    fn exercise_full_pipeline_reports_syntax_errors() {
+        let result = exercise_full_pipeline("this is not valid rust @@@");
+        match result {
+            Err(msg) => assert!(
+                msg.contains("erreur de syntaxe"),
+                "expected a syntax-error message, got: {}",
+                msg
+            ),
+            Ok(()) => panic!("expected Err for invalid syntax"),
+        }
     }
 
     #[test]
