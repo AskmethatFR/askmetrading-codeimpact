@@ -334,6 +334,21 @@ fn reqwest_call_in_loop_tracked() {
 //    "overwrite with a newly-resolved type" path (`bind_let`'s `Some` arm);
 //    nothing pinned the `None` arm (`type_env.remove`) that clears a stale
 //    binding when the rebind's type cannot be resolved at all.
+//
+// QA review (retry 1) — mutation-proven gap: QA deleted `unwrap_result_chain`'s
+// `Try` and `Await` arms and the full suite stayed green. #4/#5 above only
+// exercise the `MethodCall` (`.unwrap()`/`.expect()`) arm; the bare `?` form
+// (`File::open(path)?` — the single most idiomatic Rust I/O-open pattern) and
+// the bare `.await` form were completely unverified. Closed by:
+// 10. method_call_on_try_operator_bound_receiver_is_detected — (3), `?` alone,
+//     isolated from `.unwrap()`/`.expect()` so it pins ONLY the `Try` arm
+// 11. method_call_on_await_bound_receiver_is_detected — (3), `.await` alone,
+//     isolated the same way, pins ONLY the `Await` arm
+// Non-blocking (QA-recommended, cheap): the two other unexercised branches —
+// 12. method_call_on_literal_bound_receiver_stays_non_io —
+//     `constructor_type_name`'s "not a `Call`" else arm
+// 13. method_call_on_field_access_receiver_in_loop_stays_non_io —
+//     `receiver_is_io_type`'s "not a `Path`" else arm
 
 #[test]
 fn method_call_on_file_param_in_loop_is_detected_as_io() {
@@ -426,6 +441,57 @@ fn shadowed_receiver_rebound_to_unresolved_type_stops_being_io() {
         !functions[0].calls_in_loops[0].is_io,
         "rebinding `file` to an unresolvable init expression must clear the earlier I/O binding, not leave it stale"
     );
+}
+
+#[test]
+fn method_call_on_try_operator_bound_receiver_is_detected() {
+    let parser = parser();
+    // `?` alone — no `.unwrap()`/`.expect()` — isolates the `Try` arm of
+    // `unwrap_result_chain` from the `MethodCall` arm already exercised by
+    // method_call_on_constructor_bound_receiver_is_detected.
+    let source = "fn test(path: &str) -> Result<(), ()> {\n    let mut file = File::open(path)?;\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n    Ok(())\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(
+        functions[0].calls_in_loops[0].is_io,
+        "File::open(path)? must resolve `file` to a known I/O type via the Try arm"
+    );
+}
+
+#[test]
+fn method_call_on_await_bound_receiver_is_detected() {
+    let parser = parser();
+    // `.await` alone — no trailing `.unwrap()`/`.expect()` — isolates the
+    // `Await` arm of `unwrap_result_chain` from the `MethodCall` arm.
+    let source = "async fn test(addr: &str) {\n    let mut stream = TcpStream::connect(addr).await;\n    for _ in 0..10 {\n        stream.write_all(&buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(
+        functions[0].calls_in_loops[0].is_io,
+        "TcpStream::connect(addr).await must resolve `stream` to a known I/O type via the Await arm"
+    );
+}
+
+#[test]
+fn method_call_on_literal_bound_receiver_stays_non_io() {
+    let parser = parser();
+    // `constructor_type_name`'s "not a `Call`" else arm — a literal init
+    // expression, not a constructor call at all.
+    let source = "fn test() {\n    let file = 5;\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(!functions[0].calls_in_loops[0].is_io);
+}
+
+#[test]
+fn method_call_on_field_access_receiver_in_loop_stays_non_io() {
+    let parser = parser();
+    // `receiver_is_io_type`'s "not a `Path`" else arm — a field-access
+    // receiver (`state.file`), never resolved in T1 (C1: unresolved abstains).
+    let source = "fn test(state: State) {\n    for _ in 0..10 {\n        state.file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(!functions[0].calls_in_loops[0].is_io);
 }
 
 // #47 retry 2 — calls_in_loops must record EVERY call nested in a loop as a
