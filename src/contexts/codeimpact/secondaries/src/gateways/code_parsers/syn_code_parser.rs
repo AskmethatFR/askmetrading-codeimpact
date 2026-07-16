@@ -4,8 +4,6 @@ use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -41,12 +39,6 @@ fn verdict_from(status_code: Option<i32>) -> ProbeVerdict {
         Some(2) => ProbeVerdict::SyntaxError,
         _ => ProbeVerdict::TooComplex,
     }
-}
-
-fn hash_source(source: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    source.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Locates the `codeimpact-parse-probe` binary (#63): (1) an explicit
@@ -154,10 +146,19 @@ where
 pub struct SynCodeParser {
     /// Single-entry verdict cache (#63, T2): `parse` and
     /// `parse_file_dependencies` are called back-to-back on the same
-    /// file's source, so remembering only the *last* probed source's hash
-    /// avoids a second fork+exec per file without the complexity of a full
-    /// map — nothing in this crate probes more than one file at a time.
-    probe_verdict_cache: Mutex<Option<(u64, ProbeVerdict)>>,
+    /// file's source, so remembering only the *last* probed source avoids
+    /// a second fork+exec per file without the complexity of a full map —
+    /// nothing in this crate probes more than one file at a time.
+    ///
+    /// Keyed by FULL SOURCE EQUALITY, not a hash (Security finding,
+    /// A04/CWE-354, retry 1): `DefaultHasher` uses fixed keys — it is
+    /// deterministic across every process invocation, not randomized like
+    /// `HashMap`'s `RandomState` — so a 64-bit collision is precomputable
+    /// offline once and reused forever against any deployment. A String
+    /// compare is cheap here regardless: `source_guard` already caps every
+    /// source at `MAX_MEASURABLE_SOURCE_BYTES` (1 MB) before it reaches
+    /// this cache.
+    probe_verdict_cache: Mutex<Option<(String, ProbeVerdict)>>,
 }
 
 impl Default for SynCodeParser {
@@ -174,14 +175,16 @@ impl SynCodeParser {
     }
 
     fn cached_probe(&self, source: &str) -> Result<ProbeVerdict, AnalysisError> {
-        let hash = hash_source(source);
-        if let Some((cached_hash, verdict)) = *self.probe_verdict_cache.lock().unwrap() {
-            if cached_hash == hash {
-                return Ok(verdict);
+        {
+            let cache = self.probe_verdict_cache.lock().unwrap();
+            if let Some((cached_source, verdict)) = cache.as_ref() {
+                if cached_source == source {
+                    return Ok(*verdict);
+                }
             }
         }
         let verdict = probe_source(source)?;
-        *self.probe_verdict_cache.lock().unwrap() = Some((hash, verdict));
+        *self.probe_verdict_cache.lock().unwrap() = Some((source.to_string(), verdict));
         Ok(verdict)
     }
 
@@ -246,7 +249,7 @@ impl CodeParser for SynCodeParser {
                         }
                     }
                     syn::Item::Use(u) => {
-                        let use_path = SynCodeParser::format_use_tree(&u.tree);
+                        let use_path = Self::format_use_tree(&u.tree);
                         let lower = use_path.to_lowercase();
                         if !lower.starts_with("std::")
                             && !lower.starts_with("core::")
