@@ -4,7 +4,7 @@
 > **Status:** Applied
 > **Date:** 2026-07-14
 > **Decided in:** Issue #50
-> **Links:** [[architecture-overview]], [[ADR-0010]], [[ADR-0013]], [[ADR-0007]], [[ADR-0008]], [[glossary]], [[json-report-schema]], [[console-report-enriched]], [[html-report]]
+> **Links:** [[architecture-overview]], [[ADR-0010]], [[ADR-0013]], [[ADR-0007]], [[ADR-0008]], [[glossary]], [[json-report-schema]], [[console-report-enriched]], [[html-report]], [[ADR-0016]]
 
 ## Contexte
 
@@ -124,7 +124,7 @@ Le ticket anticipait une recalibration. **Les données disent non.**
 
 ## Dette connue, explicitement non traitée
 
-- **`is_io` reste structurellement `false` pour un appel de méthode** ([[ADR-0013]], dette connue). #50 corrige *quelles déclarations on voit* ; #56 concerne *comment classifier le récepteur d'un appel* — orthogonal. Après #50, `self.m()` devient `Type::m` : ça ne commence toujours pas par `std::fs::`. Détecter `file.read_to_string(…)` exige le **type du récepteur**, que `syn` n'infère pas. La seule voie est une liste blanche de noms de méthodes — un arbitrage faux-positifs/faux-négatifs qui mérite son propre ADR. → **#56**, non bloquant, non dégradé par #50.
+- ~~**`is_io` reste structurellement `false` pour un appel de méthode**~~ ([[ADR-0013]], dette connue) : **Résolu (#56)**, voir [[ADR-0016]] — l'arbitrage faux-positifs/faux-négatifs anticipé ici a bien eu son propre ADR : suivi de type syntaxique intra-fichier pour affirmer, liste de noms suspects pour borner l'abstention, trois états dans le domaine, calibration mesurée (codeimpact + ripgrep, 0 % FP).
 - **Amplification de ressources** : la construction du nom qualifié coûte `O(fonctions × profondeur de mod)`. Mesuré : un fichier hostile de ~1 Mo (500 `mod` imbriqués, 80 k fonctions) atteint **902 Mo de RSS**. Dégradation gracieuse (lent, pas faux), mais un garde-fou de taille/nombre de fonctions manque. → **Issue #62**.
 - **Débordement de pile dans `syn::parse_file` lui-même** : ~1700 `mod` imbriqués (fichier de 12 Ko) → `SIGABRT` « stack overflow ». Vérifié en A/B contre `main` : **identique avant et après #50** — la pile déborde dans `syn`, avant que le code de ce ticket ne s'exécute. **Pas une régression**, mais une DoS réelle. Cousin de **#52** (les parcours récursifs du graphe d'appel). → **Issue #63**.
 - ~~**`complexity_level_for` appliqué au total projet**~~ : **Résolu (#60)**, voir [[ADR-0010]] § Dette connue — le JSON projet lit désormais la médiane par fichier, pas le total.
