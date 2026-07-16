@@ -328,7 +328,12 @@ fn reqwest_call_in_loop_tracked() {
 //    qualified path (std::net::TcpStream::connect), expect()
 // 6. method_call_on_unresolved_receiver_stays_non_io — no binding at all
 // 7. method_call_on_non_io_type_receiver_stays_non_io — resolved, non-I/O
-// 8. shadowed_receiver_rebound_to_non_io_type_stops_being_io — (4)
+// 8. shadowed_receiver_rebound_to_non_io_type_stops_being_io — (4), annotated
+// 9. shadowed_receiver_rebound_to_unresolved_type_stops_being_io — (4),
+//    mutation-testing gap found in self-review: #8 only exercises the
+//    "overwrite with a newly-resolved type" path (`bind_let`'s `Some` arm);
+//    nothing pinned the `None` arm (`type_env.remove`) that clears a stale
+//    binding when the rebind's type cannot be resolved at all.
 
 #[test]
 fn method_call_on_file_param_in_loop_is_detected_as_io() {
@@ -408,6 +413,18 @@ fn shadowed_receiver_rebound_to_non_io_type_stops_being_io() {
     assert!(
         !functions[0].calls_in_loops[0].is_io,
         "shadowing `file` with a non-I/O type must overwrite the earlier I/O binding"
+    );
+}
+
+#[test]
+fn shadowed_receiver_rebound_to_unresolved_type_stops_being_io() {
+    let parser = parser();
+    let source = "fn test(mut file: File) {\n    let file = compute();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(
+        !functions[0].calls_in_loops[0].is_io,
+        "rebinding `file` to an unresolvable init expression must clear the earlier I/O binding, not leave it stale"
     );
 }
 
