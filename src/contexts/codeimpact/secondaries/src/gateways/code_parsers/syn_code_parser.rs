@@ -382,6 +382,9 @@ fn constructor_type_name(expr: &syn::Expr) -> Option<String> {
         return None;
     };
     let segments = &path.path.segments;
+    // The `< 2` guard is exactly what makes `segments[len - 2]` below safe:
+    // it requires at least a `Type::ctor` pair before indexing one before
+    // the last segment ever runs.
     if segments.len() < 2 {
         return None;
     }
