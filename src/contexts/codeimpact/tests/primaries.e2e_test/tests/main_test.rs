@@ -413,6 +413,36 @@ fn e2e_analyze_sample_contains_io_in_loop() {
     );
 }
 
+// #56 T1 — `is_io_call` only ever matched `Expr::Call` names against
+// `IO_PREFIXES` ("std::fs::", ...); a method call records the BARE method
+// identifier (`read_to_string`), which can never start with a qualified
+// prefix, so `file.read_to_string(&mut buf)` inside a loop was silently
+// unflagged. This fixture (`method_io_in_loop.rs`) pins the user-observable
+// outcome: a method call on a receiver whose declared type is a known I/O
+// type (`File`, bound via `File::open(..).unwrap()`) now surfaces the same
+// end-to-end console warning as the free-function form.
+#[test]
+fn e2e_analyze_method_call_io_in_loop_is_detected() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("method_io_in_loop.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("I/O dans boucle: read_to_string"),
+        "expected the method-call form read_to_string to be reported as I/O in loop: {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_json_format_outputs_valid_json() {
     let binary = binary_path();

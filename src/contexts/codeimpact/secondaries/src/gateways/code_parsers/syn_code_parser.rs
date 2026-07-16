@@ -188,7 +188,7 @@ pub fn exercise_full_pipeline(source: &str) -> Result<(), String> {
     dedupe_names(&mut pending);
 
     for pf in pending {
-        let mut visitor = FunctionVisitor::new(pf.enclosing_type);
+        let mut visitor = FunctionVisitor::new(pf.enclosing_type, pf.params);
         visitor.visit_block(pf.block);
     }
 
@@ -268,7 +268,7 @@ impl CodeParser for SynCodeParser {
 
             let mut functions = Vec::new();
             for pf in pending {
-                let mut visitor = FunctionVisitor::new(pf.enclosing_type);
+                let mut visitor = FunctionVisitor::new(pf.enclosing_type, pf.params);
                 visitor.visit_block(pf.block);
                 functions.push(ParsedFunction {
                     name: pf.name,
@@ -329,6 +329,88 @@ fn is_io_call(call_name: &str) -> bool {
         .any(|prefix| call_name.starts_with(prefix))
 }
 
+/// Known I/O types (#56 T1, C1) — a method call is `is_io: true` only when
+/// its receiver's declared type resolves to one of these. std/tokio/reqwest,
+/// matching the free-function `IO_PREFIXES` this list complements.
+const KNOWN_IO_TYPES: &[&str] = &[
+    "File",
+    "TcpStream",
+    "TcpListener",
+    "UdpSocket",
+    "Client",
+    "Response",
+    "BufReader",
+    "BufWriter",
+    "Stdin",
+    "Stdout",
+    "Stderr",
+];
+
+fn is_io_type(type_name: &str) -> bool {
+    KNOWN_IO_TYPES.contains(&type_name)
+}
+
+/// Unwraps a bounded, syntactic chain of `?` / `.unwrap()` / `.expect(..)` /
+/// `.await` around a constructor call, e.g. `File::open(p)?` or
+/// `TcpStream::connect(a).await.unwrap()`. Bounded and closed (cc-kiss, C3)
+/// — this is not a general inferer, just enough to see through the handful
+/// of idiomatic ways a fallible constructor's result reaches a `let`
+/// binding.
+fn unwrap_result_chain(expr: &syn::Expr) -> &syn::Expr {
+    match expr {
+        syn::Expr::Try(try_expr) => unwrap_result_chain(&try_expr.expr),
+        syn::Expr::Await(await_expr) => unwrap_result_chain(&await_expr.base),
+        syn::Expr::MethodCall(method_call)
+            if method_call.method == "unwrap" || method_call.method == "expect" =>
+        {
+            unwrap_result_chain(&method_call.receiver)
+        }
+        _ => expr,
+    }
+}
+
+/// The type name asserted by a constructor-shaped call expression — the
+/// segment immediately before the final path segment, e.g. `File::open(..)`
+/// → `File`, `std::net::TcpStream::connect(..)` → `TcpStream`. `None` when
+/// the expression isn't a qualified-path call, or has fewer than two
+/// segments (no type to name).
+fn constructor_type_name(expr: &syn::Expr) -> Option<String> {
+    let syn::Expr::Call(call) = expr else {
+        return None;
+    };
+    let syn::Expr::Path(path) = call.func.as_ref() else {
+        return None;
+    };
+    let segments = &path.path.segments;
+    // The `< 2` guard is exactly what makes `segments[len - 2]` below safe:
+    // it requires at least a `Type::ctor` pair before indexing one before
+    // the last segment ever runs.
+    if segments.len() < 2 {
+        return None;
+    }
+    Some(segments[segments.len() - 2].ident.to_string())
+}
+
+/// Variable-name → resolved-type-name bindings seeded from a function's
+/// typed parameters (#56 T1, C1 resolution step 1). `self`/`&self`
+/// (`FnArg::Receiver`) contributes no name to bind. A parameter pattern
+/// richer than a bare identifier (destructuring) is skipped — still
+/// intra-file and syntactic (C3), not a pattern-matcher.
+fn param_type_bindings(sig: &syn::Signature) -> Vec<(String, String)> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pat_type) => {
+                let syn::Pat::Ident(ident) = pat_type.pat.as_ref() else {
+                    return None;
+                };
+                type_last_segment(&pat_type.ty).map(|ty| (ident.ident.to_string(), ty))
+            }
+            syn::FnArg::Receiver(_) => None,
+        })
+        .collect()
+}
+
 impl SynCodeParser {
     fn format_use_tree(tree: &syn::UseTree) -> String {
         match tree {
@@ -356,6 +438,10 @@ struct PendingFn<'a> {
     enclosing_type: Option<String>,
     block: &'a syn::Block,
     start_line: usize,
+    /// Variable-name → resolved-type-name bindings from this function's own
+    /// signature (#56 T1) — seeds the body's type environment before a
+    /// single statement is visited.
+    params: Vec<(String, String)>,
 }
 
 /// Returns the last path segment of a type — generics erased — or `None`
@@ -418,6 +504,7 @@ fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec
                 enclosing_type: None,
                 block: &func.block,
                 start_line: func.span().start().line,
+                params: param_type_bindings(&func.sig),
             });
         } else if let syn::Item::Impl(item_impl) = item {
             let qualifier = type_last_segment(&item_impl.self_ty).or_else(|| trait_name(item_impl));
@@ -433,6 +520,7 @@ fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec
                         enclosing_type,
                         block: &method.block,
                         start_line: method.span().start().line,
+                        params: param_type_bindings(&method.sig),
                     });
                 }
             }
@@ -448,6 +536,7 @@ fn collect_functions<'a>(items: &'a [syn::Item], mod_prefix: &str, out: &mut Vec
                             enclosing_type: Some(format!("{}{}", mod_prefix, trait_name)),
                             block: default_block,
                             start_line: method.span().start().line,
+                            params: param_type_bindings(&method.sig),
                         });
                     }
                 }
@@ -502,32 +591,90 @@ struct FunctionVisitor {
     /// `Self::m()` to the callee's qualified declaration (D2, #50) — `None`
     /// for a free function, where no such resolution applies.
     enclosing_type: Option<String>,
+    /// Variable-name → resolved-type-name, seeded from the function's own
+    /// signature params and updated by every `let` binding as it is
+    /// visited (#56 T1, C3) — flat, function-body-scoped: a `let` re-using
+    /// a name overwrites the earlier entry outright (shadowing-by-overwrite,
+    /// a documented limitation, not block-scope restored).
+    type_env: std::collections::HashMap<String, String>,
 }
 
 impl FunctionVisitor {
-    fn new(enclosing_type: Option<String>) -> Self {
+    fn new(enclosing_type: Option<String>, params: Vec<(String, String)>) -> Self {
         Self {
             enclosing_type,
+            type_env: params.into_iter().collect(),
             ..Self::default()
         }
     }
 
     /// Records a call — free-function or method — reached at any nesting
     /// level. When nested inside a loop, it is also recorded as a
-    /// `LoopCall` fact, classified (not filtered) by `is_io_call`: every
+    /// `LoopCall` fact, classified (not filtered) by `is_io`: every
     /// detector reading `calls_in_loops` decides for itself which facts it
-    /// cares about.
-    fn record_call<S: Spanned>(&mut self, name: String, spanned: &S) {
+    /// cares about. `is_io` is supplied by the caller — a free-function
+    /// call classifies by qualified-name prefix (`is_io_call`), a method
+    /// call by its receiver's resolved type (`receiver_is_io_type`); the
+    /// bare method identifier recorded here can never itself match a
+    /// qualified prefix (#56 root cause).
+    fn record_call<S: Spanned>(&mut self, name: String, spanned: &S, is_io: bool) {
         if self.loop_depth > 0 {
             let line_col = spanned.span().start();
             self.calls_in_loops.push(LoopCall {
                 name: name.clone(),
                 line: line_col.line,
                 col: line_col.column,
-                is_io: is_io_call(&name),
+                is_io,
             });
         }
         self.calls.push(name);
+    }
+
+    /// Whether `receiver` is a bare identifier resolved (C1) to a known I/O
+    /// type. Anything else — a field access, a chained method call, an
+    /// unresolved name — stays `false`: an unresolved receiver abstains in
+    /// T1, it does not assert (C1).
+    fn receiver_is_io_type(&self, receiver: &syn::Expr) -> bool {
+        let syn::Expr::Path(path) = receiver else {
+            return false;
+        };
+        let Some(ident) = path.path.get_ident() else {
+            return false;
+        };
+        self.type_env
+            .get(&ident.to_string())
+            .is_some_and(|ty| is_io_type(ty))
+    }
+
+    /// Updates the type environment for a `let` binding — annotated
+    /// (`let x: T = ..`) or constructor-inferred (`let x = T::ctor(..)`,
+    /// unwrapped through `unwrap_result_chain`). A binding whose type
+    /// cannot be resolved by either route clears any earlier entry for
+    /// that name outright (shadowing-by-overwrite, C3 point 4): the name is
+    /// unresolved again until the next binding proves otherwise.
+    fn bind_let(&mut self, pat: &syn::Pat, init_expr: &syn::Expr) {
+        let (name, resolved_type) = match pat {
+            syn::Pat::Type(pat_type) => {
+                let syn::Pat::Ident(ident) = pat_type.pat.as_ref() else {
+                    return;
+                };
+                (ident.ident.to_string(), type_last_segment(&pat_type.ty))
+            }
+            syn::Pat::Ident(ident) => (
+                ident.ident.to_string(),
+                constructor_type_name(unwrap_result_chain(init_expr)),
+            ),
+            _ => return,
+        };
+
+        match resolved_type {
+            Some(ty) => {
+                self.type_env.insert(name, ty);
+            }
+            None => {
+                self.type_env.remove(&name);
+            }
+        }
     }
 
     fn visit_block(&mut self, block: &syn::Block) {
@@ -544,13 +691,16 @@ impl FunctionVisitor {
             syn::Stmt::Local(local) => {
                 if let Some(init) = &local.init {
                     self.visit_expr(&init.expr);
+                    self.bind_let(&local.pat, &init.expr);
                 }
             }
             syn::Stmt::Item(syn::Item::Fn(func)) => {
                 // A nested `fn` cannot capture (or declare) `self`, so it
                 // never needs `self`/`Self` resolution — unlike a closure,
                 // which shares this same visitor instance and its context.
-                let mut inner = FunctionVisitor::new(None);
+                // Its own signature still seeds its own type environment
+                // (#56 T1) — same rule as any other function body.
+                let mut inner = FunctionVisitor::new(None, param_type_bindings(&func.sig));
                 inner.visit_block(&func.block);
                 self.decision_points += inner.decision_points;
                 self.calls.extend(inner.calls);
@@ -677,7 +827,8 @@ impl FunctionVisitor {
                         }
                     }
                     let name = segments.join("::");
-                    self.record_call(name, call.func.as_ref());
+                    let is_io = is_io_call(&name);
+                    self.record_call(name, call.func.as_ref(), is_io);
                 }
                 for arg in &call.args {
                     self.visit_expr(arg);
@@ -696,7 +847,8 @@ impl FunctionVisitor {
                     }
                     _ => method_name,
                 };
-                self.record_call(name, &method_call.method);
+                let is_io = self.receiver_is_io_type(&method_call.receiver);
+                self.record_call(name, &method_call.method, is_io);
                 self.visit_expr(&method_call.receiver);
                 for arg in &method_call.args {
                     self.visit_expr(arg);
