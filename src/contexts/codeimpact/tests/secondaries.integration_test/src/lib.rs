@@ -14,34 +14,44 @@ pub mod support {
         path
     }
 
-    /// Builds `codeimpact-parse-probe` into `target/debug` if it is not
-    /// already there. A test binary's own `current_exe()` lives one level
-    /// deeper (`target/debug/deps/`), so once built here it is discovered
+    /// Builds `codeimpact-parse-probe` fresh into `target/debug`. A test
+    /// binary's own `current_exe()` lives one level deeper
+    /// (`target/debug/deps/`), so once built here it is discovered
     /// automatically via `SynCodeParser`'s "grandparent of current_exe"
     /// fallback — no `CODEIMPACT_PARSE_PROBE` override needed.
     pub fn ensure_probe_built() {
         ensure_bin_built("codeimpact_secondaries", "codeimpact-parse-probe");
     }
 
-    /// Builds `bin_name` (a `[[bin]]` target of `package`) into `target/debug`
-    /// if it is not already there, and returns its path. Generalizes
-    /// `ensure_probe_built` for this crate's own fake-probe `[[bin]]`s (T3:
-    /// a sleeping probe for the timeout path, an unknown-exit-code probe —
-    /// portable Rust binaries rather than shell scripts).
+    /// Builds `bin_name` (a `[[bin]]` target of `package`) into
+    /// `target/debug` and returns its path. Generalizes `ensure_probe_built`
+    /// for this crate's own fake-probe `[[bin]]`s (T3: a sleeping probe for
+    /// the timeout path, an unknown-exit-code probe — portable Rust
+    /// binaries rather than shell scripts).
+    ///
+    /// UNCONDITIONALLY runs `cargo build` — it does NOT short-circuit on
+    /// "the file already exists at this path" (Dev-B finding, retry 2).
+    /// An exists-check let every "verified via the real binary" test
+    /// silently validate a STALE binary: a mutation test that forgot to
+    /// `rm` first would pass against yesterday's build, and CI's own
+    /// `Swatinem/rust-cache` persists `target/` across runs, so a cache
+    /// restored from before a fix would do the exact same thing while
+    /// reporting green. Cargo's own incremental build is the cache that
+    /// matters here — a no-op rebuild when nothing changed is cheap; an
+    /// exists-check that can validate stale code is not a cache, it is a
+    /// correctness bug in the harness itself.
     pub fn ensure_bin_built(package: &str, bin_name: &str) -> PathBuf {
         let bin_path = workspace_root().join("target").join("debug").join(format!(
             "{}{}",
             bin_name,
             std::env::consts::EXE_SUFFIX
         ));
-        if !bin_path.exists() {
-            let status = Command::new("cargo")
-                .args(["build", "-p", package, "--bin", bin_name])
-                .current_dir(workspace_root())
-                .status()
-                .unwrap_or_else(|_| panic!("failed to build {}", bin_name));
-            assert!(status.success(), "{} build failed", bin_name);
-        }
+        let status = Command::new("cargo")
+            .args(["build", "-p", package, "--bin", bin_name])
+            .current_dir(workspace_root())
+            .status()
+            .unwrap_or_else(|_| panic!("failed to build {}", bin_name));
+        assert!(status.success(), "{} build failed", bin_name);
         bin_path
     }
 }
