@@ -20,23 +20,28 @@ pub mod support {
     /// automatically via `SynCodeParser`'s "grandparent of current_exe"
     /// fallback — no `CODEIMPACT_PARSE_PROBE` override needed.
     pub fn ensure_probe_built() {
-        let probe = workspace_root().join("target").join("debug").join(format!(
-            "codeimpact-parse-probe{}",
+        ensure_bin_built("codeimpact_secondaries", "codeimpact-parse-probe");
+    }
+
+    /// Builds `bin_name` (a `[[bin]]` target of `package`) into `target/debug`
+    /// if it is not already there, and returns its path. Generalizes
+    /// `ensure_probe_built` for this crate's own fake-probe `[[bin]]`s (T3:
+    /// a sleeping probe for the timeout path, an unknown-exit-code probe —
+    /// portable Rust binaries rather than shell scripts).
+    pub fn ensure_bin_built(package: &str, bin_name: &str) -> PathBuf {
+        let bin_path = workspace_root().join("target").join("debug").join(format!(
+            "{}{}",
+            bin_name,
             std::env::consts::EXE_SUFFIX
         ));
-        if !probe.exists() {
+        if !bin_path.exists() {
             let status = Command::new("cargo")
-                .args([
-                    "build",
-                    "-p",
-                    "codeimpact_secondaries",
-                    "--bin",
-                    "codeimpact-parse-probe",
-                ])
+                .args(["build", "-p", package, "--bin", bin_name])
                 .current_dir(workspace_root())
                 .status()
-                .expect("failed to build probe binary");
-            assert!(status.success(), "probe binary build failed");
+                .unwrap_or_else(|_| panic!("failed to build {}", bin_name));
+            assert!(status.success(), "{} build failed", bin_name);
         }
+        bin_path
     }
 }

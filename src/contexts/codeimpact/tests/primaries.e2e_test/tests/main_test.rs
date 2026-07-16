@@ -193,6 +193,92 @@ fn e2e_analyze_pathological_source_is_unmeasured_not_crashed() {
     }
 }
 
+// ── #63 T2 (AC3) — a project scan tolerates ONE pathological file ──
+//
+// `analyze --path <dir>` over a mix of healthy and pathological files must
+// finish, report the pathological file unmeasured with its reason, and
+// still measure the healthy ones.
+#[test]
+fn e2e_analyze_path_with_one_pathological_file_still_completes() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_project_scan_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    std::fs::write(dir.join("good.rs"), "fn good() { if true {} }").expect("write healthy fixture");
+    std::fs::write(dir.join("pathological.rs"), nested_mods_source(1800))
+        .expect("write pathological fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "the scan must finish (exit 0) even with one pathological file. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+
+    let unmeasurable = json["metrics"]["unmeasurable_files"]
+        .as_array()
+        .expect("unmeasurable_files should be an array");
+    assert_eq!(
+        unmeasurable.len(),
+        1,
+        "exactly the pathological file should be unmeasurable, got: {:#?}",
+        unmeasurable
+    );
+    assert!(
+        unmeasurable[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("pathological.rs"),
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+    // The JSON writer serializes `UnmeasurableReason` via `{:?}` (Debug),
+    // consistent with every other reason it already reports — not the
+    // French `Display` sentence used for stderr/console output.
+    assert_eq!(
+        unmeasurable[0]["reason"].as_str(),
+        Some("SourceTooComplex"),
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+
+    // Project-level JSON never populates `function_details` (ADR-0012 —
+    // no per-file location at aggregate scope), so the healthy file's
+    // measurement shows up in the aggregate instead: `unmeasurable_files`
+    // above already proves it is exactly 1 (the pathological file alone),
+    // and its `if true {}` contributes a real decision point.
+    assert_eq!(
+        json["metrics"]["unmeasurable_files_count"].as_u64(),
+        Some(1),
+        "only the pathological file should count as unmeasurable, got: {:#?}",
+        json["metrics"]
+    );
+    assert!(
+        json["metrics"]["cyclomatic_complexity"].as_u64().unwrap() >= 1,
+        "good.rs's decision point must still be counted, got: {:#?}",
+        json["metrics"]
+    );
+}
+
 #[test]
 fn e2e_analyze_directory_exits_0() {
     let binary = binary_path();

@@ -105,7 +105,12 @@ fn probe_source(source: &str) -> Result<ProbeVerdict, AnalysisError> {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(verdict_from(status.code())),
             Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
+                // A short poll interval, not `wait-timeout` (cc-kiss, #63
+                // T3): the canary's own parse is typically sub-millisecond
+                // for an ordinary file, so a coarser interval would turn
+                // polling latency into the dominant per-file cost instead
+                // of the fork+exec it is meant to be.
+                std::thread::sleep(Duration::from_millis(1));
             }
             Ok(None) => {
                 let _ = child.kill();
