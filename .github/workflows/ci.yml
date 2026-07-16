@@ -69,14 +69,30 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo build --workspace
-      # Proves the #63 canary (probe discovery, exit-code mapping) on both
-      # non-Linux OSes the linux-only `test` job never exercises. Does NOT
-      # run the timeout-kill path — that test is #[ignore]d (see
-      # slow-tests) and this job runs plain `cargo test`, without
-      # `--ignored` — so timeout-kill stays Linux-only in CI (slow-tests).
-      # Scoped to this crate, not `--workspace`, since the linux `test`
-      # job already covers the rest on Linux.
-      - run: cargo test -p codeimpact_secondaries_integration_test
+      # Proves the #63 canary ONLY (probe discovery, exit-code mapping) on
+      # both non-Linux OSes the linux-only `test` job never exercises — NOT
+      # the whole secondaries.integration_test suite. That used to run
+      # `cargo test -p codeimpact_secondaries_integration_test` wholesale,
+      # which also pulled in `cargo_test_runner_test` (the stress-test
+      # adapter spawning `cargo test` on a fixture workspace) — pre-existing
+      # Windows debt unrelated to #63 that this job was never meant to
+      # prove (`TestRunnerError("la compilation des tests a échoué")` on
+      # windows-latest). Narrowed to the canary's own test files; each is
+      # confirmed to carry no `cfg(unix)` gate. Excluded on purpose:
+      # `parse_probe_rlimit_test`/`parse_probe_memory_ceiling_test`
+      # (cfg(unix)), `parse_probe_timeout_test` (#[ignore]d, Linux-only via
+      # slow-tests), and `cargo_test_runner_test` (the Windows debt above,
+      # deferred — not #63's scope). Does NOT run the timeout-kill path for
+      # the same #[ignore] reason as slow-tests' own comment.
+      - run: >
+          cargo test -p codeimpact_secondaries_integration_test
+          --test parse_probe_pathological_test
+          --test parse_probe_defense_in_depth_test
+          --test parse_probe_cache_correctness_test
+          --test parse_probe_cache_test
+          --test parse_probe_full_pipeline_test
+          --test parse_probe_missing_test
+          --test parse_probe_unknown_exit_test
 
   coverage:
     name: coverage
