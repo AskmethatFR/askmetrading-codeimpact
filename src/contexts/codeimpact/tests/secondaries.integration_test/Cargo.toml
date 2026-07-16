@@ -29,3 +29,8 @@ test = false
 name = "codeimpact-exit-seven-probe"
 path = "src/bin/exit_seven_probe.rs"
 test = false
+
+[[bin]]
+name = "codeimpact-content-probe"
+path = "src/bin/content_probe.rs"
+test = false
