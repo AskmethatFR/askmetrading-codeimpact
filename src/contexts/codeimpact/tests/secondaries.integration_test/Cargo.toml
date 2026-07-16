@@ -12,3 +12,25 @@ tempfile = "3"
 [lib]
 test = false
 doctest = false
+
+# Fake canaries (#63) — portable Rust [[bin]]s standing in for
+# `codeimpact-parse-probe` in tests, injected via `CODEIMPACT_PARSE_PROBE`.
+[[bin]]
+name = "codeimpact-count-probe"
+path = "src/bin/count_probe.rs"
+test = false
+
+[[bin]]
+name = "codeimpact-sleep-probe"
+path = "src/bin/sleep_probe.rs"
+test = false
+
+[[bin]]
+name = "codeimpact-exit-seven-probe"
+path = "src/bin/exit_seven_probe.rs"
+test = false
+
+[[bin]]
+name = "codeimpact-content-probe"
+path = "src/bin/content_probe.rs"
+test = false

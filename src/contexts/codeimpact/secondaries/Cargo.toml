@@ -3,6 +3,11 @@ name = "codeimpact_secondaries"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "codeimpact-parse-probe"
+path = "src/bin/parse_probe.rs"
+required-features = ["syn-parser"]
+
 [dependencies]
 codeimpact_hexagon = { path = "../hexagon" }
 serde = { version = "1", features = ["derive"] }
@@ -10,6 +15,11 @@ serde_json = "1"
 syn = { version = "2", features = ["full"], optional = true }
 proc-macro2 = { version = "1", features = ["span-locations"], optional = true }
 walkdir = "2"
+
+# `libc` backs `parse_probe.rs`'s `RLIMIT_AS` call, which is itself
+# `#[cfg(unix)]` (#63) — an unconditional dependency would pull it in on
+# Windows too, for zero use (QA nit, retry 1).
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [features]

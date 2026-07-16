@@ -24,7 +24,77 @@ fn binary_path() -> PathBuf {
             .expect("failed to build binary");
         assert!(status.success(), "binary build failed");
     }
+    // The CLI now shells out to codeimpact-parse-probe (#63) for every
+    // parse — it must sit next to the CLI binary (sibling discovery, D2)
+    // whenever an e2e test invokes `codeimpact analyze`.
+    ensure_probe_built();
     bin
+}
+
+fn ensure_probe_built() {
+    let probe = workspace_root().join("target").join("debug").join(format!(
+        "codeimpact-parse-probe{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    if !probe.exists() {
+        let status = Command::new("cargo")
+            .args([
+                "build",
+                "-p",
+                "codeimpact_secondaries",
+                "--bin",
+                "codeimpact-parse-probe",
+            ])
+            .current_dir(workspace_root())
+            .status()
+            .expect("failed to build probe binary");
+        assert!(status.success(), "probe binary build failed");
+    }
+}
+
+/// Writes `content` to an isolated temp file and returns its path. Used to
+/// materialize pathologically-nested fixtures (#63) without checking huge
+/// generated files into the repo.
+fn write_temp_fixture(name: &str, content: &str) -> PathBuf {
+    let path =
+        std::env::temp_dir().join(format!("codeimpact_e2e_{}_{}.rs", name, std::process::id()));
+    std::fs::write(&path, content).expect("failed to write temp fixture");
+    path
+}
+
+/// `mod m0 { mod m1 { ... fn f() {} ... } }` nested `depth` levels deep —
+/// the #63 pre-scan bypass class (~1800 nested `mod` is enough to overflow
+/// `syn::parse_file`'s recursive-descent stack).
+fn nested_mods_source(depth: usize) -> String {
+    let mut src = String::new();
+    for i in 0..depth {
+        src.push_str(&format!("mod m{} {{\n", i));
+    }
+    src.push_str("fn f() {}\n");
+    for _ in 0..depth {
+        src.push_str("}\n");
+    }
+    src
+}
+
+/// `fn f(x: Vec<Vec<...i32...>>) {}` nested `depth` levels deep — cycle-1
+/// bypass vector #1 (nested generic types survive a byte-level brace scan).
+fn nested_vec_type_source(depth: usize) -> String {
+    let mut ty = String::from("i32");
+    for _ in 0..depth {
+        ty = format!("Vec<{}>", ty);
+    }
+    format!("fn f(x: {}) {{}}\n", ty)
+}
+
+/// `let _ = !!!!...x;` with `depth` leading `!` — cycle-1 bypass vector #2
+/// (chained unary negation survives the same byte-level scan).
+fn nested_not_chain_source(depth: usize) -> String {
+    let mut expr = String::from("x");
+    for _ in 0..depth {
+        expr = format!("!{}", expr);
+    }
+    format!("fn f() {{ let x = true; let _ = {}; }}\n", expr)
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -78,6 +148,139 @@ fn e2e_analyze_nonexistent_file_exits_1() {
         stderr.contains("introuvable") || stderr.contains("erreur"),
         "stderr should contain error: {}",
         stderr
+    );
+}
+
+// ── #63 — pathologically nested source must never crash the process ──
+//
+// Test List (one behavior, three fixtures — same reason expected, AC2):
+//   1. Nested `mod` (the ticket's own repro).
+//   2. `Vec<Vec<...>>` nesting (cycle-1 bypass vector #1).
+//   3. `!!!!...x` chain (cycle-1 bypass vector #2).
+// Collapsed into one parameterized cycle (three rows, same behavior):
+// exit 1, no crash, stderr names the "trop complexe" reason (AC1). Depths
+// bumped with margin (retry 2, Security informational): this e2e test
+// always exercises the DEBUG `codeimpact` binary regardless of this test
+// harness's own build profile (binary_path() hardcodes target/debug), so
+// it was never itself profile-fragile — bumped anyway for consistency
+// with parse_probe_pathological_test.rs's fixtures, which ARE.
+#[test]
+fn e2e_analyze_pathological_source_is_unmeasured_not_crashed() {
+    let binary = binary_path();
+    let cases: [(&str, String); 3] = [
+        ("nested_mods", nested_mods_source(30000)),
+        ("nested_vec", nested_vec_type_source(30000)),
+        ("nested_not", nested_not_chain_source(60000)),
+    ];
+
+    for (name, source) in &cases {
+        let fixture = write_temp_fixture(name, source);
+        let output = Command::new(&binary)
+            .args(["analyze", fixture.to_str().unwrap()])
+            .output()
+            .expect("failed to execute binary");
+        let _ = std::fs::remove_file(&fixture);
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "case {}: expected a clean exit 1 (never a crash/signal). stderr: {}",
+            name,
+            stderr
+        );
+        assert!(
+            stderr.contains("trop complexe"),
+            "case {}: expected the SourceTooComplex reason in stderr, got: {}",
+            name,
+            stderr
+        );
+    }
+}
+
+// ── #63 T2 (AC3) — a project scan tolerates ONE pathological file ──
+//
+// `analyze --path <dir>` over a mix of healthy and pathological files must
+// finish, report the pathological file unmeasured with its reason, and
+// still measure the healthy ones.
+#[test]
+fn e2e_analyze_path_with_one_pathological_file_still_completes() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_project_scan_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    std::fs::write(dir.join("good.rs"), "fn good() { if true {} }").expect("write healthy fixture");
+    std::fs::write(dir.join("pathological.rs"), nested_mods_source(30000))
+        .expect("write pathological fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "the scan must finish (exit 0) even with one pathological file. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+
+    let unmeasurable = json["metrics"]["unmeasurable_files"]
+        .as_array()
+        .expect("unmeasurable_files should be an array");
+    assert_eq!(
+        unmeasurable.len(),
+        1,
+        "exactly the pathological file should be unmeasurable, got: {:#?}",
+        unmeasurable
+    );
+    assert!(
+        unmeasurable[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("pathological.rs"),
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+    // The JSON writer serializes `UnmeasurableReason` via `{:?}` (Debug),
+    // consistent with every other reason it already reports — not the
+    // French `Display` sentence used for stderr/console output.
+    assert_eq!(
+        unmeasurable[0]["reason"].as_str(),
+        Some("SourceTooComplex"),
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+
+    // Project-level JSON never populates `function_details` (ADR-0012 —
+    // no per-file location at aggregate scope), so the healthy file's
+    // measurement shows up in the aggregate instead: `unmeasurable_files`
+    // above already proves it is exactly 1 (the pathological file alone),
+    // and its `if true {}` contributes a real decision point.
+    assert_eq!(
+        json["metrics"]["unmeasurable_files_count"].as_u64(),
+        Some(1),
+        "only the pathological file should count as unmeasurable, got: {:#?}",
+        json["metrics"]
+    );
+    assert!(
+        json["metrics"]["cyclomatic_complexity"].as_u64().unwrap() >= 1,
+        "good.rs's decision point must still be counted, got: {:#?}",
+        json["metrics"]
     );
 }
 

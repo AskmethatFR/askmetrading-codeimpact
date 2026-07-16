@@ -40,9 +40,12 @@ hexagon → rien
 | Port (hexagon) | Adapter P0 (secondaries) | Adapter futur |
 |---|---|---|
 | CodeReaderPort | FileSystemCodeReader | — |
+| CodeParserPort | SynCodeParser | RoslynCodeParser, TsCodeParser |
 | ProfilerPort | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | CargoTestRunner | — |
 | ReportWriterPort | ConsoleReportWriter, JsonReportWriter | — |
+
+> **Frontière de processus dans `SynCodeParser`.** Le parsing risqué est isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, une cible binaire Cargo dédiée de `secondaries/`) pour contenir un débordement de pile de `syn` sans tuer le scan. Voir [[ADR-0015]].
 
 ### Naming conventions
 
