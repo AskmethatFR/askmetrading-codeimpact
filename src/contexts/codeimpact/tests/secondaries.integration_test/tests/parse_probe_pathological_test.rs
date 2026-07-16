@@ -11,7 +11,14 @@ fn parser() -> SynCodeParser {
 
 /// `mod m0 { mod m1 { ... fn f() {} ... } }` nested `depth` levels deep —
 /// the #63 ticket's own repro (~1800 nested `mod` overflows `syn`'s
-/// recursive-descent stack).
+/// recursive-descent stack in DEBUG). Depths bumped with margin (retry 2,
+/// Security informational): `cargo test --release` genuinely admits a
+/// deeper recursion before overflowing (release optimizations shrink
+/// stack frames) — 1800/2000/10000 parse cleanly under `--release`,
+/// empirically confirmed to still overflow the probe's 16 MiB thread at
+/// 30000/30000/60000 in BOTH profiles (verified directly against the real
+/// `codeimpact-parse-probe` binary, debug and release, before landing
+/// this bump).
 fn nested_mods_source(depth: usize) -> String {
     let mut src = String::new();
     for i in 0..depth {
@@ -54,9 +61,9 @@ fn nested_not_chain_source(depth: usize) -> String {
 #[test]
 fn pathological_sources_are_unmeasurable_source_too_complex() {
     let cases: [(&str, String); 3] = [
-        ("nested_mods", nested_mods_source(1800)),
-        ("nested_vec", nested_vec_type_source(2000)),
-        ("nested_not", nested_not_chain_source(10000)),
+        ("nested_mods", nested_mods_source(30000)),
+        ("nested_vec", nested_vec_type_source(30000)),
+        ("nested_not", nested_not_chain_source(60000)),
     ];
 
     for (name, source) in &cases {
@@ -73,7 +80,7 @@ fn pathological_sources_are_unmeasurable_source_too_complex() {
 
 #[test]
 fn pathological_source_dependencies_are_also_unmeasurable_source_too_complex() {
-    let source = nested_mods_source(1800);
+    let source = nested_mods_source(30000);
 
     let result = parser().parse_file_dependencies(&source);
 

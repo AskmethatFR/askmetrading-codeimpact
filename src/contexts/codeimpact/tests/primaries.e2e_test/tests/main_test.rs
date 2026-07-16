@@ -154,18 +154,23 @@ fn e2e_analyze_nonexistent_file_exits_1() {
 // ── #63 — pathologically nested source must never crash the process ──
 //
 // Test List (one behavior, three fixtures — same reason expected, AC2):
-//   1. ~1800 nested `mod` (the ticket's own repro).
-//   2. `Vec<Vec<...>>` nested 2000 deep (cycle-1 bypass vector #1).
-//   3. `!!!!...x` with 10000 leading `!` (cycle-1 bypass vector #2).
+//   1. Nested `mod` (the ticket's own repro).
+//   2. `Vec<Vec<...>>` nesting (cycle-1 bypass vector #1).
+//   3. `!!!!...x` chain (cycle-1 bypass vector #2).
 // Collapsed into one parameterized cycle (three rows, same behavior):
-// exit 1, no crash, stderr names the "trop complexe" reason (AC1).
+// exit 1, no crash, stderr names the "trop complexe" reason (AC1). Depths
+// bumped with margin (retry 2, Security informational): this e2e test
+// always exercises the DEBUG `codeimpact` binary regardless of this test
+// harness's own build profile (binary_path() hardcodes target/debug), so
+// it was never itself profile-fragile — bumped anyway for consistency
+// with parse_probe_pathological_test.rs's fixtures, which ARE.
 #[test]
 fn e2e_analyze_pathological_source_is_unmeasured_not_crashed() {
     let binary = binary_path();
     let cases: [(&str, String); 3] = [
-        ("nested_mods", nested_mods_source(1800)),
-        ("nested_vec", nested_vec_type_source(2000)),
-        ("nested_not", nested_not_chain_source(10000)),
+        ("nested_mods", nested_mods_source(30000)),
+        ("nested_vec", nested_vec_type_source(30000)),
+        ("nested_not", nested_not_chain_source(60000)),
     ];
 
     for (name, source) in &cases {
@@ -208,7 +213,7 @@ fn e2e_analyze_path_with_one_pathological_file_still_completes() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated scan dir");
     std::fs::write(dir.join("good.rs"), "fn good() { if true {} }").expect("write healthy fixture");
-    std::fs::write(dir.join("pathological.rs"), nested_mods_source(1800))
+    std::fs::write(dir.join("pathological.rs"), nested_mods_source(30000))
         .expect("write pathological fixture");
 
     let output = Command::new(&binary)
