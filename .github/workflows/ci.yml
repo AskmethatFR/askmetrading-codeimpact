@@ -54,6 +54,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo test -p codeimpact_secondaries_integration_test --test cargo_test_runner_test cargo_test_runner_excludes_build_time_from_measured_duration -- --ignored --exact
+      - run: cargo test -p codeimpact_secondaries_integration_test --test parse_probe_timeout_test probe_that_never_exits_is_killed_and_treated_as_source_too_complex -- --ignored --exact
 
   cross-platform:
     name: cross-platform (${{ matrix.os }})
