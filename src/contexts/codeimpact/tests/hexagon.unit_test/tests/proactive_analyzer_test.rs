@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::proactive_analyzer;
 use codeimpact_hexagon::analysis::AnalysisRule;
+use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_secondaries::gateways::code_parsers::code_parser_stub::CodeParserStub;
@@ -298,7 +299,7 @@ fn io_in_loops_rule_detects_io_in_loops() {
             name: "std::fs::read".to_string(),
             line: 5,
             col: 9,
-            is_io: true,
+            io: IoClassification::Io,
         }],
     }]);
     let metrics = proactive_analyzer::analyze(
@@ -329,7 +330,7 @@ fn io_in_loops_rule_not_in_rules_returns_empty() {
             name: "std::fs::read".to_string(),
             line: 5,
             col: 9,
-            is_io: true,
+            io: IoClassification::Io,
         }],
     }]);
     let metrics = proactive_analyzer::analyze(
