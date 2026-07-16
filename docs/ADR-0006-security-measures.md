@@ -5,6 +5,7 @@
 **Applied in:** US1  
 **Relations:**  
   depends-on: ["architecture-overview"]  
+  related-to: ["ADR-0015"]  
 
 ## Context
 

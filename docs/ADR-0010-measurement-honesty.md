@@ -4,7 +4,7 @@
 > **Status:** Applied
 > **Date:** 2026-07-12
 > **Decided in:** Issue #36 (slice S0 de l'étude #35 / US18)
-> **Links:** [[architecture-overview]], [[ADR-0004]], [[ADR-0006]], [[economic-impact-estimator]]
+> **Links:** [[architecture-overview]], [[ADR-0004]], [[ADR-0006]], [[economic-impact-estimator]], [[ADR-0015]]
 
 ## Contexte
 
