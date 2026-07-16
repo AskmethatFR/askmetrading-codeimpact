@@ -41,6 +41,14 @@ cargo build --release
 ./target/release/codeimpact --help
 ```
 
+`cargo build --release` produces **two** binaries side by side in
+`target/release/`: `codeimpact` (the CLI above) and
+`codeimpact-parse-probe` — an internal canary process the parser spawns
+per file to isolate a pathologically-nested source from crashing the
+whole scan (#63). It is never invoked directly; keep both binaries
+together when distributing or installing `codeimpact` (`CODEIMPACT_PARSE_PROBE`
+overrides its location if they cannot ship side by side).
+
 ## Utilisation
 
 ### Analyser un fichier
