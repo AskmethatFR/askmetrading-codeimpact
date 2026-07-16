@@ -4,6 +4,7 @@ use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
 
+use codeimpact_hexagon::analysis::MAX_MEASURABLE_SOURCE_BYTES;
 use codeimpact_secondaries_integration_test::support::ensure_bin_built;
 
 /// Security finding (LOW, retry 1): "add a test source that allocates
@@ -37,11 +38,11 @@ fn wide_flat_source_near_the_size_ceiling_parses_without_hang_or_oom() {
 
     let prefix = "fn f() { let x = [";
     let suffix = "]; }";
-    let budget = 1024 * 1024 - prefix.len() - suffix.len() - 1;
+    let budget = MAX_MEASURABLE_SOURCE_BYTES - prefix.len() - suffix.len() - 1;
     let elements = "0,".repeat(budget / 2);
     let source = format!("{prefix}{elements}0{suffix}");
     assert!(
-        source.len() <= 1024 * 1024,
+        source.len() <= MAX_MEASURABLE_SOURCE_BYTES,
         "test fixture must itself stay under the admissibility ceiling"
     );
 

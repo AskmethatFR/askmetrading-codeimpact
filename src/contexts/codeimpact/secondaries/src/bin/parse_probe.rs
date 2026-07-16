@@ -1,10 +1,16 @@
 use std::io::Read;
 
+/// Named byte-unit constants (PR #70 review: no bare `1024` magic
+/// numbers) — every stack/memory budget below is expressed as a multiple
+/// of one of these instead of repeating the literal.
+const BYTES_PER_MIB: u64 = 1024 * 1024;
+const BYTES_PER_GIB: u64 = 1024 * BYTES_PER_MIB;
+
 /// The canary's own parse stack — deliberately smaller than the parent's
 /// re-parse budget (`PARENT_REPARSE_STACK_BYTES` in `syn_code_parser.rs`),
 /// so a successful probe (exit 0) *proves* the parent's larger budget will
 /// also succeed (stack dominance, D2, #63) rather than merely hoping so.
-const PROBE_STACK_BYTES: usize = 16 * 1024 * 1024;
+const PROBE_STACK_BYTES: usize = (16 * BYTES_PER_MIB) as usize;
 
 /// The only two exit codes the parent (`syn_code_parser::verdict_from`)
 /// treats as proof the parse thread terminated cleanly. Every other code —
@@ -28,7 +34,7 @@ const EXIT_NOT_PROVEN_SAFE: i32 = 101;
 /// primary defense on every OS.
 #[cfg(unix)]
 fn apply_memory_limit() {
-    const RLIMIT_AS_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    const RLIMIT_AS_BYTES: u64 = 2 * BYTES_PER_GIB;
     let limit = libc::rlimit {
         rlim_cur: RLIMIT_AS_BYTES as libc::rlim_t,
         rlim_max: RLIMIT_AS_BYTES as libc::rlim_t,

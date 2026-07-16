@@ -11,13 +11,16 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use syn::spanned::Spanned;
 
+/// Named byte-unit constant (PR #70 review: no bare `1024` magic number).
+const BYTES_PER_MIB: usize = 1024 * 1024;
+
 /// The parent's re-parse budget once the canary (`codeimpact-parse-probe`)
 /// has proven a source terminates cleanly (exit 0 or 2). Deliberately
 /// double the probe's own 16 MiB (`PROBE_STACK_BYTES` in
 /// `src/bin/parse_probe.rs`) — stack *dominance*, not equality (D2, #63):
 /// the same computation under a strictly larger budget cannot newly
 /// overflow, closing the class rather than narrowing it.
-const PARENT_REPARSE_STACK_BYTES: usize = 32 * 1024 * 1024;
+const PARENT_REPARSE_STACK_BYTES: usize = 32 * BYTES_PER_MIB;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
