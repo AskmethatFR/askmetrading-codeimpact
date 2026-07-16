@@ -146,14 +146,37 @@ where
 /// Runs the SAME parse-and-walk work `parse()` performs — `syn::parse_file`
 /// followed by function collection and expression-tree visiting — but
 /// discards the result. Used by the canary (`src/bin/parse_probe.rs`,
-/// Security finding retry 1, CWE-674): "child survived the canary's 16 MiB
-/// ⇒ parent survives its 32 MiB" only holds when the child exercises the
-/// SAME recursion the parent will actually run. A canary that only proved
-/// `syn::parse_file` succeeds said nothing about `collect_functions`'s
-/// mod-nesting walk or `FunctionVisitor`'s expression-tree recursion — a
-/// DIFFERENT recursion whose per-frame cost the bare parse never measured.
-/// Routing the canary through this exact function closes that gap by
-/// construction instead of assuming it.
+/// Security finding retry 1, CWE-674) so the canary exercises the SAME
+/// recursion the parent's re-parse will actually run, not just
+/// `syn::parse_file`'s first stage.
+///
+/// Honest status (retry 2, Dev-B): the empirical search this fix was
+/// based on (binary-searching for a depth where a bare `syn::parse_file`
+/// succeeds in 16 MiB but this full walk crashes in the same budget)
+/// found NO such gap for either recursive vector tested (nested `mod`,
+/// the `!!!!...x` unary chain) — `collect_functions`/`FunctionVisitor`
+/// run AFTER `syn::parse_file`'s own recursion has fully unwound, so the
+/// two do not compound, and reverting the canary to a bare
+/// `syn::parse_file` leaves the whole test suite green (no test here
+/// reddens on that reversion). This function is therefore an
+/// ARCHITECTURAL justification — the canary now runs like-for-like with
+/// the parent by construction, closing the *assumption* gap CWE-674
+/// flagged — not something a failing test proved necessary. See
+/// `parse_probe_full_pipeline_test.rs` for the same disclosure applied to
+/// its regression test.
+///
+/// # Safety (not `unsafe fn` — a process-boundary invariant, not a memory
+/// one)
+///
+/// This function recurses over the parsed source with NO stack bound and
+/// NO memory cap of its own — on pathological input it aborts (SIGABRT)
+/// WHATEVER process calls it. The entire #63 guarantee depends on it only
+/// ever being invoked inside a stack-bounded thread (`PROBE_STACK_BYTES`)
+/// in a process that has also applied `RLIMIT_AS` (unix) — i.e. only from
+/// `src/bin/parse_probe.rs`'s `main()`. Do NOT lift this call into an
+/// unguarded in-process path (e.g. "avoid the duplicate walk, call it
+/// directly from `parse()`") — that would silently reopen the crash this
+/// ticket closes.
 pub fn exercise_full_pipeline(source: &str) -> Result<(), String> {
     let syntax_tree = syn::parse_file(source).map_err(|e| format!("erreur de syntaxe: {}", e))?;
 
