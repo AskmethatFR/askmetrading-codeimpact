@@ -107,6 +107,12 @@ pub struct CodeMetrics {
     economic_impact: Option<EconomicImpact>,
     ecological_impact: Option<EcologicalImpact>,
     io_in_loops: Vec<IoInLoopWarning>,
+    /// Count of loop-nested calls whose receiver could not be classified at
+    /// all (#56 T2, `IoClassification::Unknown`) — an aggregate signal only
+    /// (ADR-0010/ADR-0014 §4): abstention is reported as a NUMBER, never a
+    /// per-line pseudo-warning. `0` is an honest, meaningful answer, not an
+    /// omitted signal.
+    unclassifiable_io_in_loops_count: usize,
 }
 
 impl CodeMetrics {
@@ -121,6 +127,7 @@ impl CodeMetrics {
             economic_impact: None,
             ecological_impact: None,
             io_in_loops: Vec::new(),
+            unclassifiable_io_in_loops_count: 0,
         }
     }
 
@@ -141,6 +148,7 @@ impl CodeMetrics {
             economic_impact: None,
             ecological_impact: None,
             io_in_loops: Vec::new(),
+            unclassifiable_io_in_loops_count: 0,
         }
     }
 
@@ -235,6 +243,15 @@ impl CodeMetrics {
 
     pub fn with_io_in_loops(mut self, io_in_loops: Vec<IoInLoopWarning>) -> Self {
         self.io_in_loops = io_in_loops;
+        self
+    }
+
+    pub fn unclassifiable_io_in_loops_count(&self) -> usize {
+        self.unclassifiable_io_in_loops_count
+    }
+
+    pub fn with_unclassifiable_io_in_loops_count(mut self, count: usize) -> Self {
+        self.unclassifiable_io_in_loops_count = count;
         self
     }
 

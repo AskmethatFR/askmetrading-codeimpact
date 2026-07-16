@@ -48,6 +48,16 @@ impl ConsoleReportWriter {
         let cycle_count = metrics.functions_with_cycles().len();
         writeln!(writer, "Fonctions avec cycle: {}", cycle_count).unwrap();
         writeln!(writer, "Niveau: {}", metrics.complexity_level()).unwrap();
+        // #56 T2 — abstention (ADR-0010/ADR-0014 §4): one synthesis line,
+        // always printed (a measured `0` is legitimate and honest, never
+        // omitted) — never per-line detail, which would turn an
+        // abstention into a pseudo-warning.
+        writeln!(
+            writer,
+            "Appels en boucle non classifiables: {}",
+            metrics.unclassifiable_io_in_loops_count()
+        )
+        .unwrap();
 
         let details = metrics.function_details();
         if !details.is_empty() {
@@ -321,6 +331,14 @@ impl ConsoleReportWriter {
             writer,
             "Fichiers en cycle: {}",
             aggregated.files_with_cycles.len()
+        )
+        .unwrap();
+        // #56 T2 — project-total synthesis line, same convention as the
+        // per-file one above: always printed, aggregate only.
+        writeln!(
+            writer,
+            "Appels en boucle non classifiables (total): {}",
+            aggregated.total_unclassifiable_io_in_loops
         )
         .unwrap();
 

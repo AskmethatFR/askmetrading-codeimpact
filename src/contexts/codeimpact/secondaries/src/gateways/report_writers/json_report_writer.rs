@@ -56,6 +56,12 @@ struct MetricsDto {
     /// ("no file failed"), unlike an omitted array which would leave the
     /// count implicit.
     unmeasurable_files_count: usize,
+    /// Loop-nested calls whose receiver could not be classified at all
+    /// (#56 T2, `IoClassification::Unknown`) — an aggregate signal only
+    /// (ADR-0010/ADR-0014 §4), never skipped: `0` is an honest, meaningful
+    /// answer. There is deliberately no per-call array here — abstention
+    /// must not become a pseudo-warning.
+    unclassifiable_io_in_loops_count: usize,
 }
 
 #[derive(serde::Serialize)]
@@ -281,6 +287,7 @@ pub fn serialize_metrics(
             // measure — that is a project-level concept (D3, #50).
             unmeasurable_files: vec![],
             unmeasurable_files_count: 0,
+            unclassifiable_io_in_loops_count: metrics.unclassifiable_io_in_loops_count(),
         },
     };
 
@@ -336,6 +343,7 @@ pub fn serialize_project_metrics(
             io_in_loops: vec![],
             unmeasurable_files_count: unmeasurable_files.len(),
             unmeasurable_files,
+            unclassifiable_io_in_loops_count: aggregated.total_unclassifiable_io_in_loops,
         },
     };
 
