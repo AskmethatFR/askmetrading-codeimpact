@@ -369,6 +369,21 @@ fn reqwest_call_in_loop_tracked() {
 //     rule 1's guard: receiver resolves to a type NAMED like a known I/O
 //     type ("Client"), but THIS FILE declares that struct itself -> NotIo,
 //     never Io by name collision alone
+//
+// QA review (retry 1) — mutation-proven gap: AC2's explicit exclusion list
+// ("deliberately WITHOUT get/post/fetch/open/create") had zero test
+// coverage. QA added all five to SUSPICIOUS_METHOD_NAMES and the full suite
+// stayed green. Closed by:
+// 16. method_call_on_unresolved_receiver_with_excluded_name_stays_not_io —
+//     one parameterized cycle (a Rust `for` loop over the five names inside
+//     a single #[test], no rstest dependency added — matches house style
+//     of plain #[test] fns) pinning ALL FIVE excluded names at once; must
+//     go red if any one of them is re-added to SUSPICIOUS_METHOD_NAMES.
+// Non-blocking (QA-recommended, cheap): the nested-mod recursion arm of
+// collect_locally_declared_type_names, unexercised by #15 (a top-level decl)
+// 17. method_call_on_locally_declared_type_inside_inline_mod_is_not_io —
+//     the same collision guard as #15, but the colliding struct is declared
+//     INSIDE an inline `mod`, exercising the `Item::Mod` recursion arm
 
 #[test]
 fn method_call_on_file_param_in_loop_is_detected_as_io() {
@@ -555,6 +570,50 @@ fn method_call_on_locally_declared_type_matching_known_io_name_is_not_io() {
         IoClassification::NotIo,
         "a locally-declared `Client` must never be classified Io by name collision \
          with reqwest's Client"
+    );
+}
+
+#[test]
+fn method_call_on_unresolved_receiver_with_excluded_name_stays_not_io() {
+    // AC2 (human-approved Q3): "deliberately WITHOUT get/post/fetch/open/
+    // create (name-collision noise)". A receiver that never resolves must
+    // stay NotIo for every one of these five names — none of them is
+    // suspicious enough to warrant Unknown.
+    let parser = parser();
+    for excluded in ["get", "post", "fetch", "open", "create"] {
+        let source = format!(
+            "fn test(state: State) {{\n    for _ in 0..10 {{\n        state.file.{excluded}();\n    }}\n}}\n"
+        );
+        let functions = parser.parse(&source).unwrap();
+        assert_eq!(
+            functions[0].calls_in_loops.len(),
+            1,
+            "excluded name \"{excluded}\" should still be tracked in calls_in_loops"
+        );
+        assert_eq!(
+            functions[0].calls_in_loops[0].io,
+            IoClassification::NotIo,
+            "excluded name \"{excluded}\" must stay NotIo on an unresolved receiver \
+             — it is not on the suspicious-name list"
+        );
+    }
+}
+
+#[test]
+fn method_call_on_locally_declared_type_inside_inline_mod_is_not_io() {
+    let parser = parser();
+    // Same collision guard as method_call_on_locally_declared_type_matching_
+    // known_io_name_is_not_io, but the colliding struct is declared INSIDE
+    // an inline `mod` — exercises collect_locally_declared_type_names's
+    // Item::Mod recursion arm, which the top-level-only test above cannot.
+    let source = "mod inner {\n    struct Client;\n    fn test(mut client: Client) {\n        for _ in 0..10 {\n            client.connect();\n        }\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert_eq!(
+        functions[0].calls_in_loops[0].io,
+        IoClassification::NotIo,
+        "a `Client` declared inside an inline mod must still guard against the \
+         known-I/O-type name collision — the recursion into Item::Mod must collect it"
     );
 }
 
