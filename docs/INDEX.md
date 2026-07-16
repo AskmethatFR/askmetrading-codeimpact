@@ -29,7 +29,7 @@
 | ADR-0014 | technical | Le parseur voit enfin les méthodes — nom qualifié, résolution intra-type, trois états de mesure | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0013]], [[ADR-0007]], [[ADR-0008]], [[glossary]], [[json-report-schema]], [[console-report-enriched]], [[html-report]], [[ADR-0016]] | docs/ADR-0014-parser-impl-methods-qualified-names.md |
 | ADR-0015 | technical | Isolation du parsing par sous-processus canari — contenir un débordement de pile sans le prédire | Accepted | 2026-07-16 | [[architecture-overview]], [[ADR-0006]], [[ADR-0010]] | docs/ADR-0015-subprocess-canary-parse-isolation.md |
 | ADR-0016 | technical | Classification des I/O en boucle — le type affirme, le nom s'abstient, trois états, calibration mesurée | Applied | 2026-07-16 | [[architecture-overview]], [[ADR-0004]], [[ADR-0010]], [[ADR-0013]], [[ADR-0014]], [[ADR-0015]], [[glossary]] | docs/ADR-0016-io-in-loops-type-asserts-name-abstains.md |
-| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]] | docs/glossary.md |
+| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-16 | [[architecture-overview]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]] | docs/glossary.md |
 
 ## Graph Health
 
