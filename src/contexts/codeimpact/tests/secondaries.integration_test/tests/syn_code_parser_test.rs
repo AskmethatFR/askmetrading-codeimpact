@@ -305,6 +305,112 @@ fn reqwest_call_in_loop_tracked() {
     assert_eq!(functions[0].calls_in_loops[0].name, "reqwest::get");
 }
 
+// #56 T1 — method-call I/O detection via receiver-type resolution. Defect:
+// `is_io_call` tested `name.starts_with(prefix)` against IO_PREFIXES, but a
+// `Expr::MethodCall`'s recorded name is the BARE method identifier
+// (`method_call.method.to_string()`) — structurally it can never start with
+// a qualified prefix, so `is_io` was `false` for every method call, always.
+// C1 (tech spec): the TYPE asserts, the NAME abstains — a method call is
+// `is_io: true` only if the receiver's declared type is resolved AND is a
+// known I/O type. Resolution (C3, intra-file + syntactic only):
+// (1) signature parameters, (2) `let x: T = ..;` annotations,
+// (3) `let x = T::ctor(..)` unwrapped through a bounded `?`/`.unwrap()`/
+// `.expect()`/`.await` chain, (4) shadowing by overwrite (documented
+// limitation, not scope-restored).
+//
+// Test List:
+// 1. method_call_on_file_param_in_loop_is_detected_as_io — (1) File param
+// 2. method_call_on_tcpstream_param_in_loop_is_detected_as_io — (1) TcpStream
+//    param, write_all (2nd acceptance criterion form)
+// 3. method_call_on_let_annotated_io_receiver_is_detected — (2)
+// 4. method_call_on_constructor_bound_receiver_is_detected — (3), unwrap()
+// 5. method_call_on_qualified_constructor_receiver_is_detected — (3),
+//    qualified path (std::net::TcpStream::connect), expect()
+// 6. method_call_on_unresolved_receiver_stays_non_io — no binding at all
+// 7. method_call_on_non_io_type_receiver_stays_non_io — resolved, non-I/O
+// 8. shadowed_receiver_rebound_to_non_io_type_stops_being_io — (4)
+
+#[test]
+fn method_call_on_file_param_in_loop_is_detected_as_io() {
+    let parser = parser();
+    let source =
+        "fn test(mut file: File) {\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    let call = &functions[0].calls_in_loops[0];
+    assert_eq!(call.name, "read_to_string");
+    assert!(call.is_io);
+}
+
+#[test]
+fn method_call_on_tcpstream_param_in_loop_is_detected_as_io() {
+    let parser = parser();
+    let source =
+        "fn test(mut stream: TcpStream) {\n    for _ in 0..10 {\n        stream.write_all(&buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    let call = &functions[0].calls_in_loops[0];
+    assert_eq!(call.name, "write_all");
+    assert!(call.is_io);
+}
+
+#[test]
+fn method_call_on_let_annotated_io_receiver_is_detected() {
+    let parser = parser();
+    let source = "fn test() {\n    let file: File = open_it();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(functions[0].calls_in_loops[0].is_io);
+}
+
+#[test]
+fn method_call_on_constructor_bound_receiver_is_detected() {
+    let parser = parser();
+    let source = "fn test(path: &str) {\n    let mut file = File::open(path).unwrap();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(functions[0].calls_in_loops[0].is_io);
+}
+
+#[test]
+fn method_call_on_qualified_constructor_receiver_is_detected() {
+    let parser = parser();
+    let source = "fn test(addr: &str) {\n    let mut stream = std::net::TcpStream::connect(addr).expect(\"connect\");\n    for _ in 0..10 {\n        stream.write_all(&buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(functions[0].calls_in_loops[0].is_io);
+}
+
+#[test]
+fn method_call_on_unresolved_receiver_stays_non_io() {
+    let parser = parser();
+    let source = "fn test(file: SomeUnknownHandle) {\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(!functions[0].calls_in_loops[0].is_io);
+}
+
+#[test]
+fn method_call_on_non_io_type_receiver_stays_non_io() {
+    let parser = parser();
+    let source = "fn test() {\n    let name: String = compute();\n    for _ in 0..10 {\n        name.push_str(\"x\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(!functions[0].calls_in_loops[0].is_io);
+}
+
+#[test]
+fn shadowed_receiver_rebound_to_non_io_type_stops_being_io() {
+    let parser = parser();
+    let source = "fn test(mut file: File) {\n    let file: String = compute();\n    for _ in 0..10 {\n        file.read_to_string(&mut buf);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(functions[0].calls_in_loops.len(), 1);
+    assert!(
+        !functions[0].calls_in_loops[0].is_io,
+        "shadowing `file` with a non-I/O type must overwrite the earlier I/O binding"
+    );
+}
+
 // #47 retry 2 — calls_in_loops must record EVERY call nested in a loop as a
 // fact (is_io classifies, it does not filter), not just I/O calls. Two gaps
 // in the prior behavior:
