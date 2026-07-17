@@ -589,6 +589,116 @@ fn e2e_analyze_invalid_format_errors() {
     );
 }
 
+// US8 (QA review sweep, issue #8) — CLI-relay error branches: an invalid
+// --max-cpu/--max-co2 value or an unreadable --config path must be relayed
+// as a real process failure (exit 1, "erreur: ..." on stderr), not silently
+// swallowed or accepted. Same shape as e2e_analyze_invalid_format_errors/
+// e2e_analyze_nonexistent_file_exits_1 above — this is characterization
+// coverage of already-passing production code (AlertThresholds::new's
+// validation, already unit-pinned in alert_thresholds_test.rs; the config
+// reader's not-found path, already unit-pinned in
+// file_system_config_reader_test.rs), verified once more at the real CLI
+// boundary.
+//
+// Test List:
+// 1. a negative --max-cpu is rejected (note: `--max-cpu=-5`, not
+//    `--max-cpu -5` — the latter is swallowed by clap's own arg parser as
+//    an unrecognized flag before ever reaching AlertThresholds::new,
+//    exiting 2 instead of exercising our validation at all)
+// 2. --max-cpu inf is rejected (non-finite)
+// 3. --max-cpu nan is rejected (non-finite)
+// 4. a --config path that does not exist is rejected, not silently ignored
+
+#[test]
+fn e2e_analyze_negative_max_cpu_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu=-5"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a negative threshold must be rejected by our own validation (exit 1, not clap's \
+         reserved exit 2). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr,
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_infinite_max_cpu_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "inf"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr);
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_nan_max_cpu_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "nan"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr);
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_nonexistent_config_path_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            fixture.to_str().unwrap(),
+            "--config",
+            "/tmp/nonexistent_codeimpact_config_xyz_12345.json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unreadable --config path must not be silently ignored. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr,
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
 // US7 T1 — HTML report walking skeleton.
 // Test List:
 // 1. --format html -o <path> on a project dir writes a self-contained HTML file showing the project view (RED first — behavioral, pins the user-observable outcome)
