@@ -1,3 +1,4 @@
+pub mod alert_thresholds;
 mod analysis_rule;
 mod analysis_target;
 pub mod call_graph;
@@ -23,6 +24,9 @@ mod run_stress_test;
 pub mod source_guard;
 pub mod stress_test_run;
 
+pub use alert_thresholds::{
+    AlertThresholds, BreachedMetric, ThresholdBreach, ThresholdError, ThresholdReport,
+};
 pub use analysis_rule::AnalysisRule;
 pub use analysis_target::{AnalysisTarget, TargetType};
 pub use call_graph::CallGraph;
