@@ -1,3 +1,4 @@
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReactiveAnalyzer;
@@ -146,11 +147,77 @@ fn run_stress_test_invokes_runner_and_writer() {
     let runner = TestRunnerStub::new(Ok(make_run()));
     let writer = SharedReportWriterStub::new();
     let use_case = RunStressTest::new(Box::new(runner), Box::new(writer.clone()));
-    use_case.handle(None).expect("stress test should succeed");
+    use_case
+        .handle(None, &AlertThresholds::none())
+        .expect("stress test should succeed");
     let captured = writer.last_stress_run.lock().unwrap();
     assert!(captured.is_some());
     let run = captured.as_ref().unwrap();
     assert_eq!(run.duration_ms(), 1500);
+}
+
+// US8 slice 5 (T5) — the stress-test threshold gate reuses the same
+// AlertThresholds::evaluate gate as RunAnalysis, deriving cpu/co2 from the
+// existing Measurement<EconomicImpact>.
+//
+// Test List:
+// 1. a breaching cpu threshold -> the returned GatedOutput has_breach
+// 2. an Unmeasurable run (ADR-0010) -> never a breach, however strict
+// 3. no thresholds configured -> no breach (AC6 regression)
+
+#[test]
+fn run_stress_test_with_breached_cpu_threshold_returns_a_breaching_report() {
+    let runner = TestRunnerStub::new(Ok(make_run()));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let gated = use_case
+        .handle(None, &thresholds)
+        .expect("stress test should succeed");
+
+    assert!(
+        gated.thresholds().has_breach(),
+        "a zero cpu threshold must breach any measured run's positive cost"
+    );
+}
+
+#[test]
+fn run_stress_test_unmeasurable_run_never_breaches_despite_strict_threshold() {
+    let unmeasurable_run = StressTestRun::new(
+        10,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+    let runner = TestRunnerStub::new(Ok(unmeasurable_run));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+    let thresholds = AlertThresholds::new(Some(0.0), Some(0.0)).unwrap();
+
+    let gated = use_case
+        .handle(None, &thresholds)
+        .expect("stress test should succeed even when unmeasurable");
+
+    assert!(
+        !gated.thresholds().has_breach(),
+        "an unmeasurable run must never count as a breach, however strict the threshold"
+    );
+}
+
+#[test]
+fn run_stress_test_without_thresholds_shows_no_breach() {
+    let runner = TestRunnerStub::new(Ok(make_run()));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+
+    let gated = use_case
+        .handle(None, &AlertThresholds::none())
+        .expect("stress test should succeed");
+
+    assert!(!gated.thresholds().has_breach());
 }
 
 #[test]
@@ -159,7 +226,7 @@ fn run_stress_test_with_filter() {
     let writer = SharedReportWriterStub::new();
     let use_case = RunStressTest::new(Box::new(runner), Box::new(writer.clone()));
     use_case
-        .handle(Some("test_foo"))
+        .handle(Some("test_foo"), &AlertThresholds::none())
         .expect("stress test should succeed");
     let captured = writer.last_stress_run.lock().unwrap();
     let run = captured.as_ref().unwrap();
@@ -299,7 +366,7 @@ fn run_stress_test_propagates_runner_error() {
     )));
     let writer = SharedReportWriterStub::new();
     let use_case = RunStressTest::new(Box::new(runner), Box::new(writer.clone()));
-    let result = use_case.handle(None);
+    let result = use_case.handle(None, &AlertThresholds::none());
     assert!(result.is_err());
     match result.unwrap_err() {
         AnalysisError::TestRunnerError(msg) => assert_eq!(msg, "cargo test failed"),

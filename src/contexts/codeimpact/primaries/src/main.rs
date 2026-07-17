@@ -53,6 +53,18 @@ enum Commands {
     StressTest {
         #[arg(long)]
         filter: Option<String>,
+        /// Alert threshold (US8 T5): max acceptable CPU cost, μ$.
+        #[arg(long = "max-cpu")]
+        max_cpu: Option<f64>,
+        /// Alert threshold (US8 T5): max acceptable CO2, grams.
+        #[arg(long = "max-co2")]
+        max_co2: Option<f64>,
+        /// Exit 3 instead of 0 when a threshold is breached (US8 AD-4).
+        #[arg(long)]
+        strict: bool,
+        /// Explicit path to a .codeimpact.json config file (US8 T4/T5).
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -233,16 +245,41 @@ fn main() {
                 }
             }
         }
-        Commands::StressTest { filter } => {
+        Commands::StressTest {
+            filter,
+            max_cpu,
+            max_co2,
+            strict,
+            config,
+        } => {
             let project_dir = std::env::current_dir().unwrap_or_else(|_| {
                 eprintln!("erreur: impossible de déterminer le répertoire courant");
                 std::process::exit(1);
             });
+
+            let cli_thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("erreur: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let config_reader = FileSystemConfigReader::new();
+            let file_thresholds =
+                match config_reader.read_thresholds(config.as_deref(), &[&project_dir]) {
+                    Ok(found) => found.unwrap_or_else(AlertThresholds::none),
+                    Err(e) => {
+                        eprintln!("erreur: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+            let thresholds = AlertThresholds::from_sources(file_thresholds, cli_thresholds);
+
             let runner = CargoTestRunner::new(project_dir);
             let writer = ConsoleReportWriter::new();
             let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
-            match use_case.handle(filter.as_deref()) {
-                Ok(()) => std::process::exit(0),
+            match use_case.handle(filter.as_deref(), &thresholds) {
+                Ok(gated) => std::process::exit(gated_exit_code(*strict, gated.thresholds())),
                 Err(e) => {
                     eprintln!("erreur: {}", e);
                     std::process::exit(1);

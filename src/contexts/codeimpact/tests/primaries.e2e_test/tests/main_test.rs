@@ -391,6 +391,30 @@ fn e2e_stress_test_help_shows_filter_option() {
     );
 }
 
+// US8 T5 — stress-test gains the same threshold flags as analyze. Checked
+// via --help (cheap) rather than a real stress-test run (running the
+// project's actual `cargo test` subprocess is expensive and not otherwise
+// exercised at the e2e level in this suite).
+#[test]
+fn e2e_stress_test_help_shows_threshold_flags() {
+    let binary = binary_path();
+    let output = Command::new(binary)
+        .args(["stress-test", "--help"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    for flag in ["--max-cpu", "--max-co2", "--strict", "--config"] {
+        assert!(
+            stdout.contains(flag),
+            "stress-test help should show {}: {}",
+            flag,
+            stdout
+        );
+    }
+}
+
 #[test]
 fn e2e_analyze_sample_contains_io_in_loop() {
     let binary = binary_path();
