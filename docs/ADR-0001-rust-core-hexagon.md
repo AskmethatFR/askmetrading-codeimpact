@@ -1,7 +1,9 @@
 # ADR-0001: Core Rust, Hexagon zero-dependency
 
 **Status:** Accepted  
-**Date:** 2026-07-08
+**Date:** 2026-07-08  
+**Relations:**  
+  related-to: ["architecture-overview", "ADR-0017"]  
 
 ## Context
 
