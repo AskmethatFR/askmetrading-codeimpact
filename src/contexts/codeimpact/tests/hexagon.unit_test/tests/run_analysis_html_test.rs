@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ParsedFunction;
@@ -38,15 +39,18 @@ fn handle_project_html_returns_writer_output_for_valid_project() {
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
-    let result =
-        use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result = use_case.handle_project_html(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
+    );
 
     assert!(
         result.is_ok(),
         "handle_project_html should succeed, got {:?}",
         result
     );
-    let html = result.unwrap();
+    let html = result.unwrap().into_payload();
     assert!(!html.is_empty(), "html string should not be empty");
     assert_eq!(
         *writer.last_html.lock().unwrap(),
@@ -68,8 +72,11 @@ fn handle_project_html_empty_project_returns_error() {
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
 
-    let result =
-        use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result = use_case.handle_project_html(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
+    );
 
     match result {
         Err(codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed(_)) => {}
@@ -106,8 +113,11 @@ fn handle_project_html_records_unreadable_file_as_unmeasurable_and_excludes_it_f
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
-    let result =
-        use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result = use_case.handle_project_html(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
+    );
     assert!(result.is_ok(), "got {:?}", result);
 
     let graph = writer.last_graph.lock().unwrap();
@@ -156,8 +166,11 @@ fn handle_project_html_records_unparseable_file_as_unmeasurable_and_excludes_it_
     );
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
-    let result =
-        use_case.handle_project_html(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result = use_case.handle_project_html(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
+    );
     assert!(result.is_ok(), "got {:?}", result);
 
     let graph = writer.last_graph.lock().unwrap();

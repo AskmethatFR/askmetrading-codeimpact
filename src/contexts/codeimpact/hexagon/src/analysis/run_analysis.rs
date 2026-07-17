@@ -1,15 +1,18 @@
 use std::path::{Path, PathBuf};
 
+use super::alert_thresholds::AlertThresholds;
 use super::analysis_rule::AnalysisRule;
 use super::analysis_target::{AnalysisTarget, TargetType};
 use super::code_location::CodeLocation;
 use super::code_metrics::CodeMetrics;
 use super::code_parser::CodeParser;
 use super::code_reader::CodeReader;
+use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
 use super::file_consumption_graph::{
     resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile,
 };
+use super::gated_output::GatedOutput;
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
 use super::proactive_analyzer;
@@ -34,26 +37,35 @@ impl RunAnalysis {
         }
     }
 
+    /// `thresholds` (US8): evaluated against the project's aggregate impact
+    /// on the project path, and against the file's own impact on a
+    /// single-file target (T3 extended the gate to `CodeMetrics`).
+    /// `AlertThresholds::none()` reproduces the pre-US8 behavior exactly
+    /// (AC6): `evaluate` against no configured threshold never breaches.
     pub fn handle(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<(), AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<()>, AnalysisError> {
         if *target.target_type() == TargetType::Project {
-            return self.handle_project(target, rules);
+            return self.handle_project(target, rules, thresholds);
         }
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
+        let metrics = Self::gate_metrics(metrics, thresholds);
+        let report = metrics.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_console(&metrics)?;
-        Ok(())
+        Ok(GatedOutput::new((), report))
     }
 
     fn handle_project(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<(), AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<()>, AnalysisError> {
         let files = self.code_reader.list_rust_files(target.path())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
@@ -125,7 +137,46 @@ impl RunAnalysis {
 
         let graph =
             FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
-        self.reporter.write_project_report(&graph)
+        let graph = Self::gate_project(graph, thresholds);
+        let report = graph.threshold_report().cloned().unwrap_or_default();
+        self.reporter.write_project_report(&graph)?;
+        Ok(GatedOutput::new((), report))
+    }
+
+    /// Evaluates the project's aggregate energy (kWh)/CO2 impact against
+    /// `thresholds` and attaches the outcome to the graph (US8 AD-1/AD-3).
+    /// Both metrics are derived from the SAME `Option<EcologicalImpact>`
+    /// aggregate (change request on issue #8: energy replaces CPU cost as
+    /// the first gated metric — `energy_joules() / KWH_TO_JOULES` recovers
+    /// the kWh value `EcologicalImpactEstimator::estimate` originally
+    /// derived it from). Pulled out of `handle_project` because slice 3
+    /// (JSON/HTML) reuses the identical gate against
+    /// `build_project_graph`'s output.
+    fn gate_project(
+        graph: FileConsumptionGraph,
+        thresholds: &AlertThresholds,
+    ) -> FileConsumptionGraph {
+        let ecological = graph.aggregated_metrics().total_ecological_impact;
+        let energy_kwh = ecological
+            .as_ref()
+            .map(|e| e.energy_joules() / EcologicalImpactEstimator::KWH_TO_JOULES);
+        let co2 = ecological.as_ref().map(|e| e.co2_grams());
+        let report = thresholds.evaluate(energy_kwh, co2);
+        graph.with_threshold_report(report)
+    }
+
+    /// Evaluates a single file's own energy (kWh)/CO2 impact against
+    /// `thresholds` (US8 T3) — the single-file twin of `gate_project`,
+    /// same shape, same gate (`AlertThresholds::evaluate`), same single
+    /// `Option<EcologicalImpact>` source, different data-carrier
+    /// (`CodeMetrics` rather than `FileConsumptionGraph`).
+    fn gate_metrics(metrics: CodeMetrics, thresholds: &AlertThresholds) -> CodeMetrics {
+        let ecological = metrics.ecological_impact();
+        let energy_kwh =
+            ecological.map(|e| e.energy_joules() / EcologicalImpactEstimator::KWH_TO_JOULES);
+        let co2 = ecological.map(|e| e.co2_grams());
+        let report = thresholds.evaluate(energy_kwh, co2);
+        metrics.with_threshold_report(report)
     }
 
     fn set_file_paths(metrics: CodeMetrics, path: &Path) -> CodeMetrics {
@@ -165,37 +216,51 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<String, AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<String>, AnalysisError> {
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
+        let metrics = Self::gate_metrics(metrics, thresholds);
+        let report = metrics.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let target_type = if *target.target_type() == TargetType::Project {
             "project"
         } else {
             "file"
         };
-        self.reporter.write_json(&metrics, &target_str, target_type)
+        let json = self
+            .reporter
+            .write_json(&metrics, &target_str, target_type)?;
+        Ok(GatedOutput::new(json, report))
     }
 
     pub fn handle_project_json(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<String, AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<String>, AnalysisError> {
         let graph = self.build_project_graph(target, rules)?;
+        let graph = Self::gate_project(graph, thresholds);
+        let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
-        self.reporter.write_project_json(&graph, &target_str)
+        let json = self.reporter.write_project_json(&graph, &target_str)?;
+        Ok(GatedOutput::new(json, report))
     }
 
     pub fn handle_project_html(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<String, AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<String>, AnalysisError> {
         let graph = self.build_project_graph(target, rules)?;
+        let graph = Self::gate_project(graph, thresholds);
+        let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
-        self.reporter.write_html(&graph, &target_str)
+        let html = self.reporter.write_html(&graph, &target_str)?;
+        Ok(GatedOutput::new(html, report))
     }
 
     /// Walks every Rust file under `target`, analyzes it, and resolves

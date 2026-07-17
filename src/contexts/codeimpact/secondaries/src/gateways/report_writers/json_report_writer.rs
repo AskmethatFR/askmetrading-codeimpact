@@ -10,8 +10,12 @@ use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
+use codeimpact_hexagon::analysis::ThresholdBreach;
+use codeimpact_hexagon::analysis::ThresholdReport;
 use codeimpact_hexagon::analysis::UnmeasurableFile;
 use codeimpact_hexagon::analysis::WarningSeverity;
+
+use super::humanize::render_threshold_warning;
 
 // ── Serde DTOs (ADR-4.2: never on hexagon types) ──
 
@@ -62,6 +66,28 @@ struct MetricsDto {
     /// answer. There is deliberately no per-call array here — abstention
     /// must not become a pseudo-warning.
     unclassifiable_io_in_loops_count: usize,
+    /// Threshold-breach outcome (US8, AD-3) — never skipped, same "0/false
+    /// is honest" convention as `unclassifiable_io_in_loops_count`: an
+    /// empty `breaches` array with `has_breach: false` is a meaningful
+    /// answer ("evaluated, nothing exceeded"), not an omission.
+    thresholds: ThresholdsDto,
+}
+
+#[derive(serde::Serialize)]
+struct ThresholdsDto {
+    has_breach: bool,
+    breaches: Vec<ThresholdBreachDto>,
+    /// Human-readable "which threshold(s), by how much" — the ONE shared
+    /// renderer (AD-3), empty when there is no breach.
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+struct ThresholdBreachDto {
+    metric: String,
+    limit: f64,
+    actual: f64,
+    excess: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -182,6 +208,29 @@ impl ReportWriter for JsonReportWriter {
     }
 }
 
+/// Builds the thresholds DTO from a (possibly absent) `ThresholdReport` —
+/// shared by the single-file and project serializers. `None` (no threshold
+/// evaluation ever ran) reads identically to an evaluated-but-empty report:
+/// both are honestly "nothing breached".
+fn threshold_dto(report: Option<&ThresholdReport>) -> ThresholdsDto {
+    let empty = ThresholdReport::default();
+    let report = report.unwrap_or(&empty);
+    ThresholdsDto {
+        has_breach: report.has_breach(),
+        breaches: report
+            .breaches()
+            .iter()
+            .map(|b: &ThresholdBreach| ThresholdBreachDto {
+                metric: b.metric().label().to_string(),
+                limit: b.limit(),
+                actual: b.actual(),
+                excess: b.excess(),
+            })
+            .collect(),
+        message: render_threshold_warning(report),
+    }
+}
+
 // ── Shared serialization function (used by both JsonReportWriter and ConsoleReportWriter) ──
 
 pub fn serialize_metrics(
@@ -288,6 +337,7 @@ pub fn serialize_metrics(
             unmeasurable_files: vec![],
             unmeasurable_files_count: 0,
             unclassifiable_io_in_loops_count: metrics.unclassifiable_io_in_loops_count(),
+            thresholds: threshold_dto(metrics.threshold_report()),
         },
     };
 
@@ -344,6 +394,7 @@ pub fn serialize_project_metrics(
             unmeasurable_files_count: unmeasurable_files.len(),
             unmeasurable_files,
             unclassifiable_io_in_loops_count: aggregated.total_unclassifiable_io_in_loops,
+            thresholds: threshold_dto(graph.threshold_report()),
         },
     };
 

@@ -1,3 +1,4 @@
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ComplexityWarning;
@@ -411,6 +412,115 @@ fn write_project_report_no_unmeasurable_files_does_not_show_section() {
     assert!(
         !output.contains("NON MESURÉS"),
         "should not show the NON MESURÉS section when there are no unmeasurable files, got: {}",
+        output
+    );
+}
+
+// US8 slice 1 — console surface: a breach must print a human-readable
+// warning (AC3), via the ONE shared renderer (AD-3). AC6: no threshold
+// evaluated at all (graph.threshold_report() == None) leaves the report
+// byte-for-byte unchanged from before US8 — the exact prior behavior.
+//
+// Test List:
+// 1. no threshold_report attached at all -> no warning section (AC6)
+// 2. threshold_report attached but no breach -> still no warning section
+// 3. threshold_report with a breach -> warning section naming the metric,
+//    limit, actual value, and excess (AD-3's "by how much")
+
+// #8 (found while writing the e2e single-file test) — write_console_to (the
+// single-file surface) never got the threshold banner, only
+// write_project_report_to did. Same shared-renderer wiring, single-file
+// twin.
+
+#[test]
+fn write_console_breaching_threshold_report_shows_warning_with_the_numbers() {
+    let writer = ConsoleReportWriter::new();
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.000015), None);
+    let metrics = CodeMetrics::new(5).with_threshold_report(report);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("SEUIL") && output.contains("ÉNERGIE"),
+        "a breach must print a warning section, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_console_without_a_threshold_report_shows_no_warning() {
+    let writer = ConsoleReportWriter::new();
+    let metrics = CodeMetrics::new(5);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains("SEUIL"),
+        "no threshold was ever evaluated, must not print a warning: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_without_a_threshold_report_shows_no_warning() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains("SEUIL"),
+        "no threshold was ever evaluated, must not print a warning: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_non_breaching_threshold_report_shows_no_warning() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
+    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
+    let report = thresholds.evaluate(Some(0.0000065), None);
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_threshold_report(report);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains("SEUIL"),
+        "threshold was evaluated but not breached, must not print a warning: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_breaching_threshold_report_shows_warning_with_the_numbers() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.000015), None);
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_threshold_report(report);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("SEUIL"),
+        "a breach must print a warning section, got: {}",
+        output
+    );
+    assert!(
+        output.contains("ÉNERGIE"),
+        "the warning must name the breached metric, got: {}",
         output
     );
 }

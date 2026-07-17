@@ -1,4 +1,6 @@
+use codeimpact_hexagon::analysis::BreachedMetric;
 use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
+use codeimpact_hexagon::analysis::ThresholdReport;
 
 /// Formats a micro-dollar amount as a display string (US7 T2 slice R).
 ///
@@ -37,6 +39,54 @@ pub fn format_energy(joules: f64) -> String {
         format!("{:.1} kJ ({:.4} kWh)", joules / 1000.0, kwh)
     } else {
         format!("{:.1} J ({:.6} kWh)", joules, kwh)
+    }
+}
+
+/// Formats a kWh amount as a display string, for the energy threshold
+/// (US8, change request on issue #8: energy replaces CPU cost as the
+/// gate's first metric). Realistic values are tiny — a single trivial file
+/// measures on the order of 6.5e-6 kWh — so the low tier keeps 8 decimals;
+/// a project-scale aggregate can climb into the 1e-3+ range, where 4
+/// decimals stay readable. Same tiered-precision shape as `format_dollars`.
+pub fn format_kwh(kwh: f64) -> String {
+    if kwh < 0.001 {
+        format!("{:.8} kWh", kwh)
+    } else {
+        format!("{:.4} kWh", kwh)
+    }
+}
+
+/// Renders a human-readable threshold-breach warning (US8, AD-3): the ONE
+/// shared source of the "which threshold(s), by how much" phrasing —
+/// console, JSON's embedded message, HTML's banner and the CLI's `--strict`
+/// exit message (main.rs) all call this instead of re-deriving their own
+/// text. Returns an empty string when there is nothing to report — callers
+/// are expected to only print/embed a non-empty result.
+pub fn render_threshold_warning(report: &ThresholdReport) -> String {
+    if !report.has_breach() {
+        return String::new();
+    }
+    let mut lines = vec!["=== Alertes de seuils ===".to_string()];
+    for breach in report.breaches() {
+        lines.push(format!(
+            "[SEUIL DÉPASSÉ] {} — limite: {}, mesuré: {}, dépassement: {}",
+            breach.metric().label(),
+            format_metric_value(breach.metric(), breach.limit()),
+            format_metric_value(breach.metric(), breach.actual()),
+            format_metric_value(breach.metric(), breach.excess()),
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Formats one threshold value (limit/actual/excess) per its metric's own
+/// unit — kWh for energy (reusing `format_kwh`), grams for CO2. Shared by
+/// `render_threshold_warning` and the HTML view-model, which needs the
+/// same per-value formatting for its structured banner (AD-3).
+pub fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
+    match metric {
+        BreachedMetric::Energy => format_kwh(value),
+        BreachedMetric::Co2 => format!("{:.1} g", value),
     }
 }
 
@@ -121,5 +171,28 @@ mod tests {
     fn format_energy_above_one_kj_uses_kilojoules() {
         let kwh = 12_300.0 / EcologicalImpactEstimator::KWH_TO_JOULES;
         assert_eq!(format_energy(12_300.0), format!("12.3 kJ ({:.4} kWh)", kwh));
+    }
+
+    // Test List (format_kwh) — US8 change request (issue #8): energy
+    // replaces CPU cost as the gate's first metric.
+    // 1. a realistic tiny value (a single file's real measured energy,
+    //    6.5e-6 kWh from sample.rs) -> 8 decimals
+    // 2. exactly at the 0.001 kWh boundary -> NOT the 8-decimal branch (4 decimals)
+    // 3. a project-scale value above the boundary -> 4 decimals
+
+    #[test]
+    fn format_kwh_realistic_tiny_value_uses_eight_decimals() {
+        assert_eq!(format_kwh(0.0000065), "0.00000650 kWh");
+    }
+
+    #[test]
+    fn format_kwh_at_the_boundary_uses_four_decimals() {
+        // 0.001 kWh is exactly the boundary: `< 0.001` is false at the boundary.
+        assert_eq!(format_kwh(0.001), "0.0010 kWh");
+    }
+
+    #[test]
+    fn format_kwh_project_scale_value_uses_four_decimals() {
+        assert_eq!(format_kwh(0.0228), "0.0228 kWh");
     }
 }

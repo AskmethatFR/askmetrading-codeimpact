@@ -44,6 +44,7 @@ hexagon → rien
 | ProfilerPort | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | CargoTestRunner | — |
 | ReportWriterPort | ConsoleReportWriter, JsonReportWriter | — |
+| ConfigReaderPort | FileSystemConfigReader (`.codeimpact.json`, serde_json) | — |
 
 > **Frontière de processus dans `SynCodeParser`.** Le parsing risqué est isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, une cible binaire Cargo dédiée de `secondaries/`) pour contenir un débordement de pile de `syn` sans tuer le scan. Voir [[ADR-0015]].
 
@@ -89,6 +90,10 @@ hexagon → rien
 ## JSON Report Format
 
 `JsonReportWriter` (P0 adapter) produces JSON output via `write_json` on the `ReportWriter` port. See [[json-report-schema]] for full schema and [[ADR-0007]] for architecture decisions.
+
+## Alert Thresholds (US8)
+
+Porte de domaine pure `AlertThresholds::evaluate` dans l'hexagone zéro-dep : gate l'énergie (kWh) et le CO2 (g) agrégés projet contre des seuils venus de la CLI (`--max-kwh`/`--max-co2`) et/ou d'un fichier `.codeimpact.json` (lu derrière `ConfigReaderPort`). `--strict` mappe un dépassement sur exit 3. Une métrique non mesurée (`None`) ne franchit jamais un seuil ([[ADR-0010]]). Design courant : [[alert-thresholds]] ; décision : [[ADR-0017]].
 
 ## Module structure (actuelle)
 
@@ -171,8 +176,8 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | US4 | P0 | Rapport JSON | ✅ Livré |
 | US5 | P1 | Détection I/O dans boucles | ✅ Livré |
 | US6 | P1 | Stress test instrumenté | ✅ Livré |
-| US7 | P1 | Rapport HTML | 📋 En attente |
-| US8 | P1 | Seuils d'alerte personnalisés | 📋 En attente |
+| US7 | P1 | Rapport HTML | ✅ Livré |
+| US8 | P1 | Seuils d'alerte personnalisés | ✅ Livré |
 
 ## Décisions enregistrées (ADR)
 

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ParsedFunction;
@@ -47,10 +48,11 @@ fn handle_json_returns_string_for_valid_file() {
     let result = use_case.handle_json(
         &make_target("test.rs"),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
 
     assert!(result.is_ok(), "handle_json should succeed");
-    let json = result.unwrap();
+    let json = result.unwrap().into_payload();
     assert!(!json.is_empty(), "JSON string should not be empty");
     assert!(json.contains("test.rs"), "JSON should contain target path");
     assert!(json.contains("codeimpact"), "JSON should contain tool name");
@@ -66,6 +68,7 @@ fn handle_json_nonexistent_file_returns_error() {
     let result = use_case.handle_json(
         &make_target("nonexistent.rs"),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
 
     match result {
@@ -94,11 +97,14 @@ fn handle_project_json_returns_string() {
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
-    let result =
-        use_case.handle_project_json(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result = use_case.handle_project_json(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
+    );
 
     assert!(result.is_ok(), "handle_project_json should succeed");
-    let json = result.unwrap();
+    let json = result.unwrap().into_payload();
     assert!(!json.is_empty(), "JSON string should not be empty");
     assert!(
         json.contains("project"),
@@ -113,8 +119,11 @@ fn handle_project_json_empty_project_returns_error() {
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
 
-    let result =
-        use_case.handle_project_json(&make_target("."), &[AnalysisRule::CyclomaticComplexity]);
+    let result = use_case.handle_project_json(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
+    );
 
     match result {
         Err(codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed(_)) => {}
@@ -154,6 +163,7 @@ fn handle_project_json_records_unreadable_file_as_unmeasurable_and_excludes_it_f
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 
@@ -206,6 +216,7 @@ fn handle_project_json_records_unparseable_file_as_unmeasurable_and_excludes_it_
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 

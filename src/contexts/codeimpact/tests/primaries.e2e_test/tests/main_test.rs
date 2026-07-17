@@ -391,6 +391,30 @@ fn e2e_stress_test_help_shows_filter_option() {
     );
 }
 
+// US8 T5 — stress-test gains the same threshold flags as analyze. Checked
+// via --help (cheap) rather than a real stress-test run (running the
+// project's actual `cargo test` subprocess is expensive and not otherwise
+// exercised at the e2e level in this suite).
+#[test]
+fn e2e_stress_test_help_shows_threshold_flags() {
+    let binary = binary_path();
+    let output = Command::new(binary)
+        .args(["stress-test", "--help"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    for flag in ["--max-kwh", "--max-co2", "--strict", "--config"] {
+        assert!(
+            stdout.contains(flag),
+            "stress-test help should show {}: {}",
+            flag,
+            stdout
+        );
+    }
+}
+
 #[test]
 fn e2e_analyze_sample_contains_io_in_loop() {
     let binary = binary_path();
@@ -561,6 +585,143 @@ fn e2e_analyze_invalid_format_errors() {
     assert!(
         stderr.contains("invalide") || stderr.contains("erreur"),
         "stderr should contain error about invalid format: {}",
+        stderr
+    );
+}
+
+// US8 (QA re-review sweep, energy swap, issue #8) — the removed --max-cpu
+// flag must actually be gone from the CLI surface, not merely renamed in
+// intent. clap rejects it as an unrecognized argument (exit 2, its own
+// reserved arg-parse code — distinct from our exit 1 validation errors).
+#[test]
+fn e2e_analyze_old_max_cpu_flag_is_rejected() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "0"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the removed --max-cpu flag must be rejected by clap itself. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("--max-cpu"),
+        "stderr should name the unrecognized flag, got: {}",
+        stderr
+    );
+}
+
+// US8 (QA review sweep, issue #8) — CLI-relay error branches: an invalid
+// --max-kwh/--max-co2 value or an unreadable --config path must be relayed
+// as a real process failure (exit 1, "erreur: ..." on stderr), not silently
+// swallowed or accepted. Same shape as e2e_analyze_invalid_format_errors/
+// e2e_analyze_nonexistent_file_exits_1 above — this is characterization
+// coverage of already-passing production code (AlertThresholds::new's
+// validation, already unit-pinned in alert_thresholds_test.rs; the config
+// reader's not-found path, already unit-pinned in
+// file_system_config_reader_test.rs), verified once more at the real CLI
+// boundary.
+//
+// Test List:
+// 1. a negative --max-kwh is rejected (note: `--max-kwh=-5`, not
+//    `--max-kwh -5` — the latter is swallowed by clap's own arg parser as
+//    an unrecognized flag before ever reaching AlertThresholds::new,
+//    exiting 2 instead of exercising our validation at all)
+// 2. --max-kwh inf is rejected (non-finite)
+// 3. --max-kwh nan is rejected (non-finite)
+// 4. a --config path that does not exist is rejected, not silently ignored
+
+#[test]
+fn e2e_analyze_negative_max_kwh_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh=-5"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a negative threshold must be rejected by our own validation (exit 1, not clap's \
+         reserved exit 2). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr,
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_infinite_max_kwh_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh", "inf"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr);
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_nan_max_kwh_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh", "nan"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr);
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_nonexistent_config_path_errors() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            fixture.to_str().unwrap(),
+            "--config",
+            "/tmp/nonexistent_codeimpact_config_xyz_12345.json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unreadable --config path must not be silently ignored. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr,
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain error: {}",
         stderr
     );
 }
@@ -1023,5 +1184,332 @@ fn e2e_analyze_impl_only_fixture_reports_measured_functions() {
         json["metrics"]["complexity_level"], "none",
         "a file with measured functions must never report \"none\": {:#?}",
         json["metrics"]
+    );
+}
+
+// US8 slice 1 (issue #8) — AC1/AC3/AC6: `analyze --path <dir> --max-kwh
+// <kWh>` compares the project's aggregate energy against the threshold and
+// prints a warning on a breach, without changing the exit code (--strict is
+// T2 scope). Change request on issue #8: energy replaces CPU cost as the
+// gate's first metric.
+//
+// Test List:
+// 1. a maximally strict --max-kwh 0 breaches any real project -> warning
+//    printed, exit 0 (AC1, AC3)
+// 2. no --max-kwh/--max-co2 flags at all -> no warning, unchanged behavior
+//    (AC6)
+
+#[test]
+fn e2e_analyze_path_with_breached_max_kwh_warns_and_still_exits_0() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--max-kwh", "0"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected even on a breach (non-strict, AC3). stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("SEUIL") && stdout.contains("ÉNERGIE"),
+        "expected a threshold breach warning naming the energy metric, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_path_without_threshold_flags_shows_no_warning() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    assert!(
+        !stdout.contains("SEUIL"),
+        "no threshold was configured (AC6): output must be unchanged, got: {}",
+        stdout
+    );
+}
+
+// US8 slice 2 (AC4/AC6) — --strict maps a breach to exit 3, naming which
+// threshold(s) were exceeded and by how much; without a breach it stays 0.
+
+#[test]
+fn e2e_analyze_path_strict_breach_exits_3_naming_the_threshold() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a strict breach must exit 3 (AC4). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("SEUIL") && stderr.contains("ÉNERGIE"),
+        "stderr must name which threshold was exceeded and by how much, got: {}",
+        stderr
+    );
+}
+
+// US8 slice 3 (AC3) — the breach must reach every surface, not just
+// console: JSON embeds a structured thresholds object; HTML embeds it in
+// the data island (rendered client-side, same mechanism as
+// unmeasurable_files). Also covers the single-file target (T3).
+
+#[test]
+fn e2e_analyze_path_json_format_breach_embeds_thresholds_object() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+            "--max-kwh",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(json["metrics"]["thresholds"]["has_breach"], true);
+    assert_eq!(
+        json["metrics"]["thresholds"]["breaches"][0]["metric"],
+        "ÉNERGIE"
+    );
+}
+
+#[test]
+fn e2e_analyze_path_html_format_breach_embeds_thresholds_in_data_island() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output_path = std::env::temp_dir().join(format!(
+        "codeimpact_threshold_report_{}.html",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&output_path);
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+            "-o",
+            output_path.to_str().unwrap(),
+            "--max-kwh",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let html =
+        std::fs::read_to_string(&output_path).expect("html output file should have been created");
+    let _ = std::fs::remove_file(&output_path);
+    assert!(html.contains(r#""has_breach":true"#), "got: {}", html);
+}
+
+#[test]
+fn e2e_analyze_single_file_breach_warns_via_console() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh", "0"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "non-strict breach must still exit 0. stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("SEUIL") && stdout.contains("ÉNERGIE"),
+        "got: {}",
+        stdout
+    );
+}
+
+// US8 slice 4 (AC2) — thresholds may come from `.codeimpact.json`; a CLI
+// flag overrides the file value for the same metric.
+
+#[test]
+fn e2e_analyze_reads_threshold_from_config_file() {
+    let binary = binary_path();
+    let dir =
+        std::env::temp_dir().join(format!("codeimpact_e2e_config_file_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").expect("write fixture");
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"thresholds":{"max_energy_kwh":0.0}}"#,
+    )
+    .expect("write config");
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--strict"])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "the config file's threshold alone must be enough to breach. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn e2e_analyze_cli_flag_overrides_config_file_value() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_config_override_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").expect("write fixture");
+    // The file alone would breach (max-kwh 0); the CLI flag for the SAME
+    // metric must win and let it through.
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"thresholds":{"max_energy_kwh":0.0}}"#,
+    )
+    .expect("write config");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "the CLI flag must override the config file's stricter value for the same metric. \
+         stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn e2e_analyze_explicit_config_flag_is_honored() {
+    let binary = binary_path();
+    let target_dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_explicit_config_target_{}",
+        std::process::id()
+    ));
+    let config_dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_explicit_config_elsewhere_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&target_dir);
+    let _ = std::fs::remove_dir_all(&config_dir);
+    std::fs::create_dir_all(&target_dir).expect("create target dir");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(target_dir.join("good.rs"), "fn good() {}").expect("write fixture");
+    let explicit_config = config_dir.join("thresholds.json");
+    std::fs::write(&explicit_config, r#"{"thresholds":{"max_energy_kwh":0.0}}"#)
+        .expect("write explicit config");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            target_dir.to_str().unwrap(),
+            "--config",
+            explicit_config.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&target_dir);
+    let _ = std::fs::remove_dir_all(&config_dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "an explicit --config path (not next to the target) must still be read. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn e2e_analyze_path_strict_without_breach_exits_0() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "no breach: --strict must still exit 0 (AC6). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }

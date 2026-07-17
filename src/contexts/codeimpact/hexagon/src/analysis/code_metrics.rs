@@ -1,3 +1,4 @@
+use super::alert_thresholds::ThresholdReport;
 use super::code_location::CodeLocation;
 use super::complexity_detector::ComplexityWarning;
 use super::ecological_impact::EcologicalImpact;
@@ -113,6 +114,10 @@ pub struct CodeMetrics {
     /// per-line pseudo-warning. `0` is an honest, meaningful answer, not an
     /// omitted signal.
     unclassifiable_io_in_loops_count: usize,
+    /// This file's threshold-breach outcome (US8 T3) — `None` when no
+    /// calling use case ever evaluated thresholds against it, mirroring
+    /// `FileConsumptionGraph::threshold_report`.
+    threshold_report: Option<ThresholdReport>,
 }
 
 impl CodeMetrics {
@@ -128,6 +133,7 @@ impl CodeMetrics {
             ecological_impact: None,
             io_in_loops: Vec::new(),
             unclassifiable_io_in_loops_count: 0,
+            threshold_report: None,
         }
     }
 
@@ -149,6 +155,7 @@ impl CodeMetrics {
             ecological_impact: None,
             io_in_loops: Vec::new(),
             unclassifiable_io_in_loops_count: 0,
+            threshold_report: None,
         }
     }
 
@@ -258,5 +265,17 @@ impl CodeMetrics {
     pub fn with_function_details(mut self, function_details: Vec<FunctionDetail>) -> Self {
         self.function_details = function_details;
         self
+    }
+
+    /// Attaches the outcome of evaluating this file's own economic/
+    /// ecological impact against its configured alert thresholds (US8 T3) —
+    /// builder style, mirroring `FileConsumptionGraph::with_threshold_report`.
+    pub fn with_threshold_report(mut self, report: ThresholdReport) -> Self {
+        self.threshold_report = Some(report);
+        self
+    }
+
+    pub fn threshold_report(&self) -> Option<&ThresholdReport> {
+        self.threshold_report.as_ref()
     }
 }

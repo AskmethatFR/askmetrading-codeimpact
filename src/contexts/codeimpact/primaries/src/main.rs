@@ -1,16 +1,20 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
+use codeimpact_hexagon::analysis::ConfigReaderPort;
 use codeimpact_hexagon::analysis::OutputFormat;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::RunStressTest;
 use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
+use codeimpact_secondaries::gateways::config_readers::file_system_config_reader::FileSystemConfigReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
+use codeimpact_secondaries::gateways::report_writers::humanize::render_threshold_warning;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
 
@@ -31,10 +35,36 @@ enum Commands {
         format: String,
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
+        /// Alert threshold (US8): max acceptable aggregate energy, kWh.
+        #[arg(long = "max-kwh")]
+        max_kwh: Option<f64>,
+        /// Alert threshold (US8): max acceptable aggregate CO2, grams.
+        #[arg(long = "max-co2")]
+        max_co2: Option<f64>,
+        /// Exit 3 instead of 0 when a threshold is breached (US8 AD-4).
+        #[arg(long)]
+        strict: bool,
+        /// Explicit path to a .codeimpact.json config file (US8 T4).
+        /// Without it, auto-discovered in the analysis target's directory,
+        /// then the current directory.
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     StressTest {
         #[arg(long)]
         filter: Option<String>,
+        /// Alert threshold (US8 T5): max acceptable energy, kWh.
+        #[arg(long = "max-kwh")]
+        max_kwh: Option<f64>,
+        /// Alert threshold (US8 T5): max acceptable CO2, grams.
+        #[arg(long = "max-co2")]
+        max_co2: Option<f64>,
+        /// Exit 3 instead of 0 when a threshold is breached (US8 AD-4).
+        #[arg(long)]
+        strict: bool,
+        /// Explicit path to a .codeimpact.json config file (US8 T4/T5).
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -47,7 +77,19 @@ fn main() {
             path,
             format,
             output,
+            max_kwh,
+            max_co2,
+            strict,
+            config,
         } => {
+            let cli_thresholds = match AlertThresholds::new(*max_kwh, *max_co2) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("erreur: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
             let file_path = match (file, path) {
                 (Some(f), None) | (None, Some(f)) => f.clone(),
                 (Some(_), Some(_)) => {
@@ -81,6 +123,29 @@ fn main() {
                 TargetType::File
             };
 
+            // US8 T4: auto-discovery searches the target's own directory
+            // first, then the current directory — a single-file target's
+            // "directory" is its parent.
+            let target_dir = if target_type == TargetType::Project {
+                file_path.clone()
+            } else {
+                file_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let config_reader = FileSystemConfigReader::new();
+            let file_thresholds =
+                match config_reader.read_thresholds(config.as_deref(), &[&target_dir, &cwd]) {
+                    Ok(found) => found.unwrap_or_else(AlertThresholds::none),
+                    Err(e) => {
+                        eprintln!("erreur: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+            let thresholds = AlertThresholds::from_sources(file_thresholds, cli_thresholds);
+
             let target = AnalysisTarget::new(file_path, target_type);
             let is_project = *target.target_type() == TargetType::Project;
             let reader = FileSystemCodeReader::new();
@@ -98,8 +163,10 @@ fn main() {
                     let writer = ConsoleReportWriter::new();
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-                    match use_case.handle(&target, rules) {
-                        Ok(()) => std::process::exit(0),
+                    match use_case.handle(&target, rules, &thresholds) {
+                        Ok(gated) => {
+                            std::process::exit(gated_exit_code(*strict, gated.thresholds()))
+                        }
                         Err(e) => {
                             eprintln!("erreur: {}", e);
                             std::process::exit(1);
@@ -111,27 +178,31 @@ fn main() {
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     let result = if is_project {
-                        use_case.handle_project_json(&target, rules)
+                        use_case.handle_project_json(&target, rules, &thresholds)
                     } else {
-                        use_case.handle_json(&target, rules)
+                        use_case.handle_json(&target, rules, &thresholds)
                     };
                     match result {
-                        Ok(json) => match output {
-                            Some(output_path) => match write_report_file(output_path, &json) {
-                                Ok(()) => {
-                                    println!("Rapport JSON généré: {}", output_path.display());
-                                    std::process::exit(0);
+                        Ok(gated) => {
+                            let exit_code = gated_exit_code(*strict, gated.thresholds());
+                            let json = gated.into_payload();
+                            match output {
+                                Some(output_path) => match write_report_file(output_path, &json) {
+                                    Ok(()) => {
+                                        println!("Rapport JSON généré: {}", output_path.display());
+                                        std::process::exit(exit_code);
+                                    }
+                                    Err(msg) => {
+                                        eprintln!("erreur: {}", msg);
+                                        std::process::exit(1);
+                                    }
+                                },
+                                None => {
+                                    println!("{}", json);
+                                    std::process::exit(exit_code);
                                 }
-                                Err(msg) => {
-                                    eprintln!("erreur: {}", msg);
-                                    std::process::exit(1);
-                                }
-                            },
-                            None => {
-                                println!("{}", json);
-                                std::process::exit(0);
                             }
-                        },
+                        }
                         Err(e) => {
                             eprintln!("erreur: {}", e);
                             std::process::exit(1);
@@ -148,15 +219,17 @@ fn main() {
                     let writer = HtmlReportWriter::new();
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-                    match use_case.handle_project_html(&target, rules) {
-                        Ok(html) => {
+                    match use_case.handle_project_html(&target, rules, &thresholds) {
+                        Ok(gated) => {
+                            let exit_code = gated_exit_code(*strict, gated.thresholds());
+                            let html = gated.into_payload();
                             let output_path = output
                                 .clone()
                                 .unwrap_or_else(|| PathBuf::from("report.html"));
                             match write_report_file(&output_path, &html) {
                                 Ok(()) => {
                                     println!("Rapport HTML généré: {}", output_path.display());
-                                    std::process::exit(0);
+                                    std::process::exit(exit_code);
                                 }
                                 Err(msg) => {
                                     eprintln!("erreur: {}", msg);
@@ -172,22 +245,62 @@ fn main() {
                 }
             }
         }
-        Commands::StressTest { filter } => {
+        Commands::StressTest {
+            filter,
+            max_kwh,
+            max_co2,
+            strict,
+            config,
+        } => {
             let project_dir = std::env::current_dir().unwrap_or_else(|_| {
                 eprintln!("erreur: impossible de déterminer le répertoire courant");
                 std::process::exit(1);
             });
+
+            let cli_thresholds = match AlertThresholds::new(*max_kwh, *max_co2) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("erreur: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let config_reader = FileSystemConfigReader::new();
+            let file_thresholds =
+                match config_reader.read_thresholds(config.as_deref(), &[&project_dir]) {
+                    Ok(found) => found.unwrap_or_else(AlertThresholds::none),
+                    Err(e) => {
+                        eprintln!("erreur: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+            let thresholds = AlertThresholds::from_sources(file_thresholds, cli_thresholds);
+
             let runner = CargoTestRunner::new(project_dir);
             let writer = ConsoleReportWriter::new();
             let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
-            match use_case.handle(filter.as_deref()) {
-                Ok(()) => std::process::exit(0),
+            match use_case.handle(filter.as_deref(), &thresholds) {
+                Ok(gated) => std::process::exit(gated_exit_code(*strict, gated.thresholds())),
                 Err(e) => {
                     eprintln!("erreur: {}", e);
                     std::process::exit(1);
                 }
             }
         }
+    }
+}
+
+/// Maps a `ThresholdReport` to a process exit code (US8 AD-4): the
+/// comparison itself already happened in the domain (`AlertThresholds::
+/// evaluate`) — this is a read of `has_breach()`, never a re-derived
+/// comparison. Exit 3 is reserved for a strict breach (distinct from 1 =
+/// input/runtime error, 2 = clap's own reserved arg-parse code). Prints the
+/// breach message (AD-3's shared renderer) to stderr before exiting.
+fn gated_exit_code(strict: bool, report: &codeimpact_hexagon::analysis::ThresholdReport) -> i32 {
+    if strict && report.has_breach() {
+        eprintln!("{}", render_threshold_warning(report));
+        3
+    } else {
+        0
     }
 }
 
@@ -222,6 +335,49 @@ fn write_report_file(output_path: &std::path::Path, content: &str) -> Result<(),
 
     std::fs::write(&resolved_path, content)
         .map_err(|_| "impossible d'écrire le fichier de sortie".to_string())
+}
+
+#[cfg(test)]
+mod gated_exit_code_tests {
+    use super::gated_exit_code;
+    use codeimpact_hexagon::analysis::AlertThresholds;
+
+    // Test List (US8 AD-4 — the exit-code MAPPING, not the comparison
+    // itself, which is already pinned in alert_thresholds_test.rs):
+    // 1. strict + breach -> 3
+    // 2. strict + no breach -> 0
+    // 3. non-strict + breach -> 0 (AC3: warn, never fail the build)
+    // 4. non-strict + no breach -> 0
+
+    #[test]
+    fn strict_breach_exits_3() {
+        let report = AlertThresholds::new(Some(1.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(true, &report), 3);
+    }
+
+    #[test]
+    fn strict_no_breach_exits_0() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(true, &report), 0);
+    }
+
+    #[test]
+    fn non_strict_breach_exits_0() {
+        let report = AlertThresholds::new(Some(1.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(false, &report), 0);
+    }
+
+    #[test]
+    fn non_strict_no_breach_exits_0() {
+        let report = AlertThresholds::none().evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(false, &report), 0);
+    }
 }
 
 #[cfg(all(test, unix))]

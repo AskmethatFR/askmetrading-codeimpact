@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
@@ -36,6 +37,7 @@ fn analyze_project_target_returns_ok() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok(), "project target should return Ok(())");
 }
@@ -65,6 +67,7 @@ fn analyze_valid_file_writes_metrics() {
         .handle(
             &make_target("test.rs"),
             &[AnalysisRule::CyclomaticComplexity],
+            &AlertThresholds::none(),
         )
         .expect("analysis should succeed");
 
@@ -83,6 +86,7 @@ fn analyze_nonexistent_file_returns_error() {
     let result = use_case.handle(
         &make_target("nonexistent.rs"),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     match result {
         Err(AnalysisError::IoError(_)) => {}
@@ -137,6 +141,7 @@ fn analyze_project_target_writes_per_file_report() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -169,6 +174,7 @@ fn parser_error_propagates_through_use_case() {
     let result = use_case.handle(
         &make_target("bad.rs"),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     match result {
         Err(AnalysisError::AnalysisFailed(_)) => {}
@@ -200,6 +206,7 @@ fn handle_project_continues_on_read_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -235,6 +242,7 @@ fn handle_project_continues_on_parse_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -278,6 +286,7 @@ fn handle_project_continues_on_deps_parse_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -328,6 +337,7 @@ fn handle_project_records_unreadable_file_as_unmeasurable() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok());
 
@@ -375,6 +385,7 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok());
 
@@ -434,6 +445,7 @@ fn project_with_oversized_file_marks_it_source_too_large() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok());
 
@@ -489,6 +501,7 @@ fn project_json_marks_oversized_file_source_too_large() {
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 
@@ -506,4 +519,278 @@ fn project_json_marks_oversized_file_source_too_large() {
     );
     let pm = graph.aggregated_metrics();
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
+}
+
+// US8 slice 1 — the calling use case for AlertThresholds::evaluate (AD-1):
+// handle_project evaluates the project's aggregate energy/CO2 impact
+// against the configured thresholds and attaches the outcome to the graph
+// so the console writer can render it (AD-3). Change request on issue #8:
+// energy replaces CPU cost as the gate's first metric.
+//
+// Test List:
+// 1. a maximally strict threshold (0.0) breaches — any measured project has
+//    a positive base cost (file-level "+1" complexity alone is nonzero)
+// 2. a threshold high enough to never breach still attaches a report
+//    (Some(..), not None) — evaluation happened, it simply found nothing
+
+#[test]
+fn handle_project_with_breached_energy_threshold_attaches_a_breaching_report() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let report = graph
+        .threshold_report()
+        .expect("a threshold was configured, evaluate() must have run");
+    assert!(
+        report.has_breach(),
+        "a zero kWh threshold must breach any measured project's positive base energy"
+    );
+}
+
+#[test]
+fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(1_000_000.0), None).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let report = graph
+        .threshold_report()
+        .expect("a threshold was configured, evaluate() must have run even with no breach");
+    assert!(
+        !report.has_breach(),
+        "the huge threshold must not be breached by a trivial project"
+    );
+}
+
+// Review-barrier fix (Dev-B, energy-swap re-review, issue #8) — the
+// energy_joules() / KWH_TO_JOULES conversion in gate_project was not
+// pinned by any test: every prior threshold was either 0.0 (breaches on
+// any positive value, converted or not) or 1_000_000.0 (never breaches
+// either way) — neither straddles the ~3.6M gap between a raw-joule
+// magnitude (a few J for a trivial file) and its correct kWh conversion
+// (a few 1e-7 kWh). Dev-B proved this by deleting the division and
+// watching the full suite stay green. 0.001 kWh sits strictly between
+// those two magnitudes: with the correct conversion the tiny kWh value
+// never breaches it; if the division were dropped (raw joules fed as
+// kWh), the same threshold WOULD breach. That asymmetry is what makes
+// this test discriminate — verified by literally deleting the division
+// locally and watching this test go red before restoring it.
+#[test]
+fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let report = graph
+        .threshold_report()
+        .expect("a threshold was configured, evaluate() must have run");
+    assert!(
+        !report.has_breach(),
+        "0.001 kWh must not breach on the correctly-converted tiny kWh value — it WOULD breach \
+         if energy_joules() / KWH_TO_JOULES were dropped and raw joules were fed as kWh instead"
+    );
+}
+
+// AC7 / ADR-0010 honesty, at the use-case level (the VO-level gate is
+// already pinned directly in alert_thresholds_test.rs): when every file in
+// the project failed to measure, aggregated_metrics().total_ecological_impact
+// is None (D3, #50) — evaluate() must receive None, not a fabricated 0, and
+// must therefore never report a breach even with a maximally strict
+// threshold configured.
+#[test]
+fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_threshold() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_rust_file(PathBuf::from("src/bad.rs")); // no source configured -> read fails
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), Some(0.0)).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    assert_eq!(
+        graph.aggregated_metrics().total_ecological_impact,
+        None,
+        "precondition: every file failed to measure, there is no aggregate to breach"
+    );
+    let report = graph
+        .threshold_report()
+        .expect("thresholds were configured, evaluate() must still have run");
+    assert!(
+        !report.has_breach(),
+        "an absent (unmeasured) aggregate must never count as a breach, however strict the threshold"
+    );
+}
+
+// US8 slice 2 (AD-4) — the exit-code DECISION is main.rs's job, but the
+// domain must hand it the breach outcome directly on the return value: a
+// caller with only Result<GatedOutput<()>, _> in hand (no graph reference)
+// must still be able to answer "was there a breach".
+#[test]
+fn handle_project_return_value_carries_the_same_breach_outcome_as_the_graph() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let gated = use_case
+        .handle(
+            &make_project_target("."),
+            &[AnalysisRule::CyclomaticComplexity],
+            &thresholds,
+        )
+        .expect("analysis should succeed");
+
+    assert!(
+        gated.thresholds().has_breach(),
+        "the return value must carry the breach without needing the graph"
+    );
+}
+
+// US8 slice 3 (T3) — the single-file gate: handle() evaluates thresholds
+// against the FILE's own economic/ecological impact (not the project
+// aggregate) when the target is a single file.
+#[test]
+fn handle_single_file_with_breached_threshold_returns_a_breaching_report() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let gated = use_case
+        .handle(
+            &make_target("test.rs"),
+            &[AnalysisRule::CyclomaticComplexity],
+            &thresholds,
+        )
+        .expect("analysis should succeed");
+
+    assert!(
+        gated.thresholds().has_breach(),
+        "a zero kWh threshold must breach any measured file's positive base energy"
+    );
+    let metrics = writer.last_metrics.lock().unwrap();
+    let metrics = metrics
+        .as_ref()
+        .expect("write_console must have been called");
+    assert!(
+        metrics
+            .threshold_report()
+            .expect("evaluate() must have run and attached a report")
+            .has_breach(),
+        "the report must also be attached to the metrics passed to the writer"
+    );
+}
+
+// Review-barrier fix (Dev-B, energy-swap re-review, issue #8) — the
+// single-file twin of gate_project's discrimination gap: gate_metrics
+// carries its OWN copy of the energy_joules() / KWH_TO_JOULES conversion,
+// unpinned for the same reason (every prior single-file threshold test
+// used 0.0). Same 0.001 kWh discriminator, same asymmetry.
+#[test]
+fn handle_single_file_energy_threshold_discriminates_joules_from_kwh() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+
+    let gated = use_case
+        .handle(
+            &make_target("test.rs"),
+            &[AnalysisRule::CyclomaticComplexity],
+            &thresholds,
+        )
+        .expect("analysis should succeed");
+
+    assert!(
+        !gated.thresholds().has_breach(),
+        "0.001 kWh must not breach on the correctly-converted tiny kWh value — it WOULD breach \
+         if energy_joules() / KWH_TO_JOULES were dropped and raw joules were fed as kWh instead"
+    );
+}
+
+#[test]
+fn handle_single_file_without_threshold_flags_shows_no_breach() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+
+    let gated = use_case
+        .handle(
+            &make_target("test.rs"),
+            &[AnalysisRule::CyclomaticComplexity],
+            &AlertThresholds::none(),
+        )
+        .expect("analysis should succeed");
+
+    assert!(!gated.thresholds().has_breach());
 }

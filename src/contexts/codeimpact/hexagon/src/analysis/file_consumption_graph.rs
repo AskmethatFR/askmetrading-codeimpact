@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use super::alert_thresholds::ThresholdReport;
 use super::code_metrics::{complexity_level_for, CodeMetrics};
 use super::complexity_detector::WarningSeverity;
 use super::ecological_impact::EcologicalImpact;
@@ -39,6 +40,11 @@ pub struct FileConsumptionGraph {
     cycle_nodes: HashSet<PathBuf>,
     max_depth: usize,
     unmeasurable_files: Vec<UnmeasurableFile>,
+    /// The project's threshold-breach outcome (US8) — `None` when no
+    /// calling use case ever evaluated thresholds against this graph
+    /// (distinct from `Some(report)` with an empty `breaches()`, which
+    /// means thresholds WERE evaluated and none breached).
+    threshold_report: Option<ThresholdReport>,
 }
 
 impl FileConsumptionGraph {
@@ -103,6 +109,7 @@ impl FileConsumptionGraph {
             cycle_nodes,
             max_depth,
             unmeasurable_files: Vec::new(),
+            threshold_report: None,
         })
     }
 
@@ -117,6 +124,22 @@ impl FileConsumptionGraph {
     /// Files that could not be measured — see `UnmeasurableFile`.
     pub fn unmeasurable_files(&self) -> &[UnmeasurableFile] {
         &self.unmeasurable_files
+    }
+
+    /// Attaches the outcome of evaluating this project's aggregate impact
+    /// against its configured alert thresholds (US8, AD-3: the report
+    /// travels to the writers on the data object, not via a new
+    /// `ReportWriter` port method) — builder style, mirroring
+    /// `with_unmeasurable_files`.
+    pub fn with_threshold_report(mut self, report: ThresholdReport) -> Self {
+        self.threshold_report = Some(report);
+        self
+    }
+
+    /// The project's threshold-breach outcome, if a calling use case
+    /// evaluated one — see `threshold_report` field docs.
+    pub fn threshold_report(&self) -> Option<&ThresholdReport> {
+        self.threshold_report.as_ref()
     }
 
     /// Returns the files in the graph.
