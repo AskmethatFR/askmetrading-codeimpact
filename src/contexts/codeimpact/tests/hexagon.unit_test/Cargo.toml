@@ -12,6 +12,10 @@ test = false
 doctest = false
 
 [[test]]
+name = "alert_thresholds_test"
+path = "tests/alert_thresholds_test.rs"
+
+[[test]]
 name = "call_graph_test"
 path = "tests/call_graph_test.rs"
 
