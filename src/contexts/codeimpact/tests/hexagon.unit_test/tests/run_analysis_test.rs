@@ -501,6 +501,7 @@ fn project_json_marks_oversized_file_source_too_large() {
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 

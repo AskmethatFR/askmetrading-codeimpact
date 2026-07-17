@@ -36,11 +36,11 @@ impl RunAnalysis {
         }
     }
 
-    /// `thresholds` (US8): evaluated only on the project path today (slice
-    /// 1 scope) — a single-file target ignores it (T3 extends the gate to
-    /// `CodeMetrics`). `AlertThresholds::none()` reproduces the pre-US8
-    /// behavior exactly (AC6): `evaluate` against no configured threshold
-    /// never breaches.
+    /// `thresholds` (US8): evaluated against the project's aggregate impact
+    /// on the project path, and against the file's own impact on a
+    /// single-file target (T3 extended the gate to `CodeMetrics`).
+    /// `AlertThresholds::none()` reproduces the pre-US8 behavior exactly
+    /// (AC6): `evaluate` against no configured threshold never breaches.
     pub fn handle(
         &self,
         target: &AnalysisTarget,
@@ -53,11 +53,9 @@ impl RunAnalysis {
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
+        let metrics = Self::gate_metrics(metrics, thresholds);
+        let report = metrics.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_console(&metrics)?;
-        // Single-file targets do not evaluate thresholds yet (T3 extends
-        // the gate to CodeMetrics) — evaluate(None, None) is always an
-        // empty (no-breach) report, an honest "nothing was gated here".
-        let report = thresholds.evaluate(None, None);
         Ok(GatedOutput::new((), report))
     }
 
@@ -165,6 +163,17 @@ impl RunAnalysis {
         graph.with_threshold_report(report)
     }
 
+    /// Evaluates a single file's own economic/ecological impact against
+    /// `thresholds` (US8 T3) — the single-file twin of `gate_project`,
+    /// same shape, same gate (`AlertThresholds::evaluate`), different
+    /// data-carrier (`CodeMetrics` rather than `FileConsumptionGraph`).
+    fn gate_metrics(metrics: CodeMetrics, thresholds: &AlertThresholds) -> CodeMetrics {
+        let cpu = metrics.economic_impact().map(|e| e.cpu_cost_microdollars());
+        let co2 = metrics.ecological_impact().map(|e| e.co2_grams());
+        let report = thresholds.evaluate(cpu, co2);
+        metrics.with_threshold_report(report)
+    }
+
     fn set_file_paths(metrics: CodeMetrics, path: &Path) -> CodeMetrics {
         let file_path = path.to_string_lossy().to_string();
 
@@ -202,37 +211,51 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<String, AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<String>, AnalysisError> {
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
+        let metrics = Self::gate_metrics(metrics, thresholds);
+        let report = metrics.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let target_type = if *target.target_type() == TargetType::Project {
             "project"
         } else {
             "file"
         };
-        self.reporter.write_json(&metrics, &target_str, target_type)
+        let json = self
+            .reporter
+            .write_json(&metrics, &target_str, target_type)?;
+        Ok(GatedOutput::new(json, report))
     }
 
     pub fn handle_project_json(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<String, AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<String>, AnalysisError> {
         let graph = self.build_project_graph(target, rules)?;
+        let graph = Self::gate_project(graph, thresholds);
+        let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
-        self.reporter.write_project_json(&graph, &target_str)
+        let json = self.reporter.write_project_json(&graph, &target_str)?;
+        Ok(GatedOutput::new(json, report))
     }
 
     pub fn handle_project_html(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-    ) -> Result<String, AnalysisError> {
+        thresholds: &AlertThresholds,
+    ) -> Result<GatedOutput<String>, AnalysisError> {
         let graph = self.build_project_graph(target, rules)?;
+        let graph = Self::gate_project(graph, thresholds);
+        let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
-        self.reporter.write_html(&graph, &target_str)
+        let html = self.reporter.write_html(&graph, &target_str)?;
+        Ok(GatedOutput::new(html, report))
     }
 
     /// Walks every Rust file under `target`, analyzes it, and resolves

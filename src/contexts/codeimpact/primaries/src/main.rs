@@ -135,27 +135,31 @@ fn main() {
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     let result = if is_project {
-                        use_case.handle_project_json(&target, rules)
+                        use_case.handle_project_json(&target, rules, &thresholds)
                     } else {
-                        use_case.handle_json(&target, rules)
+                        use_case.handle_json(&target, rules, &thresholds)
                     };
                     match result {
-                        Ok(json) => match output {
-                            Some(output_path) => match write_report_file(output_path, &json) {
-                                Ok(()) => {
-                                    println!("Rapport JSON généré: {}", output_path.display());
-                                    std::process::exit(0);
+                        Ok(gated) => {
+                            let exit_code = gated_exit_code(*strict, gated.thresholds());
+                            let json = gated.into_payload();
+                            match output {
+                                Some(output_path) => match write_report_file(output_path, &json) {
+                                    Ok(()) => {
+                                        println!("Rapport JSON généré: {}", output_path.display());
+                                        std::process::exit(exit_code);
+                                    }
+                                    Err(msg) => {
+                                        eprintln!("erreur: {}", msg);
+                                        std::process::exit(1);
+                                    }
+                                },
+                                None => {
+                                    println!("{}", json);
+                                    std::process::exit(exit_code);
                                 }
-                                Err(msg) => {
-                                    eprintln!("erreur: {}", msg);
-                                    std::process::exit(1);
-                                }
-                            },
-                            None => {
-                                println!("{}", json);
-                                std::process::exit(0);
                             }
-                        },
+                        }
                         Err(e) => {
                             eprintln!("erreur: {}", e);
                             std::process::exit(1);
@@ -172,15 +176,17 @@ fn main() {
                     let writer = HtmlReportWriter::new();
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-                    match use_case.handle_project_html(&target, rules) {
-                        Ok(html) => {
+                    match use_case.handle_project_html(&target, rules, &thresholds) {
+                        Ok(gated) => {
+                            let exit_code = gated_exit_code(*strict, gated.thresholds());
+                            let html = gated.into_payload();
                             let output_path = output
                                 .clone()
                                 .unwrap_or_else(|| PathBuf::from("report.html"));
                             match write_report_file(&output_path, &html) {
                                 Ok(()) => {
                                     println!("Rapport HTML généré: {}", output_path.display());
-                                    std::process::exit(0);
+                                    std::process::exit(exit_code);
                                 }
                                 Err(msg) => {
                                     eprintln!("erreur: {}", msg);
