@@ -24,6 +24,9 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 // 9. unknown top-level keys are tolerated (future include/exclude section)
 // 10. auto-discovery: target dir is tried before cwd
 // 11. error messages never leak the absolute path (ADR-0006)
+// 12. explicit --config pointing to a FIFO -> Err, without hanging (review
+//     sweep, completes the mirror against write_report_file_tests::
+//     refuses_fifo_target_without_hanging)
 
 fn isolated_dir(test_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -115,6 +118,35 @@ fn explicit_symlink_config_path_is_refused() {
     assert!(
         result.is_err(),
         "a symlinked config path must be refused (ADR-0006), got {:?}",
+        result
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Review-barrier sweep (Security + Dev-B, issue #8) — completes the
+// security mirror against write_report_file_tests::
+// refuses_fifo_target_without_hanging (primaries/src/main.rs): a FIFO
+// config target must be refused, and refused WITHOUT hanging (a naive
+// `fs::read_to_string` on a FIFO with no writer blocks forever; the
+// `symlink_metadata` non-regular-file check in `read_and_validate` must
+// reject it before `read_to_string` is ever reached).
+#[cfg(unix)]
+#[test]
+fn refuses_fifo_config_target_without_hanging() {
+    let dir = isolated_dir("fifo");
+    let fifo = dir.join(".codeimpact.json");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("failed to spawn mkfifo");
+    assert!(status.success(), "mkfifo must succeed to set up the test");
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_thresholds(Some(&fifo), &[]);
+
+    assert!(
+        result.is_err(),
+        "a FIFO config target must be refused, got {:?}",
         result
     );
     let _ = std::fs::remove_dir_all(&dir);
