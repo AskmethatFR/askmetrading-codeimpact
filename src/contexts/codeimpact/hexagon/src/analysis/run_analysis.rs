@@ -11,6 +11,7 @@ use super::errors::AnalysisError;
 use super::file_consumption_graph::{
     resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile,
 };
+use super::gated_output::GatedOutput;
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
 use super::proactive_analyzer;
@@ -45,7 +46,7 @@ impl RunAnalysis {
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
         thresholds: &AlertThresholds,
-    ) -> Result<(), AnalysisError> {
+    ) -> Result<GatedOutput<()>, AnalysisError> {
         if *target.target_type() == TargetType::Project {
             return self.handle_project(target, rules, thresholds);
         }
@@ -53,7 +54,11 @@ impl RunAnalysis {
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
         self.reporter.write_console(&metrics)?;
-        Ok(())
+        // Single-file targets do not evaluate thresholds yet (T3 extends
+        // the gate to CodeMetrics) — evaluate(None, None) is always an
+        // empty (no-breach) report, an honest "nothing was gated here".
+        let report = thresholds.evaluate(None, None);
+        Ok(GatedOutput::new((), report))
     }
 
     fn handle_project(
@@ -61,7 +66,7 @@ impl RunAnalysis {
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
         thresholds: &AlertThresholds,
-    ) -> Result<(), AnalysisError> {
+    ) -> Result<GatedOutput<()>, AnalysisError> {
         let files = self.code_reader.list_rust_files(target.path())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
@@ -134,7 +139,9 @@ impl RunAnalysis {
         let graph =
             FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
         let graph = Self::gate_project(graph, thresholds);
-        self.reporter.write_project_report(&graph)
+        let report = graph.threshold_report().cloned().unwrap_or_default();
+        self.reporter.write_project_report(&graph)?;
+        Ok(GatedOutput::new((), report))
     }
 
     /// Evaluates the project's aggregate CPU/CO2 impact against `thresholds`

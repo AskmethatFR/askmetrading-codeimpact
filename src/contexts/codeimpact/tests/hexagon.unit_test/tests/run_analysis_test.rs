@@ -633,3 +633,32 @@ fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_thr
         "an absent (unmeasured) aggregate must never count as a breach, however strict the threshold"
     );
 }
+
+// US8 slice 2 (AD-4) — the exit-code DECISION is main.rs's job, but the
+// domain must hand it the breach outcome directly on the return value: a
+// caller with only Result<GatedOutput<()>, _> in hand (no graph reference)
+// must still be able to answer "was there a breach".
+#[test]
+fn handle_project_return_value_carries_the_same_breach_outcome_as_the_graph() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let gated = use_case
+        .handle(
+            &make_project_target("."),
+            &[AnalysisRule::CyclomaticComplexity],
+            &thresholds,
+        )
+        .expect("analysis should succeed");
+
+    assert!(
+        gated.thresholds().has_breach(),
+        "the return value must carry the breach without needing the graph"
+    );
+}

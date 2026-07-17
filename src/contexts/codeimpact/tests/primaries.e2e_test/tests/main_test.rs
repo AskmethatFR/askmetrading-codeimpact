@@ -1077,3 +1077,61 @@ fn e2e_analyze_path_without_threshold_flags_shows_no_warning() {
         stdout
     );
 }
+
+// US8 slice 2 (AC4/AC6) — --strict maps a breach to exit 3, naming which
+// threshold(s) were exceeded and by how much; without a breach it stays 0.
+
+#[test]
+fn e2e_analyze_path_strict_breach_exits_3_naming_the_threshold() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-cpu",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a strict breach must exit 3 (AC4). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("SEUIL") && stderr.contains("CPU"),
+        "stderr must name which threshold was exceeded and by how much, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_path_strict_without_breach_exits_0() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-cpu",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "no breach: --strict must still exit 0 (AC6). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}

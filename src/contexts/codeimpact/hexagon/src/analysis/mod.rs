@@ -11,6 +11,7 @@ pub mod ecological_impact;
 pub mod economic_impact;
 mod errors;
 pub mod file_consumption_graph;
+pub mod gated_output;
 pub mod io_classification;
 pub mod io_in_loop_warning;
 pub mod io_in_loops_detector;
@@ -43,6 +44,7 @@ pub use errors::AnalysisError;
 pub use file_consumption_graph::{
     resolve_file_dependency, FileConsumptionGraph, FileDependency, ProjectMetrics, UnmeasurableFile,
 };
+pub use gated_output::GatedOutput;
 pub use io_classification::IoClassification;
 pub use io_in_loop_warning::IoInLoopWarning;
 pub use io_in_loops_detector::IoInLoopsDetector;

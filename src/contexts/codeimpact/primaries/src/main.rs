@@ -12,6 +12,7 @@ use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodePars
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
+use codeimpact_secondaries::gateways::report_writers::humanize::render_threshold_warning;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
 
@@ -38,6 +39,9 @@ enum Commands {
         /// Alert threshold (US8): max acceptable aggregate CO2, grams.
         #[arg(long = "max-co2")]
         max_co2: Option<f64>,
+        /// Exit 3 instead of 0 when a threshold is breached (US8 AD-4).
+        #[arg(long)]
+        strict: bool,
     },
     StressTest {
         #[arg(long)]
@@ -56,6 +60,7 @@ fn main() {
             output,
             max_cpu,
             max_co2,
+            strict,
         } => {
             let thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
                 Ok(t) => t,
@@ -116,7 +121,9 @@ fn main() {
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     match use_case.handle(&target, rules, &thresholds) {
-                        Ok(()) => std::process::exit(0),
+                        Ok(gated) => {
+                            std::process::exit(gated_exit_code(*strict, gated.thresholds()))
+                        }
                         Err(e) => {
                             eprintln!("erreur: {}", e);
                             std::process::exit(1);
@@ -208,6 +215,21 @@ fn main() {
     }
 }
 
+/// Maps a `ThresholdReport` to a process exit code (US8 AD-4): the
+/// comparison itself already happened in the domain (`AlertThresholds::
+/// evaluate`) — this is a read of `has_breach()`, never a re-derived
+/// comparison. Exit 3 is reserved for a strict breach (distinct from 1 =
+/// input/runtime error, 2 = clap's own reserved arg-parse code). Prints the
+/// breach message (AD-3's shared renderer) to stderr before exiting.
+fn gated_exit_code(strict: bool, report: &codeimpact_hexagon::analysis::ThresholdReport) -> i32 {
+    if strict && report.has_breach() {
+        eprintln!("{}", render_threshold_warning(report));
+        3
+    } else {
+        0
+    }
+}
+
 /// Writes a report (JSON or HTML) to `output_path` (ADR-0006 discipline,
 /// scaled to intent: the -o path is user-chosen so path-traversal risk is
 /// low, but the parent directory is still canonicalized and error messages
@@ -239,6 +261,49 @@ fn write_report_file(output_path: &std::path::Path, content: &str) -> Result<(),
 
     std::fs::write(&resolved_path, content)
         .map_err(|_| "impossible d'écrire le fichier de sortie".to_string())
+}
+
+#[cfg(test)]
+mod gated_exit_code_tests {
+    use super::gated_exit_code;
+    use codeimpact_hexagon::analysis::AlertThresholds;
+
+    // Test List (US8 AD-4 — the exit-code MAPPING, not the comparison
+    // itself, which is already pinned in alert_thresholds_test.rs):
+    // 1. strict + breach -> 3
+    // 2. strict + no breach -> 0
+    // 3. non-strict + breach -> 0 (AC3: warn, never fail the build)
+    // 4. non-strict + no breach -> 0
+
+    #[test]
+    fn strict_breach_exits_3() {
+        let report = AlertThresholds::new(Some(1.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(true, &report), 3);
+    }
+
+    #[test]
+    fn strict_no_breach_exits_0() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(true, &report), 0);
+    }
+
+    #[test]
+    fn non_strict_breach_exits_0() {
+        let report = AlertThresholds::new(Some(1.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(false, &report), 0);
+    }
+
+    #[test]
+    fn non_strict_no_breach_exits_0() {
+        let report = AlertThresholds::none().evaluate(Some(5.0), None);
+        assert_eq!(gated_exit_code(false, &report), 0);
+    }
 }
 
 #[cfg(all(test, unix))]
