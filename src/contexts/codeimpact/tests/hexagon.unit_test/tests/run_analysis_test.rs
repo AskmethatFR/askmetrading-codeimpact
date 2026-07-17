@@ -519,3 +519,117 @@ fn project_json_marks_oversized_file_source_too_large() {
     let pm = graph.aggregated_metrics();
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
 }
+
+// US8 slice 1 — the calling use case for AlertThresholds::evaluate (AD-1):
+// handle_project evaluates the project's aggregate CPU/CO2 impact against
+// the configured thresholds and attaches the outcome to the graph so the
+// console writer can render it (AD-3).
+//
+// Test List:
+// 1. a maximally strict threshold (0.0) breaches — any measured project has
+//    a positive base cost (file-level "+1" complexity alone is nonzero)
+// 2. a threshold high enough to never breach still attaches a report
+//    (Some(..), not None) — evaluation happened, it simply found nothing
+
+#[test]
+fn handle_project_with_breached_cpu_threshold_attaches_a_breaching_report() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let report = graph
+        .threshold_report()
+        .expect("a threshold was configured, evaluate() must have run");
+    assert!(
+        report.has_breach(),
+        "a zero cpu threshold must breach any measured project's positive base cost"
+    );
+}
+
+#[test]
+fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(1_000_000.0), None).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let report = graph
+        .threshold_report()
+        .expect("a threshold was configured, evaluate() must have run even with no breach");
+    assert!(
+        !report.has_breach(),
+        "the huge threshold must not be breached by a trivial project"
+    );
+}
+
+// AC7 / ADR-0010 honesty, at the use-case level (the VO-level gate is
+// already pinned directly in alert_thresholds_test.rs): when every file in
+// the project failed to measure, aggregated_metrics().total_economic_impact
+// is None (D3, #50) — evaluate() must receive None, not a fabricated 0, and
+// must therefore never report a breach even with a maximally strict
+// threshold configured.
+#[test]
+fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_threshold() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_rust_file(PathBuf::from("src/bad.rs")); // no source configured -> read fails
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), Some(0.0)).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    assert_eq!(
+        graph.aggregated_metrics().total_economic_impact,
+        None,
+        "precondition: every file failed to measure, there is no aggregate to breach"
+    );
+    let report = graph
+        .threshold_report()
+        .expect("thresholds were configured, evaluate() must still have run");
+    assert!(
+        !report.has_breach(),
+        "an absent (unmeasured) aggregate must never count as a breach, however strict the threshold"
+    );
+}

@@ -1025,3 +1025,55 @@ fn e2e_analyze_impl_only_fixture_reports_measured_functions() {
         json["metrics"]
     );
 }
+
+// US8 slice 1 (issue #8) — AC1/AC3/AC6: `analyze --path <dir> --max-cpu
+// <µ$>` compares the project's aggregate CPU cost against the threshold and
+// prints a warning on a breach, without changing the exit code (--strict is
+// T2 scope).
+//
+// Test List:
+// 1. a maximally strict --max-cpu 0 breaches any real project -> warning
+//    printed, exit 0 (AC1, AC3)
+// 2. no --max-cpu/--max-co2 flags at all -> no warning, unchanged behavior
+//    (AC6)
+
+#[test]
+fn e2e_analyze_path_with_breached_max_cpu_warns_and_still_exits_0() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--max-cpu", "0"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected even on a breach (non-strict, AC3). stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("SEUIL") && stdout.contains("CPU"),
+        "expected a threshold breach warning naming CPU, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_path_without_threshold_flags_shows_no_warning() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exit 0 expected");
+    assert!(
+        !stdout.contains("SEUIL"),
+        "no threshold was configured (AC6): output must be unchanged, got: {}",
+        stdout
+    );
+}

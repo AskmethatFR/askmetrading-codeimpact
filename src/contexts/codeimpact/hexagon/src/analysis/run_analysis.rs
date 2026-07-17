@@ -143,16 +143,19 @@ impl RunAnalysis {
     /// gate against `build_project_graph`'s output.
     fn gate_project(
         graph: FileConsumptionGraph,
-        _thresholds: &AlertThresholds,
+        thresholds: &AlertThresholds,
     ) -> FileConsumptionGraph {
-        // TODO(#8 slice 1, next cycle): evaluate `_thresholds` against the
-        // graph's aggregated economic/ecological impact and attach the
-        // resulting `ThresholdReport` via `with_threshold_report`. Left as
-        // a pass-through for this compile-boundary commit (signature
-        // threading only, AlertThresholds::none() reproduces prior
-        // behavior exactly) so the real gating logic gets its own
-        // RED->GREEN cycle.
-        graph
+        let aggregated = graph.aggregated_metrics();
+        let cpu = aggregated
+            .total_economic_impact
+            .as_ref()
+            .map(|e| e.cpu_cost_microdollars());
+        let co2 = aggregated
+            .total_ecological_impact
+            .as_ref()
+            .map(|e| e.co2_grams());
+        let report = thresholds.evaluate(cpu, co2);
+        graph.with_threshold_report(report)
     }
 
     fn set_file_paths(metrics: CodeMetrics, path: &Path) -> CodeMetrics {

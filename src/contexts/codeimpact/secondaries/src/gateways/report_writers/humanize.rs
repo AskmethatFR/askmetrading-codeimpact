@@ -1,4 +1,6 @@
+use codeimpact_hexagon::analysis::BreachedMetric;
 use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
+use codeimpact_hexagon::analysis::ThresholdReport;
 
 /// Formats a micro-dollar amount as a display string (US7 T2 slice R).
 ///
@@ -37,6 +39,36 @@ pub fn format_energy(joules: f64) -> String {
         format!("{:.1} kJ ({:.4} kWh)", joules / 1000.0, kwh)
     } else {
         format!("{:.1} J ({:.6} kWh)", joules, kwh)
+    }
+}
+
+/// Renders a human-readable threshold-breach warning (US8, AD-3): the ONE
+/// shared source of the "which threshold(s), by how much" phrasing —
+/// console, JSON's embedded message, HTML's banner and the CLI's `--strict`
+/// exit message (main.rs) all call this instead of re-deriving their own
+/// text. Returns an empty string when there is nothing to report — callers
+/// are expected to only print/embed a non-empty result.
+pub fn render_threshold_warning(report: &ThresholdReport) -> String {
+    if !report.has_breach() {
+        return String::new();
+    }
+    let mut lines = vec!["=== Alertes de seuils ===".to_string()];
+    for breach in report.breaches() {
+        lines.push(format!(
+            "[SEUIL DÉPASSÉ] {} — limite: {}, mesuré: {}, dépassement: {}",
+            breach.metric().label(),
+            format_metric_value(breach.metric(), breach.limit()),
+            format_metric_value(breach.metric(), breach.actual()),
+            format_metric_value(breach.metric(), breach.excess()),
+        ));
+    }
+    lines.join("\n")
+}
+
+fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
+    match metric {
+        BreachedMetric::Cpu => format_dollars(value),
+        BreachedMetric::Co2 => format!("{:.1} g", value),
     }
 }
 

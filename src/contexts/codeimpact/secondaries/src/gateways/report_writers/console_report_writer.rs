@@ -10,7 +10,7 @@ use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
-use super::humanize::{format_dollars, format_energy, format_memory};
+use super::humanize::{format_dollars, format_energy, format_memory, render_threshold_warning};
 
 const KB_TO_MB: f64 = 1024.0;
 const MB_TO_GB: f64 = 1024.0;
@@ -377,6 +377,16 @@ impl ConsoleReportWriter {
             )
             .unwrap();
             writeln!(writer, "Classe: {}", ecological.efficiency_class().label()).unwrap();
+        }
+
+        // US8 — AD-3: the ONE shared renderer, only when there IS a breach
+        // to report (render_threshold_warning returns "" otherwise, and a
+        // graph that never had thresholds evaluated carries None at all).
+        if let Some(report) = graph.threshold_report() {
+            if report.has_breach() {
+                writeln!(writer).unwrap();
+                writeln!(writer, "{}", render_threshold_warning(report)).unwrap();
+            }
         }
 
         writeln!(writer, "==============================").unwrap();
