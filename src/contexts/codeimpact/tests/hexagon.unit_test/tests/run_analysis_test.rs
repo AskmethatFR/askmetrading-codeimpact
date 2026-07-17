@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
@@ -36,6 +37,7 @@ fn analyze_project_target_returns_ok() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok(), "project target should return Ok(())");
 }
@@ -65,6 +67,7 @@ fn analyze_valid_file_writes_metrics() {
         .handle(
             &make_target("test.rs"),
             &[AnalysisRule::CyclomaticComplexity],
+            &AlertThresholds::none(),
         )
         .expect("analysis should succeed");
 
@@ -83,6 +86,7 @@ fn analyze_nonexistent_file_returns_error() {
     let result = use_case.handle(
         &make_target("nonexistent.rs"),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     match result {
         Err(AnalysisError::IoError(_)) => {}
@@ -137,6 +141,7 @@ fn analyze_project_target_writes_per_file_report() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -169,6 +174,7 @@ fn parser_error_propagates_through_use_case() {
     let result = use_case.handle(
         &make_target("bad.rs"),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     match result {
         Err(AnalysisError::AnalysisFailed(_)) => {}
@@ -200,6 +206,7 @@ fn handle_project_continues_on_read_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -235,6 +242,7 @@ fn handle_project_continues_on_parse_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -278,6 +286,7 @@ fn handle_project_continues_on_deps_parse_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(
         result.is_ok(),
@@ -328,6 +337,7 @@ fn handle_project_records_unreadable_file_as_unmeasurable() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok());
 
@@ -375,6 +385,7 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok());
 
@@ -434,6 +445,7 @@ fn project_with_oversized_file_marks_it_source_too_large() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
+        &AlertThresholds::none(),
     );
     assert!(result.is_ok());
 

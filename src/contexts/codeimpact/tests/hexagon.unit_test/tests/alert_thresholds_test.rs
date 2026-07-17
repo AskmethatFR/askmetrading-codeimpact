@@ -113,7 +113,12 @@ fn non_finite_thresholds_are_rejected() {
     ];
     for (cpu, co2) in cases {
         let result = AlertThresholds::new(cpu, co2);
-        assert!(result.is_err(), "cpu={:?} co2={:?} must be rejected", cpu, co2);
+        assert!(
+            result.is_err(),
+            "cpu={:?} co2={:?} must be rejected",
+            cpu,
+            co2
+        );
     }
 }
 

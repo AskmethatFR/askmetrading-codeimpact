@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::OutputFormat;
@@ -31,6 +32,12 @@ enum Commands {
         format: String,
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
+        /// Alert threshold (US8): max acceptable aggregate CPU cost, μ$.
+        #[arg(long = "max-cpu")]
+        max_cpu: Option<f64>,
+        /// Alert threshold (US8): max acceptable aggregate CO2, grams.
+        #[arg(long = "max-co2")]
+        max_co2: Option<f64>,
     },
     StressTest {
         #[arg(long)]
@@ -47,7 +54,17 @@ fn main() {
             path,
             format,
             output,
+            max_cpu,
+            max_co2,
         } => {
+            let thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("erreur: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
             let file_path = match (file, path) {
                 (Some(f), None) | (None, Some(f)) => f.clone(),
                 (Some(_), Some(_)) => {
@@ -98,7 +115,7 @@ fn main() {
                     let writer = ConsoleReportWriter::new();
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-                    match use_case.handle(&target, rules) {
+                    match use_case.handle(&target, rules, &thresholds) {
                         Ok(()) => std::process::exit(0),
                         Err(e) => {
                             eprintln!("erreur: {}", e);

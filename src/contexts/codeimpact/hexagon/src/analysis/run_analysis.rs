@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use super::alert_thresholds::AlertThresholds;
 use super::analysis_rule::AnalysisRule;
 use super::analysis_target::{AnalysisTarget, TargetType};
 use super::code_location::CodeLocation;
@@ -34,13 +35,19 @@ impl RunAnalysis {
         }
     }
 
+    /// `thresholds` (US8): evaluated only on the project path today (slice
+    /// 1 scope) — a single-file target ignores it (T3 extends the gate to
+    /// `CodeMetrics`). `AlertThresholds::none()` reproduces the pre-US8
+    /// behavior exactly (AC6): `evaluate` against no configured threshold
+    /// never breaches.
     pub fn handle(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
+        thresholds: &AlertThresholds,
     ) -> Result<(), AnalysisError> {
         if *target.target_type() == TargetType::Project {
-            return self.handle_project(target, rules);
+            return self.handle_project(target, rules, thresholds);
         }
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
@@ -53,6 +60,7 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
+        thresholds: &AlertThresholds,
     ) -> Result<(), AnalysisError> {
         let files = self.code_reader.list_rust_files(target.path())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
@@ -125,7 +133,26 @@ impl RunAnalysis {
 
         let graph =
             FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
+        let graph = Self::gate_project(graph, thresholds);
         self.reporter.write_project_report(&graph)
+    }
+
+    /// Evaluates the project's aggregate CPU/CO2 impact against `thresholds`
+    /// and attaches the outcome to the graph (US8 AD-1/AD-3). Pulled out of
+    /// `handle_project` because slice 3 (JSON/HTML) reuses the identical
+    /// gate against `build_project_graph`'s output.
+    fn gate_project(
+        graph: FileConsumptionGraph,
+        _thresholds: &AlertThresholds,
+    ) -> FileConsumptionGraph {
+        // TODO(#8 slice 1, next cycle): evaluate `_thresholds` against the
+        // graph's aggregated economic/ecological impact and attach the
+        // resulting `ThresholdReport` via `with_threshold_report`. Left as
+        // a pass-through for this compile-boundary commit (signature
+        // threading only, AlertThresholds::none() reproduces prior
+        // behavior exactly) so the real gating logic gets its own
+        // RED->GREEN cycle.
+        graph
     }
 
     fn set_file_paths(metrics: CodeMetrics, path: &Path) -> CodeMetrics {

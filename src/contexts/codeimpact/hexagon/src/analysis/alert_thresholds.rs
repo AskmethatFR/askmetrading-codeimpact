@@ -21,10 +21,18 @@ impl std::fmt::Display for ThresholdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidCpuThreshold(v) => {
-                write!(f, "seuil CPU invalide: {} (doit être un nombre fini >= 0)", v)
+                write!(
+                    f,
+                    "seuil CPU invalide: {} (doit être un nombre fini >= 0)",
+                    v
+                )
             }
             Self::InvalidCo2Threshold(v) => {
-                write!(f, "seuil CO2 invalide: {} (doit être un nombre fini >= 0)", v)
+                write!(
+                    f,
+                    "seuil CO2 invalide: {} (doit être un nombre fini >= 0)",
+                    v
+                )
             }
         }
     }
