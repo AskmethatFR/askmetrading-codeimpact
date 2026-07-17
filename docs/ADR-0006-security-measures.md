@@ -27,8 +27,8 @@ Le CLI lit des fichiers sur le filesystem. Risques: path traversal, fichier imme
 
 Quand `.codeimpact.json` sert de **gate CI dur** (`--strict`, exit 3, [[ADR-0017]]), le fichier est **self-configurable par le dépôt analysé** : un contributeur peut, dans la même PR, relever son propre seuil pour faire passer le build.
 
-- **Rayon d'action étroit.** Le fichier n'expose que **deux champs f64 validés** (`max_cpu_microdollars`, `max_co2_grams`) ; aucun path traversal, aucune injection, aucune exécution possible via ce fichier (§ point 6 ci-dessus). La seule « attaque » est de desserrer son propre garde-fou.
-- **Remédiation opérationnelle, pas code.** Couvrir `.codeimpact.json` par **CODEOWNERS / branch protection**, ou faire passer la CI des flags **`--max-cpu`/`--max-co2` explicites** — qui **surclassent** le fichier par métrique ([[ADR-0017]] §5). Même schéma accepté que `.eslintrc` / `codecov.yml` : un fichier de config versionné est de confiance au niveau du contrôle d'accès au dépôt, pas au niveau du code.
+- **Rayon d'action étroit.** Le fichier n'expose que **deux champs f64 validés** (`max_energy_kwh`, `max_co2_grams`) ; aucun path traversal, aucune injection, aucune exécution possible via ce fichier (§ point 6 ci-dessus). La seule « attaque » est de desserrer son propre garde-fou.
+- **Remédiation opérationnelle, pas code.** Couvrir `.codeimpact.json` par **CODEOWNERS / branch protection**, ou faire passer la CI des flags **`--max-kwh`/`--max-co2` explicites** — qui **surclassent** le fichier par métrique ([[ADR-0017]] §5). Même schéma accepté que `.eslintrc` / `codecov.yml` : un fichier de config versionné est de confiance au niveau du contrôle d'accès au dépôt, pas au niveau du code.
 - **Résiduel accepté.** Aucune contre-mesure code n'est ajoutée : la surface est trop étroite et la remédiation opérationnelle est le pattern standard de l'écosystème.
 
 ## Consequences

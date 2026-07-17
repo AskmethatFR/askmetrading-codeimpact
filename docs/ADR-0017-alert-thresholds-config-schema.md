@@ -8,7 +8,7 @@
 
 ## Contexte
 
-US8 veut donner à l'utilisateur un moyen de dire *« au-delà de tel coût CPU ou de tel CO2, échoue »* — un garde-fou activable en CI. Trois forces cadrent la décision :
+US8 veut donner à l'utilisateur un moyen de dire *« au-delà de telle énergie ou de tel CO2, échoue »* — un garde-fou activable en CI. Trois forces cadrent la décision :
 
 1. **L'hexagone est zéro-dépendance** ([[ADR-0001]]). Lire un fichier de config (serde_json) ne peut pas entrer dans le domaine.
 2. **L'honnêteté de la mesure est non négociable** ([[ADR-0010]]). Une métrique *non mesurée* (`Unmeasurable` / absente) ne doit **jamais** déclencher une alerte — sinon on fabrique un dépassement confiant à partir d'un trou de mesure.
@@ -27,19 +27,19 @@ Un Value Object `AlertThresholds` porte deux seuils optionnels et une fonction p
 Les entrées d'`evaluate` sont des `Option<f64>`, et la comparaison n'a lieu **que sur `(Some, Some)`** :
 
 ```rust
-if let (Some(limit), Some(actual)) = (self.max_cpu_microdollars, cpu) {
+if let (Some(limit), Some(actual)) = (self.max_energy_kwh, energy_kwh) {
     if actual > limit { /* breach */ }
 }
 ```
 
-Une métrique absente (CPU ou CO2 `Unmeasurable`, [[ADR-0010]]) ne franchit aucun seuil, si bas soit-il : l'absence n'est pas un zéro confiant. L'invariant est épinglé à **trois niveaux** — au VO (`evaluate`), à l'usage (`RunAnalysis` sur cible fichier et projet, `RunStressTest`), et au stress test (un run `Unmeasurable` dérive `(None, None)`, jamais un `0` qui passerait sous le seuil). C'est la transposition exacte d'[[ADR-0010]] au nouveau gate : ne rien affirmer quand on n'a pas mesuré.
+Une métrique absente (énergie ou CO2 `Unmeasurable`, [[ADR-0010]]) ne franchit aucun seuil, si bas soit-il : l'absence n'est pas un zéro confiant. L'invariant est épinglé à **trois niveaux** — au VO (`evaluate`), à l'usage (`RunAnalysis` sur cible fichier et projet, `RunStressTest`), et au stress test (un run `Unmeasurable` dérive `(None, None)`, jamais un `0` qui passerait sous le seuil). C'est la transposition exacte d'[[ADR-0010]] au nouveau gate : ne rien affirmer quand on n'a pas mesuré.
 
 ### 3. Format du fichier = `.codeimpact.json`, lu derrière un port — schéma partagé réservé pour US15
 
 Le fichier de config est du **JSON** (`.codeimpact.json`), lu par serde_json dans `secondaries/` derrière `ConfigReaderPort` (DIP, `ca-ports-adapters`) — l'hexagone ne voit qu'`AlertThresholds` déjà validé, jamais serde. Le schéma **réserve délibérément la place de US15** :
 
 ```json
-{ "thresholds": { "max_cpu_microdollars": 50, "max_co2_grams": 12 } }
+{ "thresholds": { "max_energy_kwh": 0.00001, "max_co2_grams": 12 } }
 ```
 
 - Le désérialiseur ne lit **que** la section `thresholds` ; il est `#[serde(default)]` de bout en bout (fichier vide, section absente, champ absent → tous tolérés) et **tolérant aux clés inconnues** (pas de `deny_unknown_fields`).
@@ -51,13 +51,13 @@ Le fichier de config est du **JSON** (`.codeimpact.json`), lu par serde_json dan
 
 En mode `--strict`, un dépassement fait sortir le process avec **exit code 3** — délibérément distinct de **1** (erreur d'entrée / runtime) et de **2** (code réservé par clap pour une erreur de parsing d'argument). La **décision** appartient au domaine (`ThresholdReport::has_breach`) ; `main.rs::gated_exit_code` ne fait que la **mapper** sur un code process, jamais re-dériver une comparaison. Sans `--strict`, un dépassement est rapporté mais l'exit reste 0.
 
-**Finding épinglé (parsing CLI negative).** `--max-cpu -5` (séparé par une espace) est avalé par clap comme un flag inconnu → exit **2**, la validation VO n'est jamais atteinte. La forme qui atteint `AlertThresholds::new` (et se fait rejeter proprement en exit 1) est `--max-cpu=-5`. Documenté pour que le comportement ne soit pas pris pour un bug.
+**Finding épinglé (parsing CLI negative).** `--max-kwh -5` (séparé par une espace) est avalé par clap comme un flag inconnu → exit **2**, la validation VO n'est jamais atteinte. La forme qui atteint `AlertThresholds::new` (et se fait rejeter proprement en exit 1) est `--max-kwh=-5`. Documenté pour que le comportement ne soit pas pris pour un bug.
 
 `gated_exit_code` : `primaries/src/main.rs`.
 
 ### 5. La CLI l'emporte sur le fichier, par métrique
 
-`AlertThresholds::from_sources(file, cli)` fusionne les deux sources : pour chaque métrique, la valeur CLI gagne quand elle est présente (`cli.or(file)`), sinon la valeur fichier passe. Composition de domaine pure — les deux entrées sont déjà validées, la fusion ne peut donc pas produire un résultat invalide. Conséquence opérationnelle (voir [[ADR-0006]] §6) : passer `--max-cpu`/`--max-co2` explicitement en CI **surclasse** le fichier auto-configurable du dépôt.
+`AlertThresholds::from_sources(file, cli)` fusionne les deux sources : pour chaque métrique, la valeur CLI gagne quand elle est présente (`cli.or(file)`), sinon la valeur fichier passe. Composition de domaine pure — les deux entrées sont déjà validées, la fusion ne peut donc pas produire un résultat invalide. Conséquence opérationnelle (voir [[ADR-0006]] §6) : passer `--max-kwh`/`--max-co2` explicitement en CI **surclasse** le fichier auto-configurable du dépôt.
 
 ### 6. Discipline de sécurité du lecteur de config — miroir de `write_report_file` ([[ADR-0006]])
 
@@ -73,7 +73,7 @@ Le garde de profondeur de récursion par défaut de serde_json (128) borne le Do
 
 ### 7. Périmètre des métriques et de l'agrégation
 
-Métriques gatées : **coût CPU (µ$) et CO2 (g) uniquement**. Le gate évalue l'**agrégat au niveau projet** (une cible mono-fichier utilise l'impact de ce fichier) — **jamais par fonction**. La cible projet passe par `aggregated_metrics`, la cible fichier par l'impact du fichier ; les deux alimentent `evaluate` en `Option<f64>`.
+Métriques gatées : **énergie (kWh) et CO2 (g) uniquement**. Le gate évalue l'**agrégat au niveau projet** (une cible mono-fichier utilise l'impact de ce fichier) — **jamais par fonction**. La cible projet passe par `aggregated_metrics`, la cible fichier par l'impact du fichier ; les deux alimentent `evaluate` en `Option<f64>`.
 
 ### 8. Un seul renderer partagé, un porteur `GatedOutput<T>`
 
@@ -88,7 +88,7 @@ Métriques gatées : **coût CPU (µ$) et CO2 (g) uniquement**. Le gate évalue 
 - **(+)** Le format `.codeimpact.json` accueillera US15 (#31) sans migration cassante — schéma partagé, section réservée, tolérant.
 - **(+)** Trois codes de sortie distincts (1 erreur, 2 clap, 3 breach strict) rendent le gate scriptable en CI ([[ADR-0009]]).
 - **(−)** Le fichier de config est self-configurable par le dépôt analysé — vecteur de confiance documenté et remédié en [[ADR-0006]] §6 (opérationnel : CODEOWNERS / flags CLI explicites).
-- **(−)** `--max-cpu -5` (espace) est intercepté par clap avant notre validation — comportement de clap, documenté (§4), non corrigé.
+- **(−)** `--max-kwh -5` (espace) est intercepté par clap avant notre validation — comportement de clap, documenté (§4), non corrigé.
 
 ## Dette connue, explicitement non traitée
 

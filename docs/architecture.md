@@ -93,7 +93,7 @@ hexagon → rien
 
 ## Alert Thresholds (US8)
 
-Porte de domaine pure `AlertThresholds::evaluate` dans l'hexagone zéro-dep : gate le coût CPU (µ$) et le CO2 (g) agrégés projet contre des seuils venus de la CLI (`--max-cpu`/`--max-co2`) et/ou d'un fichier `.codeimpact.json` (lu derrière `ConfigReaderPort`). `--strict` mappe un dépassement sur exit 3. Une métrique non mesurée (`None`) ne franchit jamais un seuil ([[ADR-0010]]). Design courant : [[alert-thresholds]] ; décision : [[ADR-0017]].
+Porte de domaine pure `AlertThresholds::evaluate` dans l'hexagone zéro-dep : gate l'énergie (kWh) et le CO2 (g) agrégés projet contre des seuils venus de la CLI (`--max-kwh`/`--max-co2`) et/ou d'un fichier `.codeimpact.json` (lu derrière `ConfigReaderPort`). `--strict` mappe un dépassement sur exit 3. Une métrique non mesurée (`None`) ne franchit jamais un seuil ([[ADR-0010]]). Design courant : [[alert-thresholds]] ; décision : [[ADR-0017]].
 
 ## Module structure (actuelle)
 
