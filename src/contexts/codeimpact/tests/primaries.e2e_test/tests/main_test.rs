@@ -1213,6 +1213,124 @@ fn e2e_analyze_single_file_breach_warns_via_console() {
     );
 }
 
+// US8 slice 4 (AC2) — thresholds may come from `.codeimpact.json`; a CLI
+// flag overrides the file value for the same metric.
+
+#[test]
+fn e2e_analyze_reads_threshold_from_config_file() {
+    let binary = binary_path();
+    let dir =
+        std::env::temp_dir().join(format!("codeimpact_e2e_config_file_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").expect("write fixture");
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"thresholds":{"max_cpu_microdollars":0.0}}"#,
+    )
+    .expect("write config");
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--strict"])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "the config file's threshold alone must be enough to breach. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn e2e_analyze_cli_flag_overrides_config_file_value() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_config_override_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").expect("write fixture");
+    // The file alone would breach (max-cpu 0); the CLI flag for the SAME
+    // metric must win and let it through.
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"thresholds":{"max_cpu_microdollars":0.0}}"#,
+    )
+    .expect("write config");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-cpu",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "the CLI flag must override the config file's stricter value for the same metric. \
+         stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn e2e_analyze_explicit_config_flag_is_honored() {
+    let binary = binary_path();
+    let target_dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_explicit_config_target_{}",
+        std::process::id()
+    ));
+    let config_dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_explicit_config_elsewhere_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&target_dir);
+    let _ = std::fs::remove_dir_all(&config_dir);
+    std::fs::create_dir_all(&target_dir).expect("create target dir");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(target_dir.join("good.rs"), "fn good() {}").expect("write fixture");
+    let explicit_config = config_dir.join("thresholds.json");
+    std::fs::write(
+        &explicit_config,
+        r#"{"thresholds":{"max_cpu_microdollars":0.0}}"#,
+    )
+    .expect("write explicit config");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            target_dir.to_str().unwrap(),
+            "--config",
+            explicit_config.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&target_dir);
+    let _ = std::fs::remove_dir_all(&config_dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "an explicit --config path (not next to the target) must still be read. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 #[test]
 fn e2e_analyze_path_strict_without_breach_exits_0() {
     let binary = binary_path();

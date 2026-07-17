@@ -4,12 +4,14 @@ use std::path::PathBuf;
 use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
+use codeimpact_hexagon::analysis::ConfigReaderPort;
 use codeimpact_hexagon::analysis::OutputFormat;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::RunStressTest;
 use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
+use codeimpact_secondaries::gateways::config_readers::file_system_config_reader::FileSystemConfigReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
 use codeimpact_secondaries::gateways::report_writers::humanize::render_threshold_warning;
@@ -42,6 +44,11 @@ enum Commands {
         /// Exit 3 instead of 0 when a threshold is breached (US8 AD-4).
         #[arg(long)]
         strict: bool,
+        /// Explicit path to a .codeimpact.json config file (US8 T4).
+        /// Without it, auto-discovered in the analysis target's directory,
+        /// then the current directory.
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     StressTest {
         #[arg(long)]
@@ -61,8 +68,9 @@ fn main() {
             max_cpu,
             max_co2,
             strict,
+            config,
         } => {
-            let thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
+            let cli_thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("erreur: {}", e);
@@ -102,6 +110,29 @@ fn main() {
             } else {
                 TargetType::File
             };
+
+            // US8 T4: auto-discovery searches the target's own directory
+            // first, then the current directory — a single-file target's
+            // "directory" is its parent.
+            let target_dir = if target_type == TargetType::Project {
+                file_path.clone()
+            } else {
+                file_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let config_reader = FileSystemConfigReader::new();
+            let file_thresholds =
+                match config_reader.read_thresholds(config.as_deref(), &[&target_dir, &cwd]) {
+                    Ok(found) => found.unwrap_or_else(AlertThresholds::none),
+                    Err(e) => {
+                        eprintln!("erreur: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+            let thresholds = AlertThresholds::from_sources(file_thresholds, cli_thresholds);
 
             let target = AnalysisTarget::new(file_path, target_type);
             let is_project = *target.target_type() == TargetType::Project;
