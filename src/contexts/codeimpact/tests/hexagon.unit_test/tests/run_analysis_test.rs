@@ -595,6 +595,51 @@ fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
     );
 }
 
+// Review-barrier fix (Dev-B, energy-swap re-review, issue #8) — the
+// energy_joules() / KWH_TO_JOULES conversion in gate_project was not
+// pinned by any test: every prior threshold was either 0.0 (breaches on
+// any positive value, converted or not) or 1_000_000.0 (never breaches
+// either way) — neither straddles the ~3.6M gap between a raw-joule
+// magnitude (a few J for a trivial file) and its correct kWh conversion
+// (a few 1e-7 kWh). Dev-B proved this by deleting the division and
+// watching the full suite stay green. 0.001 kWh sits strictly between
+// those two magnitudes: with the correct conversion the tiny kWh value
+// never breaches it; if the division were dropped (raw joules fed as
+// kWh), the same threshold WOULD breach. That asymmetry is what makes
+// this test discriminate — verified by literally deleting the division
+// locally and watching this test go red before restoring it.
+#[test]
+fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
+    reader.add_rust_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &thresholds,
+    );
+    assert!(result.is_ok(), "got {:?}", result);
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    let report = graph
+        .threshold_report()
+        .expect("a threshold was configured, evaluate() must have run");
+    assert!(
+        !report.has_breach(),
+        "0.001 kWh must not breach on the correctly-converted tiny kWh value — it WOULD breach \
+         if energy_joules() / KWH_TO_JOULES were dropped and raw joules were fed as kWh instead"
+    );
+}
+
 // AC7 / ADR-0010 honesty, at the use-case level (the VO-level gate is
 // already pinned directly in alert_thresholds_test.rs): when every file in
 // the project failed to measure, aggregated_metrics().total_ecological_impact
@@ -699,6 +744,35 @@ fn handle_single_file_with_breached_threshold_returns_a_breaching_report() {
             .expect("evaluate() must have run and attached a report")
             .has_breach(),
         "the report must also be attached to the metrics passed to the writer"
+    );
+}
+
+// Review-barrier fix (Dev-B, energy-swap re-review, issue #8) — the
+// single-file twin of gate_project's discrimination gap: gate_metrics
+// carries its OWN copy of the energy_joules() / KWH_TO_JOULES conversion,
+// unpinned for the same reason (every prior single-file threshold test
+// used 0.0). Same 0.001 kWh discriminator, same asymmetry.
+#[test]
+fn handle_single_file_energy_threshold_discriminates_joules_from_kwh() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+
+    let gated = use_case
+        .handle(
+            &make_target("test.rs"),
+            &[AnalysisRule::CyclomaticComplexity],
+            &thresholds,
+        )
+        .expect("analysis should succeed");
+
+    assert!(
+        !gated.thresholds().has_breach(),
+        "0.001 kWh must not breach on the correctly-converted tiny kWh value — it WOULD breach \
+         if energy_joules() / KWH_TO_JOULES were dropped and raw joules were fed as kWh instead"
     );
 }
 

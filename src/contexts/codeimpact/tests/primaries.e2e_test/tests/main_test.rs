@@ -589,6 +589,33 @@ fn e2e_analyze_invalid_format_errors() {
     );
 }
 
+// US8 (QA re-review sweep, energy swap, issue #8) — the removed --max-cpu
+// flag must actually be gone from the CLI surface, not merely renamed in
+// intent. clap rejects it as an unrecognized argument (exit 2, its own
+// reserved arg-parse code — distinct from our exit 1 validation errors).
+#[test]
+fn e2e_analyze_old_max_cpu_flag_is_rejected() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "0"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the removed --max-cpu flag must be rejected by clap itself. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("--max-cpu"),
+        "stderr should name the unrecognized flag, got: {}",
+        stderr
+    );
+}
+
 // US8 (QA review sweep, issue #8) — CLI-relay error branches: an invalid
 // --max-kwh/--max-co2 value or an unreadable --config path must be relayed
 // as a real process failure (exit 1, "erreur: ..." on stderr), not silently

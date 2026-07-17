@@ -183,6 +183,32 @@ fn run_stress_test_with_breached_energy_threshold_returns_a_breaching_report() {
     );
 }
 
+// Review-barrier fix (Dev-B, energy-swap re-review, issue #8) — handle's
+// own copy of the energy_joules() / KWH_TO_JOULES conversion was unpinned
+// for the same reason as gate_project/gate_metrics: every prior stress-
+// test threshold was 0.0. make_run()'s 1200ms CPU time yields ~33.3
+// microdollars -> ~120 raw joules -> ~0.0000333 kWh correctly converted.
+// 0.001 kWh sits strictly between those two magnitudes: with the correct
+// conversion it never breaches; if the division were dropped (raw joules
+// fed as kWh), it WOULD.
+#[test]
+fn run_stress_test_energy_threshold_discriminates_joules_from_kwh() {
+    let runner = TestRunnerStub::new(Ok(make_run()));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+
+    let gated = use_case
+        .handle(None, &thresholds)
+        .expect("stress test should succeed");
+
+    assert!(
+        !gated.thresholds().has_breach(),
+        "0.001 kWh must not breach on the correctly-converted tiny kWh value — it WOULD breach \
+         if energy_joules() / KWH_TO_JOULES were dropped and raw joules were fed as kWh instead"
+    );
+}
+
 #[test]
 fn run_stress_test_unmeasurable_run_never_breaches_despite_strict_threshold() {
     let unmeasurable_run = StressTestRun::new(
