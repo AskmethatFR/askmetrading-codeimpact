@@ -435,15 +435,15 @@ fn write_project_report_no_unmeasurable_files_does_not_show_section() {
 #[test]
 fn write_console_breaching_threshold_report_shows_warning_with_the_numbers() {
     let writer = ConsoleReportWriter::new();
-    let thresholds = AlertThresholds::new(Some(10.0), None).unwrap();
-    let report = thresholds.evaluate(Some(15.0), None);
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.000015), None);
     let metrics = CodeMetrics::new(5).with_threshold_report(report);
     let mut buf = Vec::new();
     writer.write_console_to(&mut buf, &metrics);
     let output = String::from_utf8(buf).unwrap();
 
     assert!(
-        output.contains("SEUIL") && output.contains("CPU"),
+        output.contains("SEUIL") && output.contains("ÉNERGIE"),
         "a breach must print a warning section, got: {}",
         output
     );
@@ -484,8 +484,8 @@ fn write_project_report_without_a_threshold_report_shows_no_warning() {
 fn write_project_report_non_breaching_threshold_report_shows_no_warning() {
     let writer = ConsoleReportWriter::new();
     let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
-    let thresholds = AlertThresholds::new(Some(1_000_000.0), None).unwrap();
-    let report = thresholds.evaluate(Some(1.0), None);
+    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
+    let report = thresholds.evaluate(Some(0.0000065), None);
     let graph = FileConsumptionGraph::build(&files, vec![])
         .unwrap()
         .with_threshold_report(report);
@@ -504,8 +504,8 @@ fn write_project_report_non_breaching_threshold_report_shows_no_warning() {
 fn write_project_report_breaching_threshold_report_shows_warning_with_the_numbers() {
     let writer = ConsoleReportWriter::new();
     let files = vec![(path("src/good.rs"), CodeMetrics::new(5))];
-    let thresholds = AlertThresholds::new(Some(10.0), None).unwrap();
-    let report = thresholds.evaluate(Some(15.0), None);
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.000015), None);
     let graph = FileConsumptionGraph::build(&files, vec![])
         .unwrap()
         .with_threshold_report(report);
@@ -519,7 +519,7 @@ fn write_project_report_breaching_threshold_report_shows_warning_with_the_number
         output
     );
     assert!(
-        output.contains("CPU"),
+        output.contains("ÉNERGIE"),
         "the warning must name the breached metric, got: {}",
         output
     );

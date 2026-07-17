@@ -35,9 +35,9 @@ enum Commands {
         format: String,
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
-        /// Alert threshold (US8): max acceptable aggregate CPU cost, μ$.
-        #[arg(long = "max-cpu")]
-        max_cpu: Option<f64>,
+        /// Alert threshold (US8): max acceptable aggregate energy, kWh.
+        #[arg(long = "max-kwh")]
+        max_kwh: Option<f64>,
         /// Alert threshold (US8): max acceptable aggregate CO2, grams.
         #[arg(long = "max-co2")]
         max_co2: Option<f64>,
@@ -53,9 +53,9 @@ enum Commands {
     StressTest {
         #[arg(long)]
         filter: Option<String>,
-        /// Alert threshold (US8 T5): max acceptable CPU cost, μ$.
-        #[arg(long = "max-cpu")]
-        max_cpu: Option<f64>,
+        /// Alert threshold (US8 T5): max acceptable energy, kWh.
+        #[arg(long = "max-kwh")]
+        max_kwh: Option<f64>,
         /// Alert threshold (US8 T5): max acceptable CO2, grams.
         #[arg(long = "max-co2")]
         max_co2: Option<f64>,
@@ -77,12 +77,12 @@ fn main() {
             path,
             format,
             output,
-            max_cpu,
+            max_kwh,
             max_co2,
             strict,
             config,
         } => {
-            let cli_thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
+            let cli_thresholds = match AlertThresholds::new(*max_kwh, *max_co2) {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("erreur: {}", e);
@@ -247,7 +247,7 @@ fn main() {
         }
         Commands::StressTest {
             filter,
-            max_cpu,
+            max_kwh,
             max_co2,
             strict,
             config,
@@ -257,7 +257,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            let cli_thresholds = match AlertThresholds::new(*max_cpu, *max_co2) {
+            let cli_thresholds = match AlertThresholds::new(*max_kwh, *max_co2) {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("erreur: {}", e);

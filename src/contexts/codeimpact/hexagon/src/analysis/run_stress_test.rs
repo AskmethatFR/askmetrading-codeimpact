@@ -20,9 +20,12 @@ impl RunStressTest {
     }
 
     /// `thresholds` (US8 T5): the same gate as `RunAnalysis`, reusing the
-    /// existing `Measurement<EconomicImpact>` — an `Unmeasurable` run
-    /// derives `(None, None)`, which `evaluate` honestly never breaches
-    /// (ADR-0010), same shape as an unmeasured file/project.
+    /// existing `Measurement<EconomicImpact>` to derive the SAME
+    /// `Option<EcologicalImpact>` both energy and CO2 come from (change
+    /// request on issue #8: energy, not CPU cost, is the first gated
+    /// metric). An `Unmeasurable` run derives `(None, None)`, which
+    /// `evaluate` honestly never breaches (ADR-0010), same shape as an
+    /// unmeasured file/project.
     pub fn handle(
         &self,
         filter: Option<&str>,
@@ -31,15 +34,17 @@ impl RunStressTest {
         let run = self.test_runner.run_tests(filter)?;
         let impact = ReactiveAnalyzer::analyze(&run);
         let economic = impact.clone().available();
-        let cpu = economic.as_ref().map(|e| e.cpu_cost_microdollars());
-        let co2 = economic.map(|e| {
+        let ecological = economic.map(|e| {
             EcologicalImpactEstimator::estimate(
                 &e,
                 EcologicalImpactEstimator::DEFAULT_CO2_G_PER_KWH,
             )
-            .co2_grams()
         });
-        let report = thresholds.evaluate(cpu, co2);
+        let energy_kwh = ecological
+            .as_ref()
+            .map(|e| e.energy_joules() / EcologicalImpactEstimator::KWH_TO_JOULES);
+        let co2 = ecological.map(|e| e.co2_grams());
+        let report = thresholds.evaluate(energy_kwh, co2);
         self.reporter.write_stress_test(&run, &impact)?;
         Ok(GatedOutput::new((), report))
     }

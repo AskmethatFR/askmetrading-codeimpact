@@ -355,8 +355,8 @@ fn project_json_sums_unclassifiable_io_in_loops_count_across_files() {
 #[test]
 fn json_writer_includes_thresholds_object_with_a_breach() {
     let writer = JsonReportWriter::new();
-    let thresholds = AlertThresholds::new(Some(10.0), None).unwrap();
-    let report = thresholds.evaluate(Some(15.0), None);
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.000015), None);
     let metrics = CodeMetrics::new(5).with_threshold_report(report);
 
     let json_str = writer
@@ -369,10 +369,10 @@ fn json_writer_includes_thresholds_object_with_a_breach() {
         .as_array()
         .expect("breaches should be an array");
     assert_eq!(breaches.len(), 1);
-    assert_eq!(breaches[0]["metric"], "CPU");
-    assert_eq!(breaches[0]["limit"], 10.0);
-    assert_eq!(breaches[0]["actual"], 15.0);
-    assert_eq!(breaches[0]["excess"], 5.0);
+    assert_eq!(breaches[0]["metric"], "ÉNERGIE");
+    assert_eq!(breaches[0]["limit"], 0.00001);
+    assert_eq!(breaches[0]["actual"], 0.000015);
+    assert!((breaches[0]["excess"].as_f64().unwrap() - 0.000005).abs() < 1e-12);
     assert!(
         !json["metrics"]["thresholds"]["message"]
             .as_str()
@@ -407,8 +407,8 @@ fn json_writer_no_threshold_report_shows_no_breach_and_empty_array() {
 fn project_json_writer_includes_thresholds_object_with_a_breach() {
     let writer = JsonReportWriter::new();
     let files = vec![(PathBuf::from("a.rs"), CodeMetrics::new(5))];
-    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
-    let report = thresholds.evaluate(Some(5.0), None);
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.00002), None);
     let graph = FileConsumptionGraph::build(&files, vec![])
         .unwrap()
         .with_threshold_report(report);
@@ -421,6 +421,6 @@ fn project_json_writer_includes_thresholds_object_with_a_breach() {
     assert_eq!(json["metrics"]["thresholds"]["has_breach"], true);
     assert_eq!(
         json["metrics"]["thresholds"]["breaches"][0]["metric"],
-        "CPU"
+        "ÉNERGIE"
     );
 }

@@ -29,7 +29,7 @@ struct CodeImpactConfig {
 #[derive(serde::Deserialize, Default)]
 struct ThresholdsSection {
     #[serde(default)]
-    max_cpu_microdollars: Option<f64>,
+    max_energy_kwh: Option<f64>,
     #[serde(default)]
     max_co2_grams: Option<f64>,
 }
@@ -88,7 +88,7 @@ impl FileSystemConfigReader {
             .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_JSON.to_string()))?;
 
         let section = config.thresholds.unwrap_or_default();
-        AlertThresholds::new(section.max_cpu_microdollars, section.max_co2_grams)
+        AlertThresholds::new(section.max_energy_kwh, section.max_co2_grams)
             .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))
     }
 }

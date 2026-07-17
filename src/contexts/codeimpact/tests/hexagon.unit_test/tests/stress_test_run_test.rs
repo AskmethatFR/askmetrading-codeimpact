@@ -157,16 +157,17 @@ fn run_stress_test_invokes_runner_and_writer() {
 }
 
 // US8 slice 5 (T5) — the stress-test threshold gate reuses the same
-// AlertThresholds::evaluate gate as RunAnalysis, deriving cpu/co2 from the
-// existing Measurement<EconomicImpact>.
+// AlertThresholds::evaluate gate as RunAnalysis, deriving energy(kWh)/co2
+// from the existing Measurement<EconomicImpact> (change request on issue
+// #8: energy replaces CPU cost as the gate's first metric).
 //
 // Test List:
-// 1. a breaching cpu threshold -> the returned GatedOutput has_breach
+// 1. a breaching energy threshold -> the returned GatedOutput has_breach
 // 2. an Unmeasurable run (ADR-0010) -> never a breach, however strict
 // 3. no thresholds configured -> no breach (AC6 regression)
 
 #[test]
-fn run_stress_test_with_breached_cpu_threshold_returns_a_breaching_report() {
+fn run_stress_test_with_breached_energy_threshold_returns_a_breaching_report() {
     let runner = TestRunnerStub::new(Ok(make_run()));
     let writer = SharedReportWriterStub::new();
     let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
@@ -178,7 +179,7 @@ fn run_stress_test_with_breached_cpu_threshold_returns_a_breaching_report() {
 
     assert!(
         gated.thresholds().has_breach(),
-        "a zero cpu threshold must breach any measured run's positive cost"
+        "a zero kWh threshold must breach any measured run's positive energy"
     );
 }
 

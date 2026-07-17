@@ -7,6 +7,7 @@ use super::code_location::CodeLocation;
 use super::code_metrics::CodeMetrics;
 use super::code_parser::CodeParser;
 use super::code_reader::CodeReader;
+use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
 use super::file_consumption_graph::{
     resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile,
@@ -142,35 +143,39 @@ impl RunAnalysis {
         Ok(GatedOutput::new((), report))
     }
 
-    /// Evaluates the project's aggregate CPU/CO2 impact against `thresholds`
-    /// and attaches the outcome to the graph (US8 AD-1/AD-3). Pulled out of
-    /// `handle_project` because slice 3 (JSON/HTML) reuses the identical
-    /// gate against `build_project_graph`'s output.
+    /// Evaluates the project's aggregate energy (kWh)/CO2 impact against
+    /// `thresholds` and attaches the outcome to the graph (US8 AD-1/AD-3).
+    /// Both metrics are derived from the SAME `Option<EcologicalImpact>`
+    /// aggregate (change request on issue #8: energy replaces CPU cost as
+    /// the first gated metric — `energy_joules() / KWH_TO_JOULES` recovers
+    /// the kWh value `EcologicalImpactEstimator::estimate` originally
+    /// derived it from). Pulled out of `handle_project` because slice 3
+    /// (JSON/HTML) reuses the identical gate against
+    /// `build_project_graph`'s output.
     fn gate_project(
         graph: FileConsumptionGraph,
         thresholds: &AlertThresholds,
     ) -> FileConsumptionGraph {
-        let aggregated = graph.aggregated_metrics();
-        let cpu = aggregated
-            .total_economic_impact
+        let ecological = graph.aggregated_metrics().total_ecological_impact;
+        let energy_kwh = ecological
             .as_ref()
-            .map(|e| e.cpu_cost_microdollars());
-        let co2 = aggregated
-            .total_ecological_impact
-            .as_ref()
-            .map(|e| e.co2_grams());
-        let report = thresholds.evaluate(cpu, co2);
+            .map(|e| e.energy_joules() / EcologicalImpactEstimator::KWH_TO_JOULES);
+        let co2 = ecological.as_ref().map(|e| e.co2_grams());
+        let report = thresholds.evaluate(energy_kwh, co2);
         graph.with_threshold_report(report)
     }
 
-    /// Evaluates a single file's own economic/ecological impact against
+    /// Evaluates a single file's own energy (kWh)/CO2 impact against
     /// `thresholds` (US8 T3) — the single-file twin of `gate_project`,
-    /// same shape, same gate (`AlertThresholds::evaluate`), different
-    /// data-carrier (`CodeMetrics` rather than `FileConsumptionGraph`).
+    /// same shape, same gate (`AlertThresholds::evaluate`), same single
+    /// `Option<EcologicalImpact>` source, different data-carrier
+    /// (`CodeMetrics` rather than `FileConsumptionGraph`).
     fn gate_metrics(metrics: CodeMetrics, thresholds: &AlertThresholds) -> CodeMetrics {
-        let cpu = metrics.economic_impact().map(|e| e.cpu_cost_microdollars());
-        let co2 = metrics.ecological_impact().map(|e| e.co2_grams());
-        let report = thresholds.evaluate(cpu, co2);
+        let ecological = metrics.ecological_impact();
+        let energy_kwh =
+            ecological.map(|e| e.energy_joules() / EcologicalImpactEstimator::KWH_TO_JOULES);
+        let co2 = ecological.map(|e| e.co2_grams());
+        let report = thresholds.evaluate(energy_kwh, co2);
         metrics.with_threshold_report(report)
     }
 

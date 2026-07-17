@@ -1272,8 +1272,8 @@ fn write_html_neutralizes_script_breakout_payload_in_unmeasurable_path() {
 #[test]
 fn write_html_surfaces_threshold_breach_in_the_data_island() {
     let writer = HtmlReportWriter::new();
-    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
-    let report = thresholds.evaluate(Some(5.0), None);
+    let thresholds = AlertThresholds::new(Some(0.00001), None).unwrap();
+    let report = thresholds.evaluate(Some(0.00002), None);
     let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]).with_threshold_report(report);
 
     let html = writer
@@ -1281,7 +1281,11 @@ fn write_html_surfaces_threshold_breach_in_the_data_island() {
         .expect("write_html should succeed");
 
     assert!(html.contains(r#""has_breach":true"#), "got: {}", html);
-    assert!(html.contains(r#""metric":"CPU""#), "got: {}", html);
+    assert!(
+        html.contains("ÉNERGIE"),
+        "expected the energy metric label in the data island, got: {}",
+        html
+    );
 }
 
 #[test]

@@ -522,9 +522,10 @@ fn project_json_marks_oversized_file_source_too_large() {
 }
 
 // US8 slice 1 — the calling use case for AlertThresholds::evaluate (AD-1):
-// handle_project evaluates the project's aggregate CPU/CO2 impact against
-// the configured thresholds and attaches the outcome to the graph so the
-// console writer can render it (AD-3).
+// handle_project evaluates the project's aggregate energy/CO2 impact
+// against the configured thresholds and attaches the outcome to the graph
+// so the console writer can render it (AD-3). Change request on issue #8:
+// energy replaces CPU cost as the gate's first metric.
 //
 // Test List:
 // 1. a maximally strict threshold (0.0) breaches — any measured project has
@@ -533,7 +534,7 @@ fn project_json_marks_oversized_file_source_too_large() {
 //    (Some(..), not None) — evaluation happened, it simply found nothing
 
 #[test]
-fn handle_project_with_breached_cpu_threshold_attaches_a_breaching_report() {
+fn handle_project_with_breached_energy_threshold_attaches_a_breaching_report() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
     reader.add_rust_file(PathBuf::from("src/main.rs"));
@@ -559,7 +560,7 @@ fn handle_project_with_breached_cpu_threshold_attaches_a_breaching_report() {
         .expect("a threshold was configured, evaluate() must have run");
     assert!(
         report.has_breach(),
-        "a zero cpu threshold must breach any measured project's positive base cost"
+        "a zero kWh threshold must breach any measured project's positive base energy"
     );
 }
 
@@ -596,7 +597,7 @@ fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
 
 // AC7 / ADR-0010 honesty, at the use-case level (the VO-level gate is
 // already pinned directly in alert_thresholds_test.rs): when every file in
-// the project failed to measure, aggregated_metrics().total_economic_impact
+// the project failed to measure, aggregated_metrics().total_ecological_impact
 // is None (D3, #50) — evaluate() must receive None, not a fabricated 0, and
 // must therefore never report a breach even with a maximally strict
 // threshold configured.
@@ -622,7 +623,7 @@ fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_thr
         .as_ref()
         .expect("write_project_report should have been called");
     assert_eq!(
-        graph.aggregated_metrics().total_economic_impact,
+        graph.aggregated_metrics().total_ecological_impact,
         None,
         "precondition: every file failed to measure, there is no aggregate to breach"
     );
@@ -686,7 +687,7 @@ fn handle_single_file_with_breached_threshold_returns_a_breaching_report() {
 
     assert!(
         gated.thresholds().has_breach(),
-        "a zero cpu threshold must breach any measured file's positive base cost"
+        "a zero kWh threshold must breach any measured file's positive base energy"
     );
     let metrics = writer.last_metrics.lock().unwrap();
     let metrics = metrics

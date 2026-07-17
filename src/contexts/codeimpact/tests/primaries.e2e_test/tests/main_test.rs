@@ -405,7 +405,7 @@ fn e2e_stress_test_help_shows_threshold_flags() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "exit 0 expected");
-    for flag in ["--max-cpu", "--max-co2", "--strict", "--config"] {
+    for flag in ["--max-kwh", "--max-co2", "--strict", "--config"] {
         assert!(
             stdout.contains(flag),
             "stress-test help should show {}: {}",
@@ -590,7 +590,7 @@ fn e2e_analyze_invalid_format_errors() {
 }
 
 // US8 (QA review sweep, issue #8) — CLI-relay error branches: an invalid
-// --max-cpu/--max-co2 value or an unreadable --config path must be relayed
+// --max-kwh/--max-co2 value or an unreadable --config path must be relayed
 // as a real process failure (exit 1, "erreur: ..." on stderr), not silently
 // swallowed or accepted. Same shape as e2e_analyze_invalid_format_errors/
 // e2e_analyze_nonexistent_file_exits_1 above — this is characterization
@@ -601,20 +601,20 @@ fn e2e_analyze_invalid_format_errors() {
 // boundary.
 //
 // Test List:
-// 1. a negative --max-cpu is rejected (note: `--max-cpu=-5`, not
-//    `--max-cpu -5` — the latter is swallowed by clap's own arg parser as
+// 1. a negative --max-kwh is rejected (note: `--max-kwh=-5`, not
+//    `--max-kwh -5` — the latter is swallowed by clap's own arg parser as
 //    an unrecognized flag before ever reaching AlertThresholds::new,
 //    exiting 2 instead of exercising our validation at all)
-// 2. --max-cpu inf is rejected (non-finite)
-// 3. --max-cpu nan is rejected (non-finite)
+// 2. --max-kwh inf is rejected (non-finite)
+// 3. --max-kwh nan is rejected (non-finite)
 // 4. a --config path that does not exist is rejected, not silently ignored
 
 #[test]
-fn e2e_analyze_negative_max_cpu_errors() {
+fn e2e_analyze_negative_max_kwh_errors() {
     let binary = binary_path();
     let fixture = fixtures_dir().join("sample.rs");
     let output = Command::new(binary)
-        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu=-5"])
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh=-5"])
         .output()
         .expect("failed to execute binary");
 
@@ -635,11 +635,11 @@ fn e2e_analyze_negative_max_cpu_errors() {
 }
 
 #[test]
-fn e2e_analyze_infinite_max_cpu_errors() {
+fn e2e_analyze_infinite_max_kwh_errors() {
     let binary = binary_path();
     let fixture = fixtures_dir().join("sample.rs");
     let output = Command::new(binary)
-        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "inf"])
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh", "inf"])
         .output()
         .expect("failed to execute binary");
 
@@ -653,11 +653,11 @@ fn e2e_analyze_infinite_max_cpu_errors() {
 }
 
 #[test]
-fn e2e_analyze_nan_max_cpu_errors() {
+fn e2e_analyze_nan_max_kwh_errors() {
     let binary = binary_path();
     let fixture = fixtures_dir().join("sample.rs");
     let output = Command::new(binary)
-        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "nan"])
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh", "nan"])
         .output()
         .expect("failed to execute binary");
 
@@ -1160,23 +1160,24 @@ fn e2e_analyze_impl_only_fixture_reports_measured_functions() {
     );
 }
 
-// US8 slice 1 (issue #8) — AC1/AC3/AC6: `analyze --path <dir> --max-cpu
-// <µ$>` compares the project's aggregate CPU cost against the threshold and
+// US8 slice 1 (issue #8) — AC1/AC3/AC6: `analyze --path <dir> --max-kwh
+// <kWh>` compares the project's aggregate energy against the threshold and
 // prints a warning on a breach, without changing the exit code (--strict is
-// T2 scope).
+// T2 scope). Change request on issue #8: energy replaces CPU cost as the
+// gate's first metric.
 //
 // Test List:
-// 1. a maximally strict --max-cpu 0 breaches any real project -> warning
+// 1. a maximally strict --max-kwh 0 breaches any real project -> warning
 //    printed, exit 0 (AC1, AC3)
-// 2. no --max-cpu/--max-co2 flags at all -> no warning, unchanged behavior
+// 2. no --max-kwh/--max-co2 flags at all -> no warning, unchanged behavior
 //    (AC6)
 
 #[test]
-fn e2e_analyze_path_with_breached_max_cpu_warns_and_still_exits_0() {
+fn e2e_analyze_path_with_breached_max_kwh_warns_and_still_exits_0() {
     let binary = binary_path();
     let dir = fixtures_dir();
     let output = Command::new(binary)
-        .args(["analyze", "--path", dir.to_str().unwrap(), "--max-cpu", "0"])
+        .args(["analyze", "--path", dir.to_str().unwrap(), "--max-kwh", "0"])
         .output()
         .expect("failed to execute binary");
 
@@ -1188,8 +1189,8 @@ fn e2e_analyze_path_with_breached_max_cpu_warns_and_still_exits_0() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert!(
-        stdout.contains("SEUIL") && stdout.contains("CPU"),
-        "expected a threshold breach warning naming CPU, got: {}",
+        stdout.contains("SEUIL") && stdout.contains("ÉNERGIE"),
+        "expected a threshold breach warning naming the energy metric, got: {}",
         stdout
     );
 }
@@ -1224,7 +1225,7 @@ fn e2e_analyze_path_strict_breach_exits_3_naming_the_threshold() {
             "analyze",
             "--path",
             dir.to_str().unwrap(),
-            "--max-cpu",
+            "--max-kwh",
             "0",
             "--strict",
         ])
@@ -1240,7 +1241,7 @@ fn e2e_analyze_path_strict_breach_exits_3_naming_the_threshold() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("SEUIL") && stderr.contains("CPU"),
+        stderr.contains("SEUIL") && stderr.contains("ÉNERGIE"),
         "stderr must name which threshold was exceeded and by how much, got: {}",
         stderr
     );
@@ -1262,7 +1263,7 @@ fn e2e_analyze_path_json_format_breach_embeds_thresholds_object() {
             dir.to_str().unwrap(),
             "--format",
             "json",
-            "--max-cpu",
+            "--max-kwh",
             "0",
             "--strict",
         ])
@@ -1282,7 +1283,7 @@ fn e2e_analyze_path_json_format_breach_embeds_thresholds_object() {
     assert_eq!(json["metrics"]["thresholds"]["has_breach"], true);
     assert_eq!(
         json["metrics"]["thresholds"]["breaches"][0]["metric"],
-        "CPU"
+        "ÉNERGIE"
     );
 }
 
@@ -1305,7 +1306,7 @@ fn e2e_analyze_path_html_format_breach_embeds_thresholds_in_data_island() {
             "html",
             "-o",
             output_path.to_str().unwrap(),
-            "--max-cpu",
+            "--max-kwh",
             "0",
             "--strict",
         ])
@@ -1330,7 +1331,7 @@ fn e2e_analyze_single_file_breach_warns_via_console() {
     let binary = binary_path();
     let fixture = fixtures_dir().join("sample.rs");
     let output = Command::new(binary)
-        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "0"])
+        .args(["analyze", fixture.to_str().unwrap(), "--max-kwh", "0"])
         .output()
         .expect("failed to execute binary");
 
@@ -1341,7 +1342,7 @@ fn e2e_analyze_single_file_breach_warns_via_console() {
         stdout
     );
     assert!(
-        stdout.contains("SEUIL") && stdout.contains("CPU"),
+        stdout.contains("SEUIL") && stdout.contains("ÉNERGIE"),
         "got: {}",
         stdout
     );
@@ -1360,7 +1361,7 @@ fn e2e_analyze_reads_threshold_from_config_file() {
     std::fs::write(dir.join("good.rs"), "fn good() {}").expect("write fixture");
     std::fs::write(
         dir.join(".codeimpact.json"),
-        r#"{"thresholds":{"max_cpu_microdollars":0.0}}"#,
+        r#"{"thresholds":{"max_energy_kwh":0.0}}"#,
     )
     .expect("write config");
 
@@ -1389,11 +1390,11 @@ fn e2e_analyze_cli_flag_overrides_config_file_value() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated dir");
     std::fs::write(dir.join("good.rs"), "fn good() {}").expect("write fixture");
-    // The file alone would breach (max-cpu 0); the CLI flag for the SAME
+    // The file alone would breach (max-kwh 0); the CLI flag for the SAME
     // metric must win and let it through.
     std::fs::write(
         dir.join(".codeimpact.json"),
-        r#"{"thresholds":{"max_cpu_microdollars":0.0}}"#,
+        r#"{"thresholds":{"max_energy_kwh":0.0}}"#,
     )
     .expect("write config");
 
@@ -1402,7 +1403,7 @@ fn e2e_analyze_cli_flag_overrides_config_file_value() {
             "analyze",
             "--path",
             dir.to_str().unwrap(),
-            "--max-cpu",
+            "--max-kwh",
             "1000000",
             "--strict",
         ])
@@ -1436,11 +1437,8 @@ fn e2e_analyze_explicit_config_flag_is_honored() {
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     std::fs::write(target_dir.join("good.rs"), "fn good() {}").expect("write fixture");
     let explicit_config = config_dir.join("thresholds.json");
-    std::fs::write(
-        &explicit_config,
-        r#"{"thresholds":{"max_cpu_microdollars":0.0}}"#,
-    )
-    .expect("write explicit config");
+    std::fs::write(&explicit_config, r#"{"thresholds":{"max_energy_kwh":0.0}}"#)
+        .expect("write explicit config");
 
     let output = Command::new(&binary)
         .args([
@@ -1474,7 +1472,7 @@ fn e2e_analyze_path_strict_without_breach_exits_0() {
             "analyze",
             "--path",
             dir.to_str().unwrap(),
-            "--max-cpu",
+            "--max-kwh",
             "1000000",
             "--strict",
         ])

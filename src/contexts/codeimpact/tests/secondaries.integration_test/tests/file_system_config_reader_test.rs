@@ -45,7 +45,7 @@ fn valid_config_with_thresholds_section_is_read() {
     let config_path = dir.join(".codeimpact.json");
     std::fs::write(
         &config_path,
-        r#"{"thresholds":{"max_cpu_microdollars":12.5,"max_co2_grams":30.0}}"#,
+        r#"{"thresholds":{"max_energy_kwh":12.5,"max_co2_grams":30.0}}"#,
     )
     .unwrap();
 
@@ -55,7 +55,7 @@ fn valid_config_with_thresholds_section_is_read() {
     let thresholds = result
         .expect("read should succeed")
         .expect("a thresholds section was present");
-    assert_eq!(thresholds.max_cpu_microdollars(), Some(12.5));
+    assert_eq!(thresholds.max_energy_kwh(), Some(12.5));
     assert_eq!(thresholds.max_co2_grams(), Some(30.0));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -79,11 +79,7 @@ fn no_config_file_anywhere_returns_ok_none() {
 fn explicit_nonexistent_config_path_errors_without_silent_fallback() {
     let dir = isolated_dir("explicit_missing");
     let fallback_config = dir.join(".codeimpact.json");
-    std::fs::write(
-        &fallback_config,
-        r#"{"thresholds":{"max_cpu_microdollars":1.0}}"#,
-    )
-    .unwrap();
+    std::fs::write(&fallback_config, r#"{"thresholds":{"max_energy_kwh":1.0}}"#).unwrap();
     let bogus = dir.join("does_not_exist.json");
 
     let reader = FileSystemConfigReader::new();
@@ -104,11 +100,7 @@ fn explicit_symlink_config_path_is_refused() {
 
     let dir = isolated_dir("symlink");
     let real_target = dir.join("real.json");
-    std::fs::write(
-        &real_target,
-        r#"{"thresholds":{"max_cpu_microdollars":1.0}}"#,
-    )
-    .unwrap();
+    std::fs::write(&real_target, r#"{"thresholds":{"max_energy_kwh":1.0}}"#).unwrap();
     let link = dir.join(".codeimpact.json");
     symlink(&real_target, &link).expect("create symlink");
 
@@ -185,11 +177,7 @@ fn malformed_json_errors() {
 fn negative_threshold_in_file_is_rejected() {
     let dir = isolated_dir("negative");
     let config_path = dir.join(".codeimpact.json");
-    std::fs::write(
-        &config_path,
-        r#"{"thresholds":{"max_cpu_microdollars":-5.0}}"#,
-    )
-    .unwrap();
+    std::fs::write(&config_path, r#"{"thresholds":{"max_energy_kwh":-5.0}}"#).unwrap();
 
     let reader = FileSystemConfigReader::new();
     let result = reader.read_thresholds(Some(&config_path), &[]);
@@ -213,7 +201,7 @@ fn config_without_thresholds_section_yields_both_metrics_none() {
     let thresholds = result
         .expect("empty config is valid")
         .expect("file was present");
-    assert_eq!(thresholds.max_cpu_microdollars(), None);
+    assert_eq!(thresholds.max_energy_kwh(), None);
     assert_eq!(thresholds.max_co2_grams(), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -244,12 +232,12 @@ fn auto_discovery_tries_target_dir_before_cwd() {
     let cwd_dir = isolated_dir("auto_discovery_cwd");
     std::fs::write(
         target_dir.join(".codeimpact.json"),
-        r#"{"thresholds":{"max_cpu_microdollars":42.0}}"#,
+        r#"{"thresholds":{"max_energy_kwh":42.0}}"#,
     )
     .unwrap();
     std::fs::write(
         cwd_dir.join(".codeimpact.json"),
-        r#"{"thresholds":{"max_cpu_microdollars":999.0}}"#,
+        r#"{"thresholds":{"max_energy_kwh":999.0}}"#,
     )
     .unwrap();
 
@@ -260,7 +248,7 @@ fn auto_discovery_tries_target_dir_before_cwd() {
         .expect("read should succeed")
         .expect("a file was found");
     assert_eq!(
-        thresholds.max_cpu_microdollars(),
+        thresholds.max_energy_kwh(),
         Some(42.0),
         "the target dir's config must win over cwd's"
     );
