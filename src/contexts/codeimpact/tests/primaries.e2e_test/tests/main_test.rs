@@ -1112,6 +1112,107 @@ fn e2e_analyze_path_strict_breach_exits_3_naming_the_threshold() {
     );
 }
 
+// US8 slice 3 (AC3) — the breach must reach every surface, not just
+// console: JSON embeds a structured thresholds object; HTML embeds it in
+// the data island (rendered client-side, same mechanism as
+// unmeasurable_files). Also covers the single-file target (T3).
+
+#[test]
+fn e2e_analyze_path_json_format_breach_embeds_thresholds_object() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+            "--max-cpu",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(json["metrics"]["thresholds"]["has_breach"], true);
+    assert_eq!(
+        json["metrics"]["thresholds"]["breaches"][0]["metric"],
+        "CPU"
+    );
+}
+
+#[test]
+fn e2e_analyze_path_html_format_breach_embeds_thresholds_in_data_island() {
+    let binary = binary_path();
+    let dir = fixtures_dir();
+    let output_path = std::env::temp_dir().join(format!(
+        "codeimpact_threshold_report_{}.html",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&output_path);
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "html",
+            "-o",
+            output_path.to_str().unwrap(),
+            "--max-cpu",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let html =
+        std::fs::read_to_string(&output_path).expect("html output file should have been created");
+    let _ = std::fs::remove_file(&output_path);
+    assert!(html.contains(r#""has_breach":true"#), "got: {}", html);
+}
+
+#[test]
+fn e2e_analyze_single_file_breach_warns_via_console() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.rs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--max-cpu", "0"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "non-strict breach must still exit 0. stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("SEUIL") && stdout.contains("CPU"),
+        "got: {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_path_strict_without_breach_exits_0() {
     let binary = binary_path();

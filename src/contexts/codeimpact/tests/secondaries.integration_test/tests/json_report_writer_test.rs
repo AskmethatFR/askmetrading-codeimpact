@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EcologicalImpact;
@@ -338,4 +339,88 @@ fn project_json_sums_unclassifiable_io_in_loops_count_across_files() {
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
 
     assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 3);
+}
+
+// US8 slice 3 (AC3) — JSON embeds a thresholds/breaches object (AD-3: the
+// message field reuses the ONE shared renderer, same text as console/HTML).
+//
+// Test List:
+// 1. single-file JSON with a breaching threshold_report -> has_breach true,
+//    breaches array with the metric/limit/actual/excess, non-empty message
+// 2. single-file JSON with no threshold_report attached at all -> has_breach
+//    false, empty breaches array (never omitted, same "0 is honest"
+//    convention as unclassifiable_io_in_loops_count)
+// 3. project JSON with a breaching threshold_report -> has_breach true
+
+#[test]
+fn json_writer_includes_thresholds_object_with_a_breach() {
+    let writer = JsonReportWriter::new();
+    let thresholds = AlertThresholds::new(Some(10.0), None).unwrap();
+    let report = thresholds.evaluate(Some(15.0), None);
+    let metrics = CodeMetrics::new(5).with_threshold_report(report);
+
+    let json_str = writer
+        .write_json(&metrics, "test.rs", "file")
+        .expect("write_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["thresholds"]["has_breach"], true);
+    let breaches = json["metrics"]["thresholds"]["breaches"]
+        .as_array()
+        .expect("breaches should be an array");
+    assert_eq!(breaches.len(), 1);
+    assert_eq!(breaches[0]["metric"], "CPU");
+    assert_eq!(breaches[0]["limit"], 10.0);
+    assert_eq!(breaches[0]["actual"], 15.0);
+    assert_eq!(breaches[0]["excess"], 5.0);
+    assert!(
+        !json["metrics"]["thresholds"]["message"]
+            .as_str()
+            .unwrap()
+            .is_empty(),
+        "a breach must carry a non-empty human-readable message, got: {}",
+        json
+    );
+}
+
+#[test]
+fn json_writer_no_threshold_report_shows_no_breach_and_empty_array() {
+    let writer = JsonReportWriter::new();
+    let metrics = CodeMetrics::new(5); // no threshold_report attached at all
+
+    let json_str = writer
+        .write_json(&metrics, "test.rs", "file")
+        .expect("write_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["thresholds"]["has_breach"], false);
+    assert_eq!(
+        json["metrics"]["thresholds"]["breaches"]
+            .as_array()
+            .expect("breaches should be an array, never omitted")
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn project_json_writer_includes_thresholds_object_with_a_breach() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(PathBuf::from("a.rs"), CodeMetrics::new(5))];
+    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
+    let report = thresholds.evaluate(Some(5.0), None);
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_threshold_report(report);
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["thresholds"]["has_breach"], true);
+    assert_eq!(
+        json["metrics"]["thresholds"]["breaches"][0]["metric"],
+        "CPU"
+    );
 }

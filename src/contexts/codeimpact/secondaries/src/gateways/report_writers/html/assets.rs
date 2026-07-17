@@ -309,6 +309,26 @@ pub const JS: &str = r#"
     return grid;
   }
 
+  function renderThresholds() {
+    if (!data.thresholds || !data.thresholds.has_breach) return null;
+    var section = el("div", "section blueprint unmeasurable-section");
+    section.appendChild(
+      el("div", "section-heading", "Seuils dépassés · " + data.thresholds.breaches.length)
+    );
+    var list = el("div", "unmeasurable-list");
+    data.thresholds.breaches.forEach(function (b) {
+      var row = el("div", "unmeasurable-row");
+      row.appendChild(el("span", "tag sev-critical", b.metric));
+      row.appendChild(
+        el("span", "unmeasurable-path", "limite: " + b.limit + " · mesuré: " + b.actual)
+      );
+      row.appendChild(el("span", "unmeasurable-reason", "dépassement: " + b.excess));
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+    return section;
+  }
+
   function renderUnmeasurable() {
     if (!data.unmeasurable_files || data.unmeasurable_files.length === 0) return null;
     var section = el("div", "section blueprint unmeasurable-section");
@@ -550,6 +570,8 @@ pub const JS: &str = r#"
   function renderAll() {
     root.textContent = "";
     root.appendChild(renderBanner());
+    var thresholds = renderThresholds();
+    if (thresholds) root.appendChild(thresholds);
     root.appendChild(renderStats());
     var unmeasurable = renderUnmeasurable();
     if (unmeasurable) root.appendChild(unmeasurable);

@@ -663,3 +663,59 @@ fn handle_project_return_value_carries_the_same_breach_outcome_as_the_graph() {
         "the return value must carry the breach without needing the graph"
     );
 }
+
+// US8 slice 3 (T3) — the single-file gate: handle() evaluates thresholds
+// against the FILE's own economic/ecological impact (not the project
+// aggregate) when the target is a single file.
+#[test]
+fn handle_single_file_with_breached_threshold_returns_a_breaching_report() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+
+    let gated = use_case
+        .handle(
+            &make_target("test.rs"),
+            &[AnalysisRule::CyclomaticComplexity],
+            &thresholds,
+        )
+        .expect("analysis should succeed");
+
+    assert!(
+        gated.thresholds().has_breach(),
+        "a zero cpu threshold must breach any measured file's positive base cost"
+    );
+    let metrics = writer.last_metrics.lock().unwrap();
+    let metrics = metrics
+        .as_ref()
+        .expect("write_console must have been called");
+    assert!(
+        metrics
+            .threshold_report()
+            .expect("evaluate() must have run and attached a report")
+            .has_breach(),
+        "the report must also be attached to the metrics passed to the writer"
+    );
+}
+
+#[test]
+fn handle_single_file_without_threshold_flags_shows_no_breach() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+
+    let gated = use_case
+        .handle(
+            &make_target("test.rs"),
+            &[AnalysisRule::CyclomaticComplexity],
+            &AlertThresholds::none(),
+        )
+        .expect("analysis should succeed");
+
+    assert!(!gated.thresholds().has_breach());
+}

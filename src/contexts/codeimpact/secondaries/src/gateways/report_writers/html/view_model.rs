@@ -7,10 +7,12 @@ use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::ThresholdBreach;
+use codeimpact_hexagon::analysis::ThresholdReport;
 use codeimpact_hexagon::analysis::WarningPattern;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
-use super::super::humanize::{format_dollars, format_energy, format_memory};
+use super::super::humanize::{format_dollars, format_energy, format_memory, format_metric_value};
 
 // ── Presentation view-model (secondaries only, per ca-models / ADR-8.4) ──
 //
@@ -24,6 +26,23 @@ pub struct ReportVm {
     pub stats: Vec<StatVm>,
     pub nodes: Vec<NodeVm>,
     pub unmeasurable_files: Vec<UnmeasurableFileVm>,
+    /// Threshold-breach outcome (US8 AD-3) — never omitted, same "false is
+    /// an honest answer" convention as `unmeasurable_files`.
+    pub thresholds: ThresholdsVm,
+}
+
+#[derive(serde::Serialize)]
+pub struct ThresholdsVm {
+    pub has_breach: bool,
+    pub breaches: Vec<ThresholdBreachVm>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ThresholdBreachVm {
+    pub metric: String,
+    pub limit: String,
+    pub actual: String,
+    pub excess: String,
 }
 
 /// A file that could not be measured at all (D3, #50 slice S4) — distinct
@@ -181,6 +200,28 @@ pub fn build_report_vm(graph: &FileConsumptionGraph, target: &str) -> ReportVm {
         stats: build_stats(graph),
         nodes: build_tree(graph, target),
         unmeasurable_files: build_unmeasurable_files(graph),
+        thresholds: build_thresholds_vm(graph.threshold_report()),
+    }
+}
+
+/// Builds the thresholds view-model (US8 AD-3) — `None` (no evaluation
+/// ever ran) reads identically to an evaluated-but-empty report, same as
+/// the JSON writer's `threshold_dto`.
+fn build_thresholds_vm(report: Option<&ThresholdReport>) -> ThresholdsVm {
+    let empty = ThresholdReport::default();
+    let report = report.unwrap_or(&empty);
+    ThresholdsVm {
+        has_breach: report.has_breach(),
+        breaches: report
+            .breaches()
+            .iter()
+            .map(|b: &ThresholdBreach| ThresholdBreachVm {
+                metric: b.metric().label().to_string(),
+                limit: format_metric_value(b.metric(), b.limit()),
+                actual: format_metric_value(b.metric(), b.actual()),
+                excess: format_metric_value(b.metric(), b.excess()),
+            })
+            .collect(),
     }
 }
 

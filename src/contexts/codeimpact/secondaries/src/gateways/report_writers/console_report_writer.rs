@@ -166,6 +166,17 @@ impl ConsoleReportWriter {
             }
             writeln!(writer, "========================").unwrap();
         }
+
+        // US8 — AD-3: same shared renderer as the project surface, single-
+        // file twin (found while writing the e2e single-file test: this
+        // wiring was missing here even though write_project_report_to had
+        // it).
+        if let Some(report) = metrics.threshold_report() {
+            if report.has_breach() {
+                writeln!(writer).unwrap();
+                writeln!(writer, "{}", render_threshold_warning(report)).unwrap();
+            }
+        }
     }
 
     /// Write project report to a custom writer (used for testing).

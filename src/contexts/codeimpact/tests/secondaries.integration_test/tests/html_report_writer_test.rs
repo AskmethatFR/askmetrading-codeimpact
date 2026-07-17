@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::CodeLocation;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ComplexityWarning;
@@ -1253,6 +1254,64 @@ fn write_html_neutralizes_script_breakout_payload_in_unmeasurable_path() {
         html.matches("<script").count(),
         2,
         "unmeasurable file path payload must not add a third <script> tag: {}",
+        html
+    );
+}
+
+// US8 slice 3 (AC3) — HTML renders a banner on a breach (AD-3: same shared
+// renderer's data feeds both console text and this structured banner).
+//
+// Test List:
+// 1. a breaching threshold_report -> has_breach true + the breach's metric
+//    in the data island
+// 2. no threshold_report attached at all -> has_breach false (never
+//    omitted — same "0/false is honest" convention as unmeasurable_files)
+// 3. the renderer JS actually consumes data.thresholds, not merely embeds
+//    it unused (mirrors rendered_js_consumes_unmeasurable_files_...)
+
+#[test]
+fn write_html_surfaces_threshold_breach_in_the_data_island() {
+    let writer = HtmlReportWriter::new();
+    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
+    let report = thresholds.evaluate(Some(5.0), None);
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]).with_threshold_report(report);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(html.contains(r#""has_breach":true"#), "got: {}", html);
+    assert!(html.contains(r#""metric":"CPU""#), "got: {}", html);
+}
+
+#[test]
+fn write_html_no_threshold_report_shows_has_breach_false() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""has_breach":false"#),
+        "no threshold was ever evaluated, must still report false honestly: {}",
+        html
+    );
+}
+
+#[test]
+fn rendered_js_consumes_thresholds_from_the_data_island() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("data.thresholds"),
+        "the renderer JS must actually consume thresholds, not merely embed it unused: {}",
         html
     );
 }

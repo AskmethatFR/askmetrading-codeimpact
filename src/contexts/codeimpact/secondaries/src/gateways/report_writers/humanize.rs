@@ -65,7 +65,11 @@ pub fn render_threshold_warning(report: &ThresholdReport) -> String {
     lines.join("\n")
 }
 
-fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
+/// Formats one threshold value (limit/actual/excess) per its metric's own
+/// unit — μ$ for CPU (reusing `format_dollars`), grams for CO2. Shared by
+/// `render_threshold_warning` and the HTML view-model, which needs the
+/// same per-value formatting for its structured banner (AD-3).
+pub fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
     match metric {
         BreachedMetric::Cpu => format_dollars(value),
         BreachedMetric::Co2 => format!("{:.1} g", value),

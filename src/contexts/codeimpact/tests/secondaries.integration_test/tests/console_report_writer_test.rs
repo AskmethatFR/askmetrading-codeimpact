@@ -427,6 +427,43 @@ fn write_project_report_no_unmeasurable_files_does_not_show_section() {
 // 3. threshold_report with a breach -> warning section naming the metric,
 //    limit, actual value, and excess (AD-3's "by how much")
 
+// #8 (found while writing the e2e single-file test) — write_console_to (the
+// single-file surface) never got the threshold banner, only
+// write_project_report_to did. Same shared-renderer wiring, single-file
+// twin.
+
+#[test]
+fn write_console_breaching_threshold_report_shows_warning_with_the_numbers() {
+    let writer = ConsoleReportWriter::new();
+    let thresholds = AlertThresholds::new(Some(10.0), None).unwrap();
+    let report = thresholds.evaluate(Some(15.0), None);
+    let metrics = CodeMetrics::new(5).with_threshold_report(report);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("SEUIL") && output.contains("CPU"),
+        "a breach must print a warning section, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_console_without_a_threshold_report_shows_no_warning() {
+    let writer = ConsoleReportWriter::new();
+    let metrics = CodeMetrics::new(5);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains("SEUIL"),
+        "no threshold was ever evaluated, must not print a warning: {}",
+        output
+    );
+}
+
 #[test]
 fn write_project_report_without_a_threshold_report_shows_no_warning() {
     let writer = ConsoleReportWriter::new();
