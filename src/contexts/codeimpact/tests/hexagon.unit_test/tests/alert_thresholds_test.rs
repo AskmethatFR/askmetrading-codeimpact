@@ -127,3 +127,54 @@ fn zero_threshold_is_a_valid_maximally_strict_construction() {
     let result = AlertThresholds::new(Some(0.0), Some(0.0));
     assert!(result.is_ok());
 }
+
+// US8 slice 4 (AD-5) — AlertThresholds::from_sources: the pure domain
+// merge behind `.codeimpact.json` + CLI override. Calling use case: main.rs
+// merges the config-file-read thresholds with the CLI-parsed ones before
+// passing the result into RunAnalysis.
+//
+// Test List:
+// 1. cli value overrides the file value for a metric when both are set
+// 2. file value is used when cli is None for that metric
+// 3. both None -> merged value is None
+// 4. cpu and co2 merge independently (cli overrides one, file supplies the other)
+
+#[test]
+fn from_sources_cli_overrides_file_when_both_set() {
+    let file = AlertThresholds::new(Some(5.0), None).unwrap();
+    let cli = AlertThresholds::new(Some(10.0), None).unwrap();
+    let merged = AlertThresholds::from_sources(file, cli);
+    assert_eq!(merged.max_cpu_microdollars(), Some(10.0));
+}
+
+#[test]
+fn from_sources_falls_back_to_file_when_cli_absent() {
+    let file = AlertThresholds::new(Some(5.0), None).unwrap();
+    let cli = AlertThresholds::none();
+    let merged = AlertThresholds::from_sources(file, cli);
+    assert_eq!(merged.max_cpu_microdollars(), Some(5.0));
+}
+
+#[test]
+fn from_sources_both_absent_stays_none() {
+    let merged = AlertThresholds::from_sources(AlertThresholds::none(), AlertThresholds::none());
+    assert_eq!(merged.max_cpu_microdollars(), None);
+    assert_eq!(merged.max_co2_grams(), None);
+}
+
+#[test]
+fn from_sources_merges_cpu_and_co2_independently() {
+    let file = AlertThresholds::new(Some(5.0), Some(20.0)).unwrap();
+    let cli = AlertThresholds::new(None, Some(99.0)).unwrap();
+    let merged = AlertThresholds::from_sources(file, cli);
+    assert_eq!(
+        merged.max_cpu_microdollars(),
+        Some(5.0),
+        "cli left cpu unset, file value should carry through"
+    );
+    assert_eq!(
+        merged.max_co2_grams(),
+        Some(99.0),
+        "cli overrides co2 even though file also set it"
+    );
+}

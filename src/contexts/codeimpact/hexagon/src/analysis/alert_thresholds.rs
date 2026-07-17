@@ -84,6 +84,18 @@ impl AlertThresholds {
     /// configured thresholds. An absent metric (`None` — the value could
     /// not be measured) never breaches, however low the threshold: absence
     /// is not a confident zero (ADR-0010).
+    /// Merges a config-file-read `AlertThresholds` with a CLI-parsed one
+    /// (US8 AD-5, T4): the CLI value wins per metric when both are set,
+    /// otherwise the file value carries through. Pure domain composition —
+    /// no I/O, no validation (both inputs are already-validated
+    /// `AlertThresholds`, so the merge cannot produce an invalid result).
+    pub fn from_sources(file: AlertThresholds, cli: AlertThresholds) -> Self {
+        Self {
+            max_cpu_microdollars: cli.max_cpu_microdollars.or(file.max_cpu_microdollars),
+            max_co2_grams: cli.max_co2_grams.or(file.max_co2_grams),
+        }
+    }
+
     pub fn evaluate(&self, cpu: Option<f64>, co2: Option<f64>) -> ThresholdReport {
         let mut breaches = Vec::new();
         if let (Some(limit), Some(actual)) = (self.max_cpu_microdollars, cpu) {
