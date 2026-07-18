@@ -62,3 +62,11 @@ path = "tests/run_analysis_html_test.rs"
 [[test]]
 name = "source_guard_test"
 path = "tests/source_guard_test.rs"
+
+[[test]]
+name = "file_filter_test"
+path = "tests/file_filter_test.rs"
+
+[[test]]
+name = "analysis_config_test"
+path = "tests/analysis_config_test.rs"
