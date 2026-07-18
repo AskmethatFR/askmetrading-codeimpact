@@ -46,9 +46,9 @@ fn read_nonexistent_file_returns_error() {
 }
 
 #[test]
-fn list_rust_files_finds_rs_in_fixtures() {
+fn list_source_files_finds_rs_in_fixtures() {
     let reader = FileSystemCodeReader::new();
-    let result = reader.list_rust_files(&fixtures_dir());
+    let result = reader.list_source_files(&fixtures_dir(), &["rs"]);
     assert!(
         result.is_ok(),
         "should list fixtures dir: {:?}",
@@ -63,7 +63,7 @@ fn list_rust_files_finds_rs_in_fixtures() {
 }
 
 #[test]
-fn list_rust_files_skips_non_rs_files() {
+fn list_source_files_skips_files_outside_requested_extensions() {
     let reader = FileSystemCodeReader::new();
     // Use the e2e test directory which has Cargo.toml (non-.rs) and .rs files
     let mut e2e_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -73,7 +73,7 @@ fn list_rust_files_skips_non_rs_files() {
     e2e_dir.push("primaries.e2e_test");
     e2e_dir.push("tests");
 
-    let result = reader.list_rust_files(&e2e_dir);
+    let result = reader.list_source_files(&e2e_dir, &["rs"]);
     assert!(result.is_ok(), "should list dir: {:?}", result.err());
     let files = result.unwrap();
     // Should find the fixture file

@@ -12,7 +12,7 @@ use codeimpact_hexagon::analysis::{
 //    Critical — bounded tree/graph descent is a normal pattern, not evidence of
 //    an unbounded/dangerous recursion the detector has actually established)
 // 6. recursion_indirect_detected — cycle A→B→A → Recursion, Warning (#47, same)
-// 7. large_match_detected — match_arms > max_match_arms → Warning
+// 7. large_match_detected — branch_arms > max_branch_arms → Warning
 // 8. deep_conditional_detected — depth > max_conditional_depth → Warning
 // 9. clean_code_no_warnings — no pattern triggers
 // 10. detection_config_defaults — sensible default values
@@ -45,7 +45,7 @@ fn make_fn(
     has_loop: bool,
     has_nested_loop: bool,
     depth: u32,
-    match_arms: u32,
+    branch_arms: u32,
 ) -> ParsedFunction {
     ParsedFunction {
         name: name.to_string(),
@@ -55,7 +55,7 @@ fn make_fn(
         has_nested_loop,
         decision_points,
         depth,
-        match_arms,
+        branch_arms,
         calls_in_loops: vec![],
     }
 }
@@ -212,20 +212,20 @@ fn recursion_indirect_detected() {
     assert!(rec.iter().all(|w| w.severity == WarningSeverity::Warning));
 }
 
-// === 7. LargeMatch ===
+// === 7. LargeBranching ===
 #[test]
 fn large_match_detected() {
     let fns = vec![make_fn("handler", 1, vec![], false, false, 0, 15)];
     let graph = CallGraph::build(&fns);
     let config = DetectionConfig {
-        max_match_arms: 10,
+        max_branch_arms: 10,
         ..DetectionConfig::default()
     };
     let warnings = ComplexityDetector::detect(&fns, &graph, &config);
 
     let large: Vec<&ComplexityWarning> = warnings
         .iter()
-        .filter(|w| matches!(w.pattern, WarningPattern::LargeMatch))
+        .filter(|w| matches!(w.pattern, WarningPattern::LargeBranching))
         .collect();
     assert_eq!(large.len(), 1);
     assert_eq!(large[0].function, "handler");
@@ -268,7 +268,7 @@ fn detection_config_defaults() {
     let config = DetectionConfig::default();
     assert_eq!(config.max_call_depth, 5);
     assert!((config.complexity_ratio - 5.0).abs() < 1e-9);
-    assert_eq!(config.max_match_arms, 10);
+    assert_eq!(config.max_branch_arms, 10);
     assert_eq!(config.max_conditional_depth, 5);
 }
 
@@ -319,19 +319,19 @@ fn multiple_warnings_on_same_function() {
     let fns = vec![make_fn("messy", 1, vec![], true, true, 7, 15)];
     let graph = CallGraph::build(&fns);
     let config = DetectionConfig {
-        max_match_arms: 10,
+        max_branch_arms: 10,
         max_conditional_depth: 5,
         ..DetectionConfig::default()
     };
     let warnings = ComplexityDetector::detect(&fns, &graph, &config);
 
-    // Should have NestedLoops + LargeMatch + DeepConditional
+    // Should have NestedLoops + LargeBranching + DeepConditional
     assert!(warnings
         .iter()
         .any(|w| matches!(w.pattern, WarningPattern::NestedLoops)));
     assert!(warnings
         .iter()
-        .any(|w| matches!(w.pattern, WarningPattern::LargeMatch)));
+        .any(|w| matches!(w.pattern, WarningPattern::LargeBranching)));
     assert!(warnings
         .iter()
         .any(|w| matches!(w.pattern, WarningPattern::DeepConditional)));

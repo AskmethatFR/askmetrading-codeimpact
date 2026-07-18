@@ -1100,7 +1100,7 @@ fn report_contains_no_remote_url() {
 
 // ── Bug found during manual verification (dogfooding the real CLI, not a
 // spec-listed test): the real FileSystemCodeReader canonicalizes every file
-// path it returns (file_system_code_reader.rs's `list_rust_files`), while
+// path it returns (file_system_code_reader.rs's `list_source_files`), while
 // `target` reaches `write_html` as the RAW, un-canonicalized `--path` CLI
 // argument (run_analysis.rs's `handle_project_html`: `target.path().to_
 // string_lossy()`). `strip_prefix` against the raw target therefore almost

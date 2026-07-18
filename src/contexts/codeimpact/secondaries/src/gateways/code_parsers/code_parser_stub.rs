@@ -1,10 +1,12 @@
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::DependencyContext;
 use codeimpact_hexagon::analysis::ParsedFunction;
+use std::path::PathBuf;
 
 pub struct CodeParserStub {
     result: Result<Vec<ParsedFunction>, AnalysisError>,
-    deps_result: Option<Result<Vec<String>, AnalysisError>>,
+    resolved_dependencies: Option<Result<Vec<PathBuf>, AnalysisError>>,
     failing_when_source_contains: Option<(String, AnalysisError)>,
 }
 
@@ -12,7 +14,7 @@ impl CodeParserStub {
     pub fn new(result: Result<Vec<ParsedFunction>, AnalysisError>) -> Self {
         Self {
             result,
-            deps_result: None,
+            resolved_dependencies: None,
             failing_when_source_contains: None,
         }
     }
@@ -20,13 +22,13 @@ impl CodeParserStub {
     pub fn with_functions(functions: Vec<ParsedFunction>) -> Self {
         Self {
             result: Ok(functions),
-            deps_result: None,
+            resolved_dependencies: None,
             failing_when_source_contains: None,
         }
     }
 
-    pub fn with_deps(mut self, deps: Result<Vec<String>, AnalysisError>) -> Self {
-        self.deps_result = Some(deps);
+    pub fn with_resolved_dependencies(mut self, deps: Result<Vec<PathBuf>, AnalysisError>) -> Self {
+        self.resolved_dependencies = Some(deps);
         self
     }
 
@@ -51,8 +53,12 @@ impl CodeParser for CodeParserStub {
         self.result.clone()
     }
 
-    fn parse_file_dependencies(&self, _source: &str) -> Result<Vec<String>, AnalysisError> {
-        match &self.deps_result {
+    fn resolve_dependencies(
+        &self,
+        _source: &str,
+        _ctx: &DependencyContext,
+    ) -> Result<Vec<PathBuf>, AnalysisError> {
+        match &self.resolved_dependencies {
             Some(result) => result.clone(),
             None => Ok(vec![]),
         }

@@ -76,7 +76,7 @@ fn for_loop_counts_one_decision_point() {
 }
 
 #[test]
-fn match_arms_count_per_arm() {
+fn branch_arms_count_per_arm() {
     let parser = parser();
     let source = "fn test() { match x { 1 => {}, 2 => {}, _ => {} } }";
     let functions = parser.parse(source).unwrap();

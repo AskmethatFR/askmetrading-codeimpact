@@ -150,7 +150,7 @@ fn warning_pattern_str(pattern: &WarningPattern) -> &'static str {
         WarningPattern::DeepCallChain => "DeepCallChain",
         WarningPattern::HiddenComplexity => "HiddenComplexity",
         WarningPattern::Recursion => "Recursion",
-        WarningPattern::LargeMatch => "LargeMatch",
+        WarningPattern::LargeBranching => "LargeBranching",
         WarningPattern::DeepConditional => "DeepConditional",
     }
 }
@@ -340,7 +340,7 @@ fn level_name(rank: u8) -> &'static str {
 /// paths with an unrelated target name).
 ///
 /// `target_root` should be the CANONICALIZED form of the `--path` CLI
-/// argument, not the raw string: `FileSystemCodeReader::list_rust_files`
+/// argument, not the raw string: `FileSystemCodeReader::list_source_files`
 /// canonicalizes every file path it returns (resolving symlinks, e.g.
 /// macOS's `/tmp` -> `/private/tmp`), while `target` reaches `write_html`
 /// un-canonicalized (`run_analysis.rs`'s `target.path().to_string_lossy()`).

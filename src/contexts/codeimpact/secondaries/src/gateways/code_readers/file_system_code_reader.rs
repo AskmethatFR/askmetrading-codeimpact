@@ -41,7 +41,11 @@ impl CodeReader for FileSystemCodeReader {
         })
     }
 
-    fn list_rust_files(&self, dir: &Path) -> Result<Vec<PathBuf>, AnalysisError> {
+    fn list_source_files(
+        &self,
+        dir: &Path,
+        extensions: &[&str],
+    ) -> Result<Vec<PathBuf>, AnalysisError> {
         let canonical_root = std::fs::canonicalize(dir)
             .map_err(|_| AnalysisError::IoError("dossier introuvable".to_string()))?;
 
@@ -62,7 +66,11 @@ impl CodeReader for FileSystemCodeReader {
                 Ok(entry) => {
                     if entry.file_type().is_file() {
                         let path = entry.path();
-                        if path.extension().is_some_and(|ext| ext == "rs") {
+                        if path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| extensions.contains(&ext))
+                        {
                             match std::fs::metadata(path) {
                                 Ok(meta) if meta.len() <= MAX_FILE_SIZE => {
                                     files.push(path.to_path_buf());

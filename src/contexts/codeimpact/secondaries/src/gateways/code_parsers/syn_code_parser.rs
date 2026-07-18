@@ -1,12 +1,14 @@
 use codeimpact_hexagon::analysis::source_guard;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::DependencyContext;
 use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::LoopCall;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
 use std::collections::HashSet;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::rc::Rc;
@@ -205,7 +207,7 @@ pub fn exercise_full_pipeline(source: &str) -> Result<(), String> {
 
 pub struct SynCodeParser {
     /// Single-entry verdict cache (#63, T2): `parse` and
-    /// `parse_file_dependencies` are called back-to-back on the same
+    /// `resolve_dependencies` are called back-to-back on the same
     /// file's source, so remembering only the *last* probed source avoids
     /// a second fork+exec per file without the complexity of a full map —
     /// nothing in this crate probes more than one file at a time.
@@ -292,7 +294,7 @@ impl CodeParser for SynCodeParser {
                     has_nested_loop: visitor.has_nested_loop,
                     decision_points: visitor.decision_points,
                     depth: visitor.max_depth,
-                    match_arms: visitor.match_arms,
+                    branch_arms: visitor.branch_arms,
                     calls_in_loops: visitor.calls_in_loops,
                 });
             }
@@ -300,37 +302,124 @@ impl CodeParser for SynCodeParser {
         })
     }
 
-    fn parse_file_dependencies(&self, source: &str) -> Result<Vec<String>, AnalysisError> {
+    /// Resolves `source`'s `mod`/`use` declarations to actual files in
+    /// `ctx.available_files` (US14 L1/L2) — Rust's module/namespace syntax
+    /// (`crate::`, `super::`, `.rs`, `mod.rs`) is entirely owned by this
+    /// adapter; the hexagon only ever sees the resolved `PathBuf`s.
+    fn resolve_dependencies(
+        &self,
+        source: &str,
+        ctx: &DependencyContext,
+    ) -> Result<Vec<PathBuf>, AnalysisError> {
         self.guard_admissible(source)?;
 
-        parse_and_extract(source, |syntax_tree| {
-            let mut deps = Vec::new();
-
-            for item in &syntax_tree.items {
-                match item {
-                    syn::Item::Mod(m) => {
-                        // `mod foo;` (path-style, external file) — no content, has semicolon
-                        if m.content.is_none() {
-                            deps.push(format!("mod:{}", m.ident));
-                        }
-                    }
-                    syn::Item::Use(u) => {
-                        let use_path = Self::format_use_tree(&u.tree);
-                        let lower = use_path.to_lowercase();
-                        if !lower.starts_with("std::")
-                            && !lower.starts_with("core::")
-                            && !lower.starts_with("alloc::")
-                        {
-                            deps.push(format!("use:{}", use_path));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            deps
+        let ctx = ctx.clone();
+        parse_and_extract(source, move |syntax_tree| {
+            extract_raw_dependencies(syntax_tree)
+                .iter()
+                .filter_map(|raw| resolve_dependency(raw, &ctx))
+                .collect()
         })
     }
+}
+
+/// Extracts raw `"mod:<name>"` / `"use:<path>"` dependency strings from a
+/// parsed source — Rust's own `mod foo;` (path-style, external file) and
+/// `use foo::bar;` declarations. External crate prefixes (`std::`, `core::`,
+/// `alloc::`) are filtered out. Private to this adapter (US14 L2): the
+/// hexagon never sees this string protocol, only `resolve_dependencies`'s
+/// resolved `PathBuf`s.
+fn extract_raw_dependencies(syntax_tree: &syn::File) -> Vec<String> {
+    let mut deps = Vec::new();
+
+    for item in &syntax_tree.items {
+        match item {
+            syn::Item::Mod(m) => {
+                if m.content.is_none() {
+                    deps.push(format!("mod:{}", m.ident));
+                }
+            }
+            syn::Item::Use(u) => {
+                let use_path = SynCodeParser::format_use_tree(&u.tree);
+                let lower = use_path.to_lowercase();
+                if !lower.starts_with("std::")
+                    && !lower.starts_with("core::")
+                    && !lower.starts_with("alloc::")
+                {
+                    deps.push(format!("use:{}", use_path));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    deps
+}
+
+/// Resolves a raw dependency string (from `extract_raw_dependencies`) to a
+/// file path in `ctx.available_files` — Rust's module-resolution semantics
+/// (US14 L1: moved here from the hexagon's `file_consumption_graph`, which
+/// keeps only pure graph algebra). `None` when the dependency cannot be
+/// resolved to any available file.
+fn resolve_dependency(raw: &str, ctx: &DependencyContext) -> Option<PathBuf> {
+    if let Some(name) = raw.strip_prefix("mod:") {
+        let parent = ctx.current_file.parent().unwrap_or(Path::new(""));
+        let candidates = vec![
+            parent.join(format!("{}.rs", name)),
+            parent.join(name).join("mod.rs"),
+        ];
+        return candidates
+            .into_iter()
+            .find(|c| ctx.available_files.contains(c));
+    }
+
+    if let Some(path) = raw.strip_prefix("use:") {
+        // External crate prefixes are already filtered out.
+        if path.starts_with("crate::") {
+            let rel = path.strip_prefix("crate::").unwrap();
+            let candidates = module_path_candidates(rel, &ctx.project_root);
+            return candidates
+                .into_iter()
+                .find(|c| ctx.available_files.contains(c));
+        }
+        if path.starts_with("super::") {
+            let rel = path.strip_prefix("super::").unwrap();
+            let parent = ctx.current_file.parent().unwrap_or(Path::new(""));
+            let grandparent = parent.parent().unwrap_or(Path::new(""));
+            let candidates = module_path_candidates(rel, grandparent);
+            return candidates
+                .into_iter()
+                .find(|c| ctx.available_files.contains(c));
+        }
+        // Relative use: resolve relative to current file's directory.
+        let parent = ctx.current_file.parent().unwrap_or(Path::new(""));
+        let candidates = module_path_candidates(path, parent);
+        return candidates
+            .into_iter()
+            .find(|c| ctx.available_files.contains(c));
+    }
+
+    None
+}
+
+/// Generates candidate file paths for a module path (e.g. `"foo::bar::Baz"`).
+///
+/// Tries both `base/foo/bar/Baz.rs` / `base/foo/bar/Baz/mod.rs` (full path)
+/// and `base/foo/bar.rs` / `base/foo/bar/mod.rs` (last segment is a type).
+fn module_path_candidates(module_path: &str, base: &Path) -> Vec<PathBuf> {
+    let path = module_path.replace("::", "/");
+    let mut candidates = Vec::new();
+
+    candidates.push(base.join(format!("{}.rs", path)));
+    candidates.push(base.join(&path).join("mod.rs"));
+
+    if let Some(last_slash) = path.rfind('/') {
+        let module_part = &path[..last_slash];
+        candidates.push(base.join(format!("{}.rs", module_part)));
+        candidates.push(base.join(module_part).join("mod.rs"));
+    }
+
+    candidates
 }
 
 // ── Private helpers ──
@@ -715,7 +804,7 @@ struct FunctionVisitor {
     max_depth: u32,
     current_depth: u32,
     loop_depth: u32,
-    match_arms: u32,
+    branch_arms: u32,
     /// The qualified name of the enclosing `impl`/`trait` type, when this
     /// visitor is walking a method body. Used to resolve `self.m()` and
     /// `Self::m()` to the callee's qualified declaration (D2, #50) — `None`
@@ -911,7 +1000,7 @@ impl FunctionVisitor {
             }
             syn::Expr::Match(expr_match) => {
                 let arm_count = expr_match.arms.len() as u32;
-                self.match_arms = self.match_arms.max(arm_count);
+                self.branch_arms = self.branch_arms.max(arm_count);
                 if arm_count > 0 {
                     self.decision_points += arm_count;
                 }
@@ -1151,8 +1240,8 @@ mod tests {
     // ── Test List (source_guard wiring, #62) ──────────────────────────
     //   1. oversized_source_refused_before_syn_runs — >1 MB →
     //      Err(Unmeasurable(SourceTooLarge)), structurally (no RSS assertion).
-    //   2. parse_file_dependencies_refused_when_source_too_large — same
-    //      guard, mirrored through the parse_file_dependencies entry point.
+    //   2. resolve_dependencies_refused_when_source_too_large — same
+    //      guard, mirrored through the resolve_dependencies entry point.
     //   3. normal_source_still_parses — regression: normal source still
     //      parses with the expected functions.
 
@@ -1213,10 +1302,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_file_dependencies_refused_when_source_too_large() {
+    fn resolve_dependencies_refused_when_source_too_large() {
         let source = "a".repeat(1024 * 1024 + 1);
         let parser = parser();
-        let result = parser.parse_file_dependencies(&source);
+        let ctx = DependencyContext::new(PathBuf::from("x.rs"), PathBuf::from("."), vec![]);
+        let result = parser.resolve_dependencies(&source, &ctx);
         match result {
             Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge)) => {}
             other => panic!("expected Unmeasurable(SourceTooLarge), got {:?}", other),
@@ -1418,112 +1508,204 @@ fn complex(x: i32) {
         assert!(result.is_err());
     }
 
-    // ── parse_file_dependencies tests ──
+    // ── extract_raw_dependencies tests (US14 L2 — private, syntactic-only:
+    // no probe/canary needed, this walks an already-parsed syn::File) ──
+
+    fn tree(source: &str) -> syn::File {
+        syn::parse_file(source).expect("test source must be valid Rust")
+    }
 
     #[test]
     fn deps_mod_foo_extracted() {
-        let parser = parser();
-        let deps = parser.parse_file_dependencies("mod foo;").unwrap();
+        let deps = extract_raw_dependencies(&tree("mod foo;"));
         assert_eq!(deps, vec!["mod:foo"]);
     }
 
     #[test]
     fn deps_mod_with_inline_content_skipped() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("mod foo { fn bar() {} }")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("mod foo { fn bar() {} }"));
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_std_filtered() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("use std::collections::HashMap;")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("use std::collections::HashMap;"));
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_core_filtered() {
-        let parser = parser();
-        let deps = parser.parse_file_dependencies("use core::mem;").unwrap();
+        let deps = extract_raw_dependencies(&tree("use core::mem;"));
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_alloc_filtered() {
-        let parser = parser();
-        let deps = parser.parse_file_dependencies("use alloc::vec;").unwrap();
+        let deps = extract_raw_dependencies(&tree("use alloc::vec;"));
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_crate_extracted() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("use crate::foo::bar;")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("use crate::foo::bar;"));
         assert_eq!(deps, vec!["use:crate::foo::bar"]);
     }
 
     #[test]
     fn deps_use_super_extracted() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("use super::foo::bar;")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("use super::foo::bar;"));
         assert_eq!(deps, vec!["use:super::foo::bar"]);
     }
 
     #[test]
     fn deps_use_relative_extracted() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("use foo::bar::Baz;")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("use foo::bar::Baz;"));
         assert_eq!(deps, vec!["use:foo::bar::Baz"]);
     }
 
     #[test]
     fn deps_use_group_expanded() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("use foo::{bar, baz};")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("use foo::{bar, baz};"));
         assert_eq!(deps, vec!["use:foo::bar, baz"]);
     }
 
     #[test]
     fn deps_empty_source_returns_empty() {
-        let parser = parser();
-        let deps = parser.parse_file_dependencies("").unwrap();
+        let deps = extract_raw_dependencies(&tree(""));
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_no_mod_or_use_returns_empty() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("fn foo() { let x = 1; }")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("fn foo() { let x = 1; }"));
         assert!(deps.is_empty());
     }
 
     #[test]
     fn deps_use_glob() {
-        let parser = parser();
-        let deps = parser.parse_file_dependencies("use foo::*;").unwrap();
+        let deps = extract_raw_dependencies(&tree("use foo::*;"));
         assert_eq!(deps, vec!["use:foo::*"]);
     }
 
     #[test]
     fn parse_use_rename_is_captured() {
-        let parser = parser();
-        let deps = parser
-            .parse_file_dependencies("use foo::bar as baz;\nfn main() {}")
-            .unwrap();
+        let deps = extract_raw_dependencies(&tree("use foo::bar as baz;\nfn main() {}"));
         assert_eq!(deps, vec!["use:foo::bar"]);
+    }
+
+    // ── resolve_dependency tests (US14 L1 — moved from the hexagon's
+    // file_consumption_graph: this adapter now owns Rust's module/namespace
+    // resolution semantics; same behavior, same cases, new home) ──
+
+    fn ctx(current_file: &str, project_root: &str, available_files: &[&str]) -> DependencyContext {
+        DependencyContext::new(
+            PathBuf::from(current_file),
+            PathBuf::from(project_root),
+            available_files.iter().map(PathBuf::from).collect(),
+        )
+    }
+
+    #[test]
+    fn resolve_mod_foo_to_foo_rs() {
+        let c = ctx("src/main.rs", "src", &["src/foo.rs"]);
+        assert_eq!(
+            resolve_dependency("mod:foo", &c),
+            Some(PathBuf::from("src/foo.rs"))
+        );
+    }
+
+    #[test]
+    fn resolve_mod_foo_to_foo_mod_rs() {
+        let c = ctx("src/main.rs", "src", &["src/foo/mod.rs"]);
+        assert_eq!(
+            resolve_dependency("mod:foo", &c),
+            Some(PathBuf::from("src/foo/mod.rs"))
+        );
+    }
+
+    #[test]
+    fn resolve_mod_foo_not_found() {
+        let c = ctx("src/main.rs", "src", &["src/bar.rs"]);
+        assert_eq!(resolve_dependency("mod:foo", &c), None);
+    }
+
+    #[test]
+    fn resolve_use_crate_x_to_x_rs() {
+        let c = ctx("src/main.rs", "src", &["src/x.rs"]);
+        assert_eq!(
+            resolve_dependency("use:crate::x", &c),
+            Some(PathBuf::from("src/x.rs"))
+        );
+    }
+
+    #[test]
+    fn resolve_use_crate_x_to_x_mod_rs() {
+        let c = ctx("src/main.rs", "src", &["src/x/mod.rs"]);
+        assert_eq!(
+            resolve_dependency("use:crate::x", &c),
+            Some(PathBuf::from("src/x/mod.rs"))
+        );
+    }
+
+    #[test]
+    fn resolve_use_super_x_finds_parent_x() {
+        let c = ctx("src/sub/mod.rs", "src", &["src/x.rs"]);
+        assert_eq!(
+            resolve_dependency("use:super::x", &c),
+            Some(PathBuf::from("src/x.rs"))
+        );
+    }
+
+    #[test]
+    fn resolve_use_std_external_returns_none() {
+        let c = ctx("src/main.rs", "src", &["src/main.rs"]);
+        assert_eq!(
+            resolve_dependency("use:std::collections::HashMap", &c),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_use_core_external_returns_none() {
+        let c = ctx("src/main.rs", "src", &["src/main.rs"]);
+        assert_eq!(resolve_dependency("use:core::mem", &c), None);
+    }
+
+    #[test]
+    fn resolve_relative_use_finds_file() {
+        let c = ctx("src/sub/mod.rs", "src", &["src/sub/foo/bar/Baz.rs"]);
+        // Resolves relative to current file's parent: src/sub/foo/bar/Baz.rs
+        assert_eq!(
+            resolve_dependency("use:foo::bar::Baz", &c),
+            Some(PathBuf::from("src/sub/foo/bar/Baz.rs"))
+        );
+    }
+
+    #[test]
+    fn resolve_unknown_dependency_returns_none() {
+        let c = ctx("src/main.rs", "src", &["src/main.rs"]);
+        assert_eq!(resolve_dependency("unknown:format", &c), None);
+    }
+
+    // ── resolve_dependencies tests (US14 — the public CodeParser port
+    // method: extraction + resolution wired together through the real
+    // canary, proving the two private halves above compose correctly) ──
+
+    #[test]
+    fn resolve_dependencies_extracts_and_resolves_mod_declaration() {
+        let parser = parser();
+        let c = ctx("src/main.rs", "src", &["src/foo.rs"]);
+        let resolved = parser.resolve_dependencies("mod foo;", &c).unwrap();
+        assert_eq!(resolved, vec![PathBuf::from("src/foo.rs")]);
+    }
+
+    #[test]
+    fn resolve_dependencies_drops_unresolvable_and_external_deps() {
+        let parser = parser();
+        let c = ctx("src/main.rs", "src", &["src/main.rs"]);
+        let resolved = parser
+            .resolve_dependencies("use std::collections::HashMap;\nmod missing;", &c)
+            .unwrap();
+        assert!(resolved.is_empty());
     }
 }

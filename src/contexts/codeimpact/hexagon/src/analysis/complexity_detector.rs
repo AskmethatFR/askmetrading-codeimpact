@@ -10,7 +10,7 @@ pub enum WarningPattern {
     DeepCallChain,
     HiddenComplexity,
     Recursion,
-    LargeMatch,
+    LargeBranching,
     DeepConditional,
 }
 
@@ -37,7 +37,7 @@ pub struct ComplexityWarning {
 pub struct DetectionConfig {
     pub max_call_depth: usize,
     pub complexity_ratio: f64,
-    pub max_match_arms: usize,
+    pub max_branch_arms: usize,
     pub max_conditional_depth: usize,
 }
 
@@ -46,7 +46,7 @@ impl Default for DetectionConfig {
         Self {
             max_call_depth: 5,
             complexity_ratio: 5.0,
-            max_match_arms: 10,
+            max_branch_arms: 10,
             max_conditional_depth: 5,
         }
     }
@@ -235,15 +235,15 @@ impl ComplexityDetector {
     ) -> Vec<ComplexityWarning> {
         let mut warnings = Vec::new();
         for f in functions {
-            if f.match_arms as usize > config.max_match_arms {
+            if f.branch_arms as usize > config.max_branch_arms {
                 warnings.push(ComplexityWarning {
-                    pattern: WarningPattern::LargeMatch,
+                    pattern: WarningPattern::LargeBranching,
                     severity: WarningSeverity::Warning,
                     function: f.name.clone(),
                     location: CodeLocation::new(String::new(), f.start_line, 1),
                     message: format!(
                         "{} arms match (seuil: {})",
-                        f.match_arms, config.max_match_arms
+                        f.branch_arms, config.max_branch_arms
                     ),
                     suggestion: "Remplacer le grand match par une table de dispatch ou un \
                                  pattern visitor"
@@ -317,7 +317,7 @@ mod tests {
         has_loop: bool,
         has_nested_loop: bool,
         depth: u32,
-        match_arms: u32,
+        branch_arms: u32,
     ) -> ParsedFunction {
         ParsedFunction {
             name: name.to_string(),
@@ -327,7 +327,7 @@ mod tests {
             has_nested_loop,
             decision_points,
             depth,
-            match_arms,
+            branch_arms,
             calls_in_loops: vec![],
         }
     }
@@ -481,14 +481,14 @@ mod tests {
         let fns = vec![make_fn("handler", 1, vec![], false, false, 0, 15)];
         let graph = CallGraph::build(&fns);
         let config = DetectionConfig {
-            max_match_arms: 10,
+            max_branch_arms: 10,
             ..DetectionConfig::default()
         };
         let warnings = ComplexityDetector::detect(&fns, &graph, &config);
 
         let large: Vec<&ComplexityWarning> = warnings
             .iter()
-            .filter(|w| matches!(w.pattern, WarningPattern::LargeMatch))
+            .filter(|w| matches!(w.pattern, WarningPattern::LargeBranching))
             .collect();
         assert_eq!(large.len(), 1);
         assert_eq!(large[0].function, "handler");
@@ -528,7 +528,7 @@ mod tests {
         let config = DetectionConfig::default();
         assert_eq!(config.max_call_depth, 5);
         assert!((config.complexity_ratio - 5.0).abs() < 1e-9);
-        assert_eq!(config.max_match_arms, 10);
+        assert_eq!(config.max_branch_arms, 10);
         assert_eq!(config.max_conditional_depth, 5);
     }
 
@@ -576,7 +576,7 @@ mod tests {
         let fns = vec![make_fn("messy", 1, vec![], true, true, 7, 15)];
         let graph = CallGraph::build(&fns);
         let config = DetectionConfig {
-            max_match_arms: 10,
+            max_branch_arms: 10,
             max_conditional_depth: 5,
             ..DetectionConfig::default()
         };
@@ -587,7 +587,7 @@ mod tests {
             .any(|w| matches!(w.pattern, WarningPattern::NestedLoops)));
         assert!(warnings
             .iter()
-            .any(|w| matches!(w.pattern, WarningPattern::LargeMatch)));
+            .any(|w| matches!(w.pattern, WarningPattern::LargeBranching)));
         assert!(warnings
             .iter()
             .any(|w| matches!(w.pattern, WarningPattern::DeepConditional)));

@@ -89,7 +89,7 @@ mod tests {
             has_nested_loop: false,
             decision_points: 0,
             depth: 0,
-            match_arms: 0,
+            branch_arms: 0,
             calls_in_loops: calls_in_loops
                 .into_iter()
                 .map(|(call, line, col, io)| LoopCall {
