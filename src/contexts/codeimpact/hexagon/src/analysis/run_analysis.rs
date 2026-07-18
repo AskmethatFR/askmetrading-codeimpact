@@ -67,9 +67,9 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         config: &AnalysisConfig,
     ) -> Result<GatedOutput<()>, AnalysisError> {
-        let files = self
-            .code_reader
-            .list_source_files(target.path(), &["rs"], config.file_filter())?;
+        let files =
+            self.code_reader
+                .list_source_files(target.path(), &["rs"], config.file_filter())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();

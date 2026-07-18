@@ -241,6 +241,120 @@ fn respect_gitignore_false_still_lists_a_gitignored_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// Review-barrier retry 1 (QA CRITICAL) — `ignore::WalkBuilder` exposes FOUR
+// independent ignore-source toggles (git_ignore, git_exclude, git_global,
+// ignore), all defaulting to `true`. Gating only `git_ignore` on
+// `respect_gitignore` left the other three ON unconditionally, silently
+// dropping files even under `FileFilter::unrestricted()` — a regression
+// against the pre-US31 `walkdir` behavior, which honored none of them.
+//
+// Test List:
+// 1. a `.ignore` file must not drop a file when the filter is unrestricted
+//    (no config file at all — D4)
+// 2. a `.ignore` file must not drop a file when respect_gitignore is
+//    explicitly false
+// 3. a `.git/info/exclude` entry must not drop a file under the same two
+//    conditions (git_exclude source)
+
+#[test]
+fn dot_ignore_file_does_not_drop_files_under_unrestricted_filter() {
+    let dir = isolated_walk_dir("dot_ignore_unrestricted");
+    std::fs::write(dir.join(".ignore"), "secret.rs\n").unwrap();
+    std::fs::write(dir.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("secret.rs"), "fn secret() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("secret.rs")),
+        "a .ignore file must have NO effect under FileFilter::unrestricted() \
+         (byte-identical to the pre-US31 walkdir walk), got {:?}",
+        files
+    );
+    assert_eq!(files.len(), 2, "both files must be listed, got {:?}", files);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dot_ignore_file_does_not_drop_files_when_respect_gitignore_is_false() {
+    let dir = isolated_walk_dir("dot_ignore_explicit_false");
+    std::fs::write(dir.join(".ignore"), "secret.rs\n").unwrap();
+    std::fs::write(dir.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("secret.rs"), "fn secret() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec![], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert_eq!(
+        files.len(),
+        2,
+        "respect_gitignore=false must disable the .ignore source too, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn git_info_exclude_does_not_drop_files_under_unrestricted_filter() {
+    let dir = isolated_walk_dir("git_exclude_unrestricted");
+    std::fs::create_dir_all(dir.join(".git").join("info")).unwrap();
+    std::fs::write(dir.join(".git").join("info").join("exclude"), "secret.rs\n").unwrap();
+    std::fs::write(dir.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("secret.rs"), "fn secret() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert_eq!(
+        files.len(),
+        2,
+        "a .git/info/exclude entry must have NO effect under \
+         FileFilter::unrestricted(), got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Review-barrier retry 1 (Security MEDIUM) — `.parents(true)` made the
+// walker read .gitignore/.ignore from EVERY ancestor directory up to `/`.
+// On a shared host, a party outside the analyzed directory could plant a
+// .gitignore in a parent dir to hide source files and evade the --strict
+// energy/CO2 gate (ADR-0017). The walker must never consult ignore state
+// from outside the walked directory.
+
+#[test]
+fn gitignore_in_an_ancestor_directory_above_the_walk_root_has_zero_effect() {
+    let parent = isolated_walk_dir("ancestor_gitignore_parent");
+    let root = parent.join("walked_root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(parent.join(".gitignore"), "secret.rs\n").unwrap();
+    std::fs::write(root.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(root.join("secret.rs"), "fn secret() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec![], true).unwrap();
+    let files = reader
+        .list_source_files(&root, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert_eq!(
+        files.len(),
+        2,
+        "a .gitignore ABOVE the walk root must have zero effect on the file \
+         list, even with respect_gitignore=true, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 #[test]
 fn invalid_glob_syntax_in_filter_errors_instead_of_panicking() {
     let dir = isolated_walk_dir("invalid_glob");

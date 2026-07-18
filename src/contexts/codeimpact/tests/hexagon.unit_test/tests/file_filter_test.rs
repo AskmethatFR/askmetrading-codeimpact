@@ -13,6 +13,10 @@ use codeimpact_hexagon::analysis::{FileFilter, FileFilterError};
 // 4. the too-many-patterns cap is enforced independently of any single
 //    pattern's own validity
 // 5. the error names the offending pattern (Display)
+// 6. (review-barrier retry 1, minor) exact-boundary "still accepted" pins:
+//    a pattern of exactly 512 chars, and a set of exactly 256 patterns,
+//    must both SUCCEED — discriminates a `>=` vs `>` mutant on either cap,
+//    which the 513/257-rejection tests above alone cannot catch
 
 #[test]
 fn unrestricted_has_no_patterns_and_gitignore_off() {
@@ -83,6 +87,30 @@ fn too_many_patterns_is_rejected_even_when_each_pattern_is_individually_valid() 
         Err(FileFilterError::TooManyPatterns(count)) => assert_eq!(count, 257),
         other => panic!("expected TooManyPatterns, got {:?}", other),
     }
+}
+
+#[test]
+fn pattern_of_exactly_the_max_length_is_still_accepted() {
+    let pattern = "a".repeat(512);
+    let result = FileFilter::new(vec![pattern.clone()], vec![], false);
+    assert!(
+        result.is_ok(),
+        "a 512-char pattern (the exact cap) must be accepted, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().include(), &[pattern]);
+}
+
+#[test]
+fn exactly_the_max_pattern_count_is_still_accepted() {
+    let include: Vec<String> = (0..256).map(|i| format!("src/mod_{}/**", i)).collect();
+    let result = FileFilter::new(include.clone(), vec![], false);
+    assert!(
+        result.is_ok(),
+        "exactly 256 patterns (the exact cap) must be accepted, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().include().len(), 256);
 }
 
 #[test]

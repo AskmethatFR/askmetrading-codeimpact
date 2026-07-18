@@ -384,7 +384,7 @@ fn include_pattern_attempting_path_traversal_is_rejected() {
 // D1: glob SYNTAX validation is deliberately NOT this reader's job — it
 // only builds a validated `FileFilter` of raw patterns (rejecting
 // traversal/absolute/empty/etc. shape issues above). Compiling the glob
-// happens later, in `FileSystemCodeReader::list_rust_files` (already
+// happens later, in `FileSystemCodeReader::list_source_files` (already
 // pinned in file_system_code_reader_test.rs's
 // `invalid_glob_syntax_in_filter_errors_instead_of_panicking`), and the
 // full CLI path (config read -> walk) is pinned end-to-end in
