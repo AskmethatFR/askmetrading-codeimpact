@@ -44,6 +44,20 @@ impl CodeParserStub {
 }
 
 impl CodeParser for CodeParserStub {
+    /// Every existing call site doubles a Rust-context `CodeParser` (this
+    /// stub predates US16's multi-language port delta) — no test exercises
+    /// `language()`/`capabilities()` through a use case in T2 (human-
+    /// approved Q1: deferred to T3), so a fixed Rust default keeps this
+    /// double at its established shape instead of growing a builder no
+    /// test needs yet (cc-yagni).
+    fn language(&self) -> codeimpact_hexagon::analysis::Language {
+        codeimpact_hexagon::analysis::Language::Rust
+    }
+
+    fn capabilities(&self) -> codeimpact_hexagon::analysis::LanguageCapabilities {
+        codeimpact_hexagon::analysis::LanguageCapabilities::all_supported(self.language())
+    }
+
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
         if let Some((marker, err)) = &self.failing_when_source_contains {
             if source.contains(marker.as_str()) {

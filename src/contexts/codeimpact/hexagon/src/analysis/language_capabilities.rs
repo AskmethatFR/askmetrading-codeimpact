@@ -1,0 +1,64 @@
+use super::language::Language;
+
+/// Whether a `CodeParser` adapter can produce a given metric for its
+/// language, at whatever fidelity T2 built (US16). `Degraded`/`Unsupported`
+/// are real cases a future adapter WILL construct (a language whose grammar
+/// cannot express loop-nesting detection, say) — T2 itself only ever
+/// constructs `Supported` (human-approved Q1: the seam exists now so
+/// `CodeParser`'s trait is not re-opened in T3, but nothing renders a
+/// degraded/unsupported state yet).
+#[derive(Clone, Debug, PartialEq)]
+pub enum MetricSupport {
+    Supported,
+    Degraded(String),
+    Unsupported,
+}
+
+/// What a language adapter can measure, per metric (US16 T2 seam). Plain
+/// data — no rendering, no behavior beyond construction; covered
+/// transitively through each adapter's own test (`SynCodeParser`,
+/// `TreeSitterCodeParser`), never given a standalone test of its own (Test
+/// Surface Map: a record-shaped type is not a unit).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LanguageCapabilities {
+    language: Language,
+    cyclomatic_complexity: MetricSupport,
+    io_in_loops: MetricSupport,
+    economic_impact: MetricSupport,
+    ecological_impact: MetricSupport,
+}
+
+impl LanguageCapabilities {
+    /// The only constructor T2 needs (human-approved Q1: minimal until
+    /// T3) — every metric `Supported`, for whichever `language` the caller
+    /// names.
+    pub fn all_supported(language: Language) -> Self {
+        Self {
+            language,
+            cyclomatic_complexity: MetricSupport::Supported,
+            io_in_loops: MetricSupport::Supported,
+            economic_impact: MetricSupport::Supported,
+            ecological_impact: MetricSupport::Supported,
+        }
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
+    }
+
+    pub fn cyclomatic_complexity(&self) -> &MetricSupport {
+        &self.cyclomatic_complexity
+    }
+
+    pub fn io_in_loops(&self) -> &MetricSupport {
+        &self.io_in_loops
+    }
+
+    pub fn economic_impact(&self) -> &MetricSupport {
+        &self.economic_impact
+    }
+
+    pub fn ecological_impact(&self) -> &MetricSupport {
+        &self.ecological_impact
+    }
+}

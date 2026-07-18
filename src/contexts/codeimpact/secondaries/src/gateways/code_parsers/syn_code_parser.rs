@@ -268,6 +268,14 @@ impl SynCodeParser {
 }
 
 impl CodeParser for SynCodeParser {
+    fn language(&self) -> codeimpact_hexagon::analysis::Language {
+        codeimpact_hexagon::analysis::Language::Rust
+    }
+
+    fn capabilities(&self) -> codeimpact_hexagon::analysis::LanguageCapabilities {
+        codeimpact_hexagon::analysis::LanguageCapabilities::all_supported(self.language())
+    }
+
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
         self.guard_admissible(source)?;
 
@@ -1235,6 +1243,27 @@ mod tests {
     fn parser() -> SynCodeParser {
         ensure_probe_built();
         SynCodeParser::new()
+    }
+
+    // ── Test List (port delta — language()/capabilities(), US16 T2 step E) ──
+    //   1. language_is_rust — SynCodeParser::language() == Language::Rust.
+    //   2. capabilities_reports_every_metric_supported — all-Supported
+    //      (human-approved Q1: T2 constructs no Degraded/Unsupported).
+
+    #[test]
+    fn language_is_rust() {
+        use codeimpact_hexagon::analysis::Language;
+        assert_eq!(SynCodeParser::new().language(), Language::Rust);
+    }
+
+    #[test]
+    fn capabilities_reports_every_metric_supported() {
+        use codeimpact_hexagon::analysis::MetricSupport;
+        let capabilities = SynCodeParser::new().capabilities();
+        assert_eq!(*capabilities.cyclomatic_complexity(), MetricSupport::Supported);
+        assert_eq!(*capabilities.io_in_loops(), MetricSupport::Supported);
+        assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
+        assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);
     }
 
     // ── Test List (source_guard wiring, #62) ──────────────────────────
