@@ -31,7 +31,7 @@ hexagon → rien
 
 ### DDD Tactical
 
-- **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation, OutputFormat
+- **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation, OutputFormat, AlertThresholds, **FileFilter**, **AnalysisConfig** (VO composite thresholds + filter — pas un Aggregate DDD, voir [[ADR-0019]])
 - **Domain Services:** ProactiveAnalyzer (statique), ReactiveAnalyzer (dynamique), EconomicImpactEstimator
 - **Pas d'Entity / Aggregate** dans le MVP (pas de persistence, pas de cycle de vie)
 
@@ -39,12 +39,12 @@ hexagon → rien
 
 | Port (hexagon) | Méthodes (signatures agnostiques du langage) | Adapter P0 (secondaries) | Adapter futur |
 |---|---|---|---|
-| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str])` | FileSystemCodeReader (`&["rs"]` fourni par la racine) | RoslynCodeReader (`&["cs"]`), TsCodeReader (`&["ts","tsx"]`) |
+| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str], filter: &FileFilter)` | FileSystemCodeReader (`&["rs"]` fourni par la racine ; walk `ignore` + `globset`, [[ADR-0019]]) | RoslynCodeReader (`&["cs"]`), TsCodeReader (`&["ts","tsx"]`) |
 | CodeParser | `parse(source)` · `resolve_dependencies(source, &DependencyContext) -> Vec<PathBuf>` | SynCodeParser (sémantique modules `crate::`/`super::`/`mod.rs` **privée à l'adaptateur**) | RoslynCodeParser, TsCodeParser |
 | ProfilerPort | — | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | — | CargoTestRunner | — |
 | ReportWriterPort | — | ConsoleReportWriter, JsonReportWriter, HtmlReportWriter | — |
-| ConfigReaderPort | — | FileSystemConfigReader (`.codeimpact.json`, serde_json) | — |
+| ConfigReaderPort | `read_config(explicit_path, search_dirs) -> Option<AnalysisConfig>` ([[ADR-0019]]) | FileSystemConfigReader (`.codeimpact.json`, serde_json, `deny_unknown_fields` + schéma forward-compat) | — |
 
 > **Frontière agnostique du langage ([[ADR-0018]]).** L'hexagone est ~100 % agnostique du langage : la sémantique par-langage — résolution de modules/namespaces, extensions de fichiers, signatures d'I/O — vit **entièrement** dans l'adaptateur pilote. `CodeParser::resolve_dependencies` rend des `PathBuf` **déjà résolus** (le protocole `"mod:"`/`"use:"` a disparu) via le VO neutre `DependencyContext`; `CodeReader::list_source_files` filtre sur un ensemble d'extensions passé par la racine de composition. Un adaptateur C#/TS s'ajoute **sans toucher `hexagon/`** — invariant zéro-dép d'[[ADR-0001]] renforcé, pas seulement préservé.
 
@@ -96,6 +96,10 @@ hexagon → rien
 ## Alert Thresholds (US8)
 
 Porte de domaine pure `AlertThresholds::evaluate` dans l'hexagone zéro-dep : gate l'énergie (kWh) et le CO2 (g) agrégés projet contre des seuils venus de la CLI (`--max-kwh`/`--max-co2`) et/ou d'un fichier `.codeimpact.json` (lu derrière `ConfigReaderPort`). `--strict` mappe un dépassement sur exit 3. Une métrique non mesurée (`None`) ne franchit jamais un seuil ([[ADR-0010]]). Design courant : [[alert-thresholds]] ; décision : [[ADR-0017]].
+
+## Configuration file — `AnalysisConfig` (US15)
+
+La config projet lue depuis `.codeimpact.json` est désormais un VO composite `AnalysisConfig { thresholds: AlertThresholds, filter: FileFilter }` (pas un Aggregate DDD — VO immuable, voir [[ADR-0019]]). `ConfigReaderPort::read_config(explicit_path, search_dirs) -> Option<AnalysisConfig>` (ex-`read_thresholds`) rend le VO déjà validé ; `Ok(None)` = fichier absent ⇒ `AnalysisConfig::defaults()` (comportement byte-identique au pré-US15). `FileFilter { include, exclude, respect_gitignore }` porte les **motifs bruts validés** ; la **compilation des globs vit dans l'adaptateur** (`globset`), l'hexagone restant zéro-dep ([[ADR-0001]]). Le walk migre de `walkdir` vers la crate `ignore` (`exclude` l'emporte sur `include` ; les 4 sources gitignore gatent ensemble ; `.parents(false)` borne le walk à la racine). Le DTO adaptateur déclare le **schéma forward-compat complet** (`languages`/`sourceRoots`/`extensions`/`parser`/`ioSignatures` parsés-mais-inertes) sous `#[serde(deny_unknown_fields)]`. Décision : [[ADR-0019]].
 
 ## Module structure (actuelle)
 
@@ -194,3 +198,4 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | 0007 | JSON Report Format — Output Format & Schema | ✅ Appliqué dans US4 |
 | … | (0008–0017 — voir docs/INDEX.md, spine canonique) | — |
 | 0018 | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | ✅ Appliqué dans #32 |
+| 0019 | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | ✅ Appliqué dans #31 |
