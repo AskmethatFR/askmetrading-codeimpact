@@ -184,6 +184,8 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | US6 | P1 | Stress test instrumenté | ✅ Livré |
 | US7 | P1 | Rapport HTML | ✅ Livré |
 | US8 | P1 | Seuils d'alerte personnalisés | ✅ Livré |
+| US14 | P1 | Support multi-langage (étude + de-Rustification) | 🔄 En cours — T1 (de-Rustify hexagone) livré, T2 C# en cours |
+| US15 | P1 | Fichier de configuration `.codeimpact.json` (include/exclude, respectGitignore) | 🔄 En revue (cette PR) |
 
 ## Décisions enregistrées (ADR)
 
