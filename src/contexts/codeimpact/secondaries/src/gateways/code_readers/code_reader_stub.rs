@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
+use codeimpact_hexagon::analysis::FileFilter;
 
 #[derive(Default)]
 pub struct CodeReaderStub {
@@ -40,6 +41,7 @@ impl CodeReader for CodeReaderStub {
         &self,
         _dir: &Path,
         _extensions: &[&str],
+        _filter: &FileFilter,
     ) -> Result<Vec<PathBuf>, AnalysisError> {
         Ok(self.source_files.clone())
     }

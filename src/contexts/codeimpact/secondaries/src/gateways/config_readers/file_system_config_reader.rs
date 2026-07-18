@@ -1,12 +1,14 @@
 use std::path::Path;
 
 use codeimpact_hexagon::analysis::AlertThresholds;
+use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::ConfigReaderPort;
+use codeimpact_hexagon::analysis::FileFilter;
 
 const CONFIG_FILE_NAME: &str = ".codeimpact.json";
-/// A thresholds config is a handful of bytes; 1 MiB is a generous cap that
-/// still refuses anything resembling an attack payload (mirrors
+/// A thresholds/filter config is a handful of bytes; 1 MiB is a generous cap
+/// that still refuses anything resembling an attack payload (mirrors
 /// `FileSystemCodeReader::MAX_FILE_SIZE`'s discipline at a scale fitting a
 /// config file rather than a source file).
 const MAX_CONFIG_SIZE: u64 = 1024 * 1024;
@@ -14,16 +16,47 @@ const ERR_NOT_FOUND: &str = "fichier de configuration introuvable";
 const ERR_NOT_REGULAR: &str = "la configuration n'est pas un fichier régulier";
 const ERR_TOO_LARGE: &str = "fichier de configuration trop volumineux (max 1 Mo)";
 const ERR_UNREADABLE: &str = "impossible de lire la configuration";
-const ERR_INVALID_JSON: &str = "configuration JSON invalide";
 
-/// Reserved shared schema (US8 T4 / future US15): only the `thresholds`
-/// section is read here; unknown top-level keys (e.g. a future
-/// include/exclude section) are tolerated by serde's default behavior
-/// (no `deny_unknown_fields`).
+fn default_respect_gitignore() -> bool {
+    true
+}
+
+/// Full `.codeimpact.json` schema (US8 `thresholds` + US31
+/// `include`/`exclude`/`respectGitignore`, plus reserved forward-compat
+/// keys). `deny_unknown_fields` (US31, D-none — a change from US8's
+/// tolerant schema): every reserved key is declared, even the ones this
+/// reader does not yet wire up (`languages`, `sourceRoots`, `extensions`,
+/// `parser`, `ioSignatures` — typed as loose `serde_json::Value`, parsed
+/// then discarded) — a real future key therefore does not break the
+/// schema, but a typo in ANY key now surfaces as an actionable error
+/// instead of being silently swallowed.
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct CodeImpactConfig {
+    #[serde(default, rename = "$schema")]
+    _schema: Option<String>,
+    #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
+    exclude: Vec<String>,
+    /// D4: a config file that IS present but omits this key defaults to
+    /// `true` — distinct from the "no config file at all" case, which
+    /// falls back to `FileFilter::unrestricted()` (`respect_gitignore`
+    /// `false`) one layer up, in `read_config`.
+    #[serde(default = "default_respect_gitignore", rename = "respectGitignore")]
+    respect_gitignore: bool,
     #[serde(default)]
     thresholds: Option<ThresholdsSection>,
+    #[serde(default, rename = "languages")]
+    _languages: Option<serde_json::Value>,
+    #[serde(default, rename = "sourceRoots")]
+    _source_roots: Option<serde_json::Value>,
+    #[serde(default, rename = "extensions")]
+    _extensions: Option<serde_json::Value>,
+    #[serde(default, rename = "parser")]
+    _parser: Option<serde_json::Value>,
+    #[serde(default, rename = "ioSignatures")]
+    _io_signatures: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -48,7 +81,7 @@ impl FileSystemConfigReader {
     /// that isn't a regular file (symlink/FIFO/dir — `symlink_metadata`
     /// does not follow the final component, so a symlink is caught before
     /// `read_to_string` would follow it), enforce the size cap, then parse.
-    fn read_and_validate(&self, path: &Path) -> Result<AlertThresholds, AnalysisError> {
+    fn read_and_validate(&self, path: &Path) -> Result<AnalysisConfig, AnalysisError> {
         // Canonicalize only the PARENT directory, then re-join the file
         // name — never `canonicalize(path)` directly, which follows a
         // symlink straight to its target and would make the
@@ -84,21 +117,29 @@ impl FileSystemConfigReader {
         let content = std::fs::read_to_string(&resolved)
             .map_err(|_| AnalysisError::IoError(ERR_UNREADABLE.to_string()))?;
 
-        let config: CodeImpactConfig = serde_json::from_str(&content)
-            .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_JSON.to_string()))?;
+        // `e` carries serde_json's own line/column and (on deny_unknown_fields)
+        // the offending key name — actionable, and path-free by construction
+        // (it only ever describes a position within `content`).
+        let config: CodeImpactConfig = serde_json::from_str(&content).map_err(|e| {
+            AnalysisError::AnalysisFailed(format!("configuration JSON invalide: {}", e))
+        })?;
 
         let section = config.thresholds.unwrap_or_default();
-        AlertThresholds::new(section.max_energy_kwh, section.max_co2_grams)
-            .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))
+        let thresholds = AlertThresholds::new(section.max_energy_kwh, section.max_co2_grams)
+            .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
+        let filter = FileFilter::new(config.include, config.exclude, config.respect_gitignore)
+            .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
+
+        Ok(AnalysisConfig::new(thresholds, filter))
     }
 }
 
 impl ConfigReaderPort for FileSystemConfigReader {
-    fn read_thresholds(
+    fn read_config(
         &self,
         explicit_path: Option<&Path>,
         search_dirs: &[&Path],
-    ) -> Result<Option<AlertThresholds>, AnalysisError> {
+    ) -> Result<Option<AnalysisConfig>, AnalysisError> {
         if let Some(explicit) = explicit_path {
             return self.read_and_validate(explicit).map(Some);
         }

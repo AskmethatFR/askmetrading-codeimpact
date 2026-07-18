@@ -3,10 +3,31 @@ use std::path::{Path, PathBuf};
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
+use codeimpact_hexagon::analysis::FileFilter;
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::WalkBuilder;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 128;
 const ERR_FILE_NOT_FOUND: &str = "fichier introuvable";
+const ERR_INVALID_GLOB: &str = "motif de filtrage invalide (syntaxe glob)";
+
+/// Compiles `patterns` into a matchable `GlobSet` (D1: glob compilation is
+/// an adapter concern — `FileFilter` itself carries only validated raw
+/// patterns, never a compiled matcher, so the hexagon stays zero-dep).
+/// A pattern that is syntactically invalid glob surfaces as an anonymized
+/// `AnalysisError` (AC4/ADR-0006) rather than a panic.
+fn build_glob_set(patterns: &[String]) -> Result<GlobSet, AnalysisError> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        let glob = Glob::new(pattern)
+            .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))?;
+        builder.add(glob);
+    }
+    builder
+        .build()
+        .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
+}
 
 #[derive(Default)]
 pub struct FileSystemCodeReader;
@@ -45,49 +66,85 @@ impl CodeReader for FileSystemCodeReader {
         &self,
         dir: &Path,
         extensions: &[&str],
+        filter: &FileFilter,
     ) -> Result<Vec<PathBuf>, AnalysisError> {
         let canonical_root = std::fs::canonicalize(dir)
             .map_err(|_| AnalysisError::IoError("dossier introuvable".to_string()))?;
 
+        let include_set = build_glob_set(filter.include())?;
+        let exclude_set = build_glob_set(filter.exclude())?;
+        let include_is_empty = filter.include().is_empty();
+        let respect_gitignore = filter.respect_gitignore();
+
         let mut files = Vec::new();
-        let walker = walkdir::WalkDir::new(&canonical_root)
+        let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
-            .max_depth(MAX_WALK_DEPTH)
-            .into_iter()
-            .filter_entry(|e| {
-                e.file_name()
-                    .to_str()
-                    .map(|s| !s.starts_with('.') || s == ".")
-                    .unwrap_or(false)
-            });
+            .max_depth(Some(MAX_WALK_DEPTH))
+            .hidden(true)
+            // `ignore`'s WalkBuilder exposes FOUR independent ignore-source
+            // toggles (git_ignore/.gitignore, git_exclude/.git/info/exclude,
+            // git_global/the user's global gitignore, ignore/.ignore files)
+            // — all default to `true`. Gating only `git_ignore` left the
+            // other three ON unconditionally, silently dropping files even
+            // under `FileFilter::unrestricted()` (QA finding, retry 1).
+            // Every source must move together with `respect_gitignore` so
+            // "unrestricted" is byte-identical to the pre-US31 `walkdir`
+            // walk, which honored none of them.
+            .git_ignore(respect_gitignore)
+            .git_exclude(respect_gitignore)
+            .git_global(respect_gitignore)
+            .ignore(respect_gitignore)
+            // The walk root itself is not guaranteed to be an actual git
+            // working tree (e.g. an extracted archive, a CI checkout
+            // shallow-cloned without `.git`) — honoring `.gitignore` at the
+            // root must not silently depend on that.
+            .require_git(false)
+            // `parents(false)` (Security finding, retry 1): the walker must
+            // NEVER consult ignore state from OUTSIDE the analyzed
+            // directory. `parents(true)` would read .gitignore/.ignore from
+            // every ancestor up to `/`, letting a party outside the
+            // repository hide source files from a shared CI host's
+            // ancestor directories and evade the --strict energy/CO2 gate
+            // (ADR-0017).
+            .parents(false)
+            .build();
 
         for entry in walker {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().is_file() {
-                        let path = entry.path();
-                        if path
-                            .extension()
-                            .and_then(|ext| ext.to_str())
-                            .is_some_and(|ext| extensions.contains(&ext))
-                        {
-                            match std::fs::metadata(path) {
-                                Ok(meta) if meta.len() <= MAX_FILE_SIZE => {
-                                    files.push(path.to_path_buf());
-                                }
-                                Ok(_) => {
-                                    eprintln!(
-                                        "Avertissement: fichier ignoré (trop volumineux): {}",
-                                        path.file_name().unwrap_or_default().to_string_lossy()
-                                    );
-                                }
-                                Err(_) => {
-                                    eprintln!(
-                                        "Avertissement: fichier ignoré (illisible): {}",
-                                        path.file_name().unwrap_or_default().to_string_lossy()
-                                    );
-                                }
-                            }
+                    let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+                    if !is_file {
+                        continue;
+                    }
+                    let path = entry.path();
+                    if !path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| extensions.contains(&ext))
+                    {
+                        continue;
+                    }
+                    let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
+                    let keep = (include_is_empty || include_set.is_match(relative))
+                        && !exclude_set.is_match(relative);
+                    if !keep {
+                        continue;
+                    }
+                    match std::fs::metadata(path) {
+                        Ok(meta) if meta.len() <= MAX_FILE_SIZE => {
+                            files.push(path.to_path_buf());
+                        }
+                        Ok(_) => {
+                            eprintln!(
+                                "Avertissement: fichier ignoré (trop volumineux): {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            );
+                        }
+                        Err(_) => {
+                            eprintln!(
+                                "Avertissement: fichier ignoré (illisible): {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            );
                         }
                     }
                 }

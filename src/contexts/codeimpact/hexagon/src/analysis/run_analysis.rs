@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::alert_thresholds::AlertThresholds;
+use super::analysis_config::AnalysisConfig;
 use super::analysis_rule::AnalysisRule;
 use super::analysis_target::{AnalysisTarget, TargetType};
 use super::code_location::CodeLocation;
@@ -35,24 +36,26 @@ impl RunAnalysis {
         }
     }
 
-    /// `thresholds` (US8): evaluated against the project's aggregate impact
-    /// on the project path, and against the file's own impact on a
-    /// single-file target (T3 extended the gate to `CodeMetrics`).
-    /// `AlertThresholds::none()` reproduces the pre-US8 behavior exactly
-    /// (AC6): `evaluate` against no configured threshold never breaches.
+    /// `config` (US8 thresholds + US31 file filter): thresholds are
+    /// evaluated against the project's aggregate impact on the project
+    /// path, and against the file's own impact on a single-file target (T3
+    /// extended the gate to `CodeMetrics`). `AnalysisConfig::defaults()`
+    /// reproduces the pre-US8/US31 behavior exactly (AC6/D4): `evaluate`
+    /// against no configured threshold never breaches, and an unrestricted
+    /// filter walks every file exactly as before.
     pub fn handle(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-        thresholds: &AlertThresholds,
+        config: &AnalysisConfig,
     ) -> Result<GatedOutput<()>, AnalysisError> {
         if *target.target_type() == TargetType::Project {
-            return self.handle_project(target, rules, thresholds);
+            return self.handle_project(target, rules, config);
         }
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
-        let metrics = Self::gate_metrics(metrics, thresholds);
+        let metrics = Self::gate_metrics(metrics, config.thresholds());
         let report = metrics.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_console(&metrics)?;
         Ok(GatedOutput::new((), report))
@@ -62,9 +65,11 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-        thresholds: &AlertThresholds,
+        config: &AnalysisConfig,
     ) -> Result<GatedOutput<()>, AnalysisError> {
-        let files = self.code_reader.list_source_files(target.path(), &["rs"])?;
+        let files = self
+            .code_reader
+            .list_source_files(target.path(), &["rs"], config.file_filter())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
@@ -134,7 +139,7 @@ impl RunAnalysis {
 
         let graph =
             FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
-        let graph = Self::gate_project(graph, thresholds);
+        let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_project_report(&graph)?;
         Ok(GatedOutput::new((), report))
@@ -213,12 +218,12 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-        thresholds: &AlertThresholds,
+        config: &AnalysisConfig,
     ) -> Result<GatedOutput<String>, AnalysisError> {
         let source = self.code_reader.read_source(target)?;
         let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
         let metrics = Self::set_file_paths(metrics, target.path());
-        let metrics = Self::gate_metrics(metrics, thresholds);
+        let metrics = Self::gate_metrics(metrics, config.thresholds());
         let report = metrics.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let target_type = if *target.target_type() == TargetType::Project {
@@ -236,10 +241,10 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-        thresholds: &AlertThresholds,
+        config: &AnalysisConfig,
     ) -> Result<GatedOutput<String>, AnalysisError> {
-        let graph = self.build_project_graph(target, rules)?;
-        let graph = Self::gate_project(graph, thresholds);
+        let graph = self.build_project_graph(target, rules, config.file_filter())?;
+        let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let json = self.reporter.write_project_json(&graph, &target_str)?;
@@ -250,28 +255,31 @@ impl RunAnalysis {
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
-        thresholds: &AlertThresholds,
+        config: &AnalysisConfig,
     ) -> Result<GatedOutput<String>, AnalysisError> {
-        let graph = self.build_project_graph(target, rules)?;
-        let graph = Self::gate_project(graph, thresholds);
+        let graph = self.build_project_graph(target, rules, config.file_filter())?;
+        let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let html = self.reporter.write_html(&graph, &target_str)?;
         Ok(GatedOutput::new(html, report))
     }
 
-    /// Walks every Rust file under `target`, analyzes it, and resolves
-    /// inter-file dependencies into a `FileConsumptionGraph`. Analysis or
-    /// parsing failures on an individual file are silently skipped (best
-    /// effort over a whole project) — shared by handle_project_json and
-    /// handle_project_html, which differ only in what they do with the
-    /// resulting graph.
+    /// Walks every Rust file under `target` matching `filter` (US31),
+    /// analyzes it, and resolves inter-file dependencies into a
+    /// `FileConsumptionGraph`. Analysis or parsing failures on an
+    /// individual file are silently skipped (best effort over a whole
+    /// project) — shared by handle_project_json and handle_project_html,
+    /// which differ only in what they do with the resulting graph.
     fn build_project_graph(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
+        filter: &super::file_filter::FileFilter,
     ) -> Result<FileConsumptionGraph, AnalysisError> {
-        let files = self.code_reader.list_source_files(target.path(), &["rs"])?;
+        let files = self
+            .code_reader
+            .list_source_files(target.path(), &["rs"], filter)?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();

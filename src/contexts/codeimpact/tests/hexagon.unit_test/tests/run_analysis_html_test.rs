@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codeimpact_hexagon::analysis::AlertThresholds;
+use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ParsedFunction;
@@ -42,7 +42,7 @@ fn handle_project_html_returns_writer_output_for_valid_project() {
     let result = use_case.handle_project_html(
         &make_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     assert!(
@@ -75,7 +75,7 @@ fn handle_project_html_empty_project_returns_error() {
     let result = use_case.handle_project_html(
         &make_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     match result {
@@ -116,7 +116,7 @@ fn handle_project_html_records_unreadable_file_as_unmeasurable_and_excludes_it_f
     let result = use_case.handle_project_html(
         &make_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 
@@ -169,7 +169,7 @@ fn handle_project_html_records_unparseable_file_as_unmeasurable_and_excludes_it_
     let result = use_case.handle_project_html(
         &make_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 
