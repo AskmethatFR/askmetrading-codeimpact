@@ -37,14 +37,16 @@ hexagon → rien
 
 ### Ports & Adapters
 
-| Port (hexagon) | Adapter P0 (secondaries) | Adapter futur |
-|---|---|---|
-| CodeReaderPort | FileSystemCodeReader | — |
-| CodeParserPort | SynCodeParser | RoslynCodeParser, TsCodeParser |
-| ProfilerPort | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
-| TestRunnerPort | CargoTestRunner | — |
-| ReportWriterPort | ConsoleReportWriter, JsonReportWriter | — |
-| ConfigReaderPort | FileSystemConfigReader (`.codeimpact.json`, serde_json) | — |
+| Port (hexagon) | Méthodes (signatures agnostiques du langage) | Adapter P0 (secondaries) | Adapter futur |
+|---|---|---|---|
+| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str])` | FileSystemCodeReader (`&["rs"]` fourni par la racine) | RoslynCodeReader (`&["cs"]`), TsCodeReader (`&["ts","tsx"]`) |
+| CodeParser | `parse(source)` · `resolve_dependencies(source, &DependencyContext) -> Vec<PathBuf>` | SynCodeParser (sémantique modules `crate::`/`super::`/`mod.rs` **privée à l'adaptateur**) | RoslynCodeParser, TsCodeParser |
+| ProfilerPort | — | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
+| TestRunnerPort | — | CargoTestRunner | — |
+| ReportWriterPort | — | ConsoleReportWriter, JsonReportWriter, HtmlReportWriter | — |
+| ConfigReaderPort | — | FileSystemConfigReader (`.codeimpact.json`, serde_json) | — |
+
+> **Frontière agnostique du langage ([[ADR-0018]]).** L'hexagone est ~100 % agnostique du langage : la sémantique par-langage — résolution de modules/namespaces, extensions de fichiers, signatures d'I/O — vit **entièrement** dans l'adaptateur pilote. `CodeParser::resolve_dependencies` rend des `PathBuf` **déjà résolus** (le protocole `"mod:"`/`"use:"` a disparu) via le VO neutre `DependencyContext`; `CodeReader::list_source_files` filtre sur un ensemble d'extensions passé par la racine de composition. Un adaptateur C#/TS s'ajoute **sans toucher `hexagon/`** — invariant zéro-dép d'[[ADR-0001]] renforcé, pas seulement préservé.
 
 > **Frontière de processus dans `SynCodeParser`.** Le parsing risqué est isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, une cible binaire Cargo dédiée de `secondaries/`) pour contenir un débordement de pile de `syn` sans tuer le scan. Voir [[ADR-0015]].
 
@@ -190,3 +192,5 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | 0005 | Package-by-context, package-by-layer à l'intérieur | ✅ Accepté |
 | 0006 | Sécurité: canonicalize, limite taille fichier, pas de fuite de path | ✅ Appliqué dans US1 |
 | 0007 | JSON Report Format — Output Format & Schema | ✅ Appliqué dans US4 |
+| … | (0008–0017 — voir docs/INDEX.md, spine canonique) | — |
+| 0018 | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | ✅ Appliqué dans #32 |

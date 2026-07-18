@@ -14,7 +14,7 @@ fn make_parser(decision_points: u32) -> CodeParserStub {
         has_nested_loop: false,
         decision_points,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }])
 }
@@ -31,7 +31,7 @@ fn make_multi_parser(points: &[u32]) -> CodeParserStub {
             has_nested_loop: false,
             decision_points: dp,
             depth: 0,
-            match_arms: 0,
+            branch_arms: 0,
             calls_in_loops: vec![],
         })
         .collect();
@@ -294,7 +294,7 @@ fn io_in_loops_rule_detects_io_in_loops() {
         has_nested_loop: false,
         decision_points: 0,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![LoopCall {
             name: "std::fs::read".to_string(),
             line: 5,
@@ -325,7 +325,7 @@ fn io_in_loops_rule_not_in_rules_returns_empty() {
         has_nested_loop: false,
         decision_points: 0,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![LoopCall {
             name: "std::fs::read".to_string(),
             line: 5,
@@ -353,7 +353,7 @@ fn io_in_loops_rule_counts_unclassifiable_calls() {
         has_nested_loop: false,
         decision_points: 0,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![
             LoopCall {
                 name: "std::fs::read".to_string(),
@@ -397,7 +397,7 @@ fn io_in_loops_rule_not_in_rules_returns_zero_unclassifiable() {
         has_nested_loop: false,
         decision_points: 0,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![LoopCall {
             name: "connect".to_string(),
             line: 6,

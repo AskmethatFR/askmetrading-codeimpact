@@ -5,13 +5,11 @@ use super::analysis_rule::AnalysisRule;
 use super::analysis_target::{AnalysisTarget, TargetType};
 use super::code_location::CodeLocation;
 use super::code_metrics::CodeMetrics;
-use super::code_parser::CodeParser;
+use super::code_parser::{CodeParser, DependencyContext};
 use super::code_reader::CodeReader;
 use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
-use super::file_consumption_graph::{
-    resolve_file_dependency, FileConsumptionGraph, UnmeasurableFile,
-};
+use super::file_consumption_graph::{FileConsumptionGraph, UnmeasurableFile};
 use super::gated_output::GatedOutput;
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
@@ -66,11 +64,11 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         thresholds: &AlertThresholds,
     ) -> Result<GatedOutput<()>, AnalysisError> {
-        let files = self.code_reader.list_rust_files(target.path())?;
+        let files = self.code_reader.list_source_files(target.path(), &["rs"])?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
-        let crate_root = target.path().clone();
+        let project_root = target.path().clone();
 
         for file in &files {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
@@ -98,18 +96,17 @@ impl RunAnalysis {
                         }
                     }
 
-                    // Parse file dependencies
-                    match self.parser.parse_file_dependencies(&source) {
-                        Ok(raw_deps) => {
-                            for raw in &raw_deps {
-                                if let Some(to) =
-                                    resolve_file_dependency(raw, file, &crate_root, &files)
-                                {
-                                    all_deps.push(super::file_consumption_graph::FileDependency {
-                                        from: file.clone(),
-                                        to,
-                                    });
-                                }
+                    // Resolve file dependencies (adapter owns the language's
+                    // module semantics — US14 L1/L2)
+                    let ctx =
+                        DependencyContext::new(file.clone(), project_root.clone(), files.clone());
+                    match self.parser.resolve_dependencies(&source, &ctx) {
+                        Ok(resolved) => {
+                            for to in resolved {
+                                all_deps.push(super::file_consumption_graph::FileDependency {
+                                    from: file.clone(),
+                                    to,
+                                });
                             }
                         }
                         Err(e) => {
@@ -274,11 +271,11 @@ impl RunAnalysis {
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
     ) -> Result<FileConsumptionGraph, AnalysisError> {
-        let files = self.code_reader.list_rust_files(target.path())?;
+        let files = self.code_reader.list_source_files(target.path(), &["rs"])?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
-        let crate_root = target.path().clone();
+        let project_root = target.path().clone();
 
         for file in &files {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
@@ -300,19 +297,14 @@ impl RunAnalysis {
                             });
                         }
                     }
-                    if let Ok(raw_deps) = self.parser.parse_file_dependencies(&source) {
-                        for raw in &raw_deps {
-                            if let Some(to) = super::file_consumption_graph::resolve_file_dependency(
-                                raw,
-                                file,
-                                &crate_root,
-                                &files,
-                            ) {
-                                all_deps.push(super::file_consumption_graph::FileDependency {
-                                    from: file.clone(),
-                                    to,
-                                });
-                            }
+                    let ctx =
+                        DependencyContext::new(file.clone(), project_root.clone(), files.clone());
+                    if let Ok(resolved) = self.parser.resolve_dependencies(&source, &ctx) {
+                        for to in resolved {
+                            all_deps.push(super::file_consumption_graph::FileDependency {
+                                from: file.clone(),
+                                to,
+                            });
                         }
                     }
                 }

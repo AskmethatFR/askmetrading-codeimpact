@@ -322,7 +322,7 @@ mod tests {
             has_nested_loop: false,
             decision_points: 1,
             depth: 0,
-            match_arms: 0,
+            branch_arms: 0,
             calls_in_loops: vec![],
         }
     }
@@ -353,7 +353,7 @@ mod tests {
             has_nested_loop: false,
             decision_points: 5,
             depth: 0,
-            match_arms: 0,
+            branch_arms: 0,
             calls_in_loops: vec![],
         }];
         let graph = CallGraph::build(&fns);
@@ -371,7 +371,7 @@ mod tests {
                 has_nested_loop: false,
                 decision_points: 1,
                 depth: 0,
-                match_arms: 0,
+                branch_arms: 0,
                 calls_in_loops: vec![],
             },
             ParsedFunction {
@@ -382,7 +382,7 @@ mod tests {
                 has_nested_loop: false,
                 decision_points: 1,
                 depth: 0,
-                match_arms: 0,
+                branch_arms: 0,
                 calls_in_loops: vec![],
             },
         ];

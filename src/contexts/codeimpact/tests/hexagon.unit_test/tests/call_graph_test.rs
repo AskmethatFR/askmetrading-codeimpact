@@ -66,7 +66,7 @@ fn make_fn(name: &str, decision_points: u32, calls: Vec<&str>) -> ParsedFunction
         has_nested_loop: false,
         decision_points,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }
 }

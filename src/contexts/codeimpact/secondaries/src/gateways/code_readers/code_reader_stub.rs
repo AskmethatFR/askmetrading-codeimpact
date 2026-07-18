@@ -8,14 +8,14 @@ use codeimpact_hexagon::analysis::CodeReader;
 #[derive(Default)]
 pub struct CodeReaderStub {
     sources: HashMap<PathBuf, String>,
-    rust_files: Vec<PathBuf>,
+    source_files: Vec<PathBuf>,
 }
 
 impl CodeReaderStub {
     pub fn new() -> Self {
         Self {
             sources: HashMap::new(),
-            rust_files: Vec::new(),
+            source_files: Vec::new(),
         }
     }
 
@@ -23,8 +23,8 @@ impl CodeReaderStub {
         self.sources.insert(path, source);
     }
 
-    pub fn add_rust_file(&mut self, path: PathBuf) {
-        self.rust_files.push(path);
+    pub fn add_source_file(&mut self, path: PathBuf) {
+        self.source_files.push(path);
     }
 }
 
@@ -36,7 +36,11 @@ impl CodeReader for CodeReaderStub {
             .ok_or_else(|| AnalysisError::IoError("fichier introuvable".to_string()))
     }
 
-    fn list_rust_files(&self, _dir: &Path) -> Result<Vec<PathBuf>, AnalysisError> {
-        Ok(self.rust_files.clone())
+    fn list_source_files(
+        &self,
+        _dir: &Path,
+        _extensions: &[&str],
+    ) -> Result<Vec<PathBuf>, AnalysisError> {
+        Ok(self.source_files.clone())
     }
 }

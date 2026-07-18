@@ -1,8 +1,10 @@
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::DependencyContext;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries_integration_test::support::ensure_probe_built;
+use std::path::PathBuf;
 
 fn parser() -> SynCodeParser {
     ensure_probe_built();
@@ -81,8 +83,9 @@ fn pathological_sources_are_unmeasurable_source_too_complex() {
 #[test]
 fn pathological_source_dependencies_are_also_unmeasurable_source_too_complex() {
     let source = nested_mods_source(30000);
+    let ctx = DependencyContext::new(PathBuf::from("f.rs"), PathBuf::from("."), vec![]);
 
-    let result = parser().parse_file_dependencies(&source);
+    let result = parser().resolve_dependencies(&source, &ctx);
 
     match result {
         Err(AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooComplex)) => {}

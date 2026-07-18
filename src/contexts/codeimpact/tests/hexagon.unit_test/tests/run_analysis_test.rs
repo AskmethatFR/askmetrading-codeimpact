@@ -58,7 +58,7 @@ fn analyze_valid_file_writes_metrics() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
@@ -95,12 +95,12 @@ fn analyze_nonexistent_file_returns_error() {
 }
 
 #[test]
-fn list_rust_files_returns_configured_files_from_stub() {
+fn list_source_files_returns_configured_files_from_stub() {
     let mut reader = CodeReaderStub::new();
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
-    reader.add_rust_file(PathBuf::from("src/lib.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/lib.rs"));
     let files = reader
-        .list_rust_files(&PathBuf::from("."))
+        .list_source_files(&PathBuf::from("."), &["rs"])
         .expect("should list files");
     assert_eq!(files.len(), 2);
     assert!(files.contains(&PathBuf::from("src/main.rs")));
@@ -108,10 +108,10 @@ fn list_rust_files_returns_configured_files_from_stub() {
 }
 
 #[test]
-fn list_rust_files_returns_empty_when_none_configured() {
+fn list_source_files_returns_empty_when_none_configured() {
     let reader = CodeReaderStub::new();
     let files = reader
-        .list_rust_files(&PathBuf::from("."))
+        .list_source_files(&PathBuf::from("."), &["rs"])
         .expect("should list files");
     assert!(files.is_empty());
 }
@@ -121,8 +121,8 @@ fn analyze_project_target_writes_per_file_report() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
     reader.add_source(PathBuf::from("src/lib.rs"), "fn lib() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
-    reader.add_rust_file(PathBuf::from("src/lib.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/lib.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -133,7 +133,7 @@ fn analyze_project_target_writes_per_file_report() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
@@ -186,8 +186,8 @@ fn parser_error_propagates_through_use_case() {
 fn handle_project_continues_on_read_error() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
-    reader.add_rust_file(PathBuf::from("src/good.rs"));
-    reader.add_rust_file(PathBuf::from("src/bad.rs")); // no source — read_source fails
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad.rs")); // no source — read_source fails
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -198,7 +198,7 @@ fn handle_project_continues_on_read_error() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
@@ -231,7 +231,7 @@ fn handle_project_continues_on_read_error() {
 fn handle_project_continues_on_parse_error() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::new(Err(AnalysisError::AnalysisFailed(
@@ -265,7 +265,7 @@ fn handle_project_continues_on_parse_error() {
 fn handle_project_continues_on_deps_parse_error() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -276,10 +276,10 @@ fn handle_project_continues_on_deps_parse_error() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }])
-    .with_deps(Err(AnalysisError::AnalysisFailed("deps error".to_string())));
+    .with_resolved_dependencies(Err(AnalysisError::AnalysisFailed("deps error".to_string())));
 
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
 
@@ -317,8 +317,8 @@ fn handle_project_continues_on_deps_parse_error() {
 fn handle_project_records_unreadable_file_as_unmeasurable() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
-    reader.add_rust_file(PathBuf::from("src/good.rs"));
-    reader.add_rust_file(PathBuf::from("src/bad.rs")); // no source configured — read_source fails
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad.rs")); // no source configured — read_source fails
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -329,7 +329,7 @@ fn handle_project_records_unreadable_file_as_unmeasurable() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
@@ -361,8 +361,8 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
     reader.add_source(PathBuf::from("src/bad.rs"), "@@@ not rust".into());
-    reader.add_rust_file(PathBuf::from("src/good.rs"));
-    reader.add_rust_file(PathBuf::from("src/bad.rs"));
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -373,7 +373,7 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }])
     .failing_when_source_contains(
@@ -421,8 +421,8 @@ fn project_with_oversized_file_marks_it_source_too_large() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
     reader.add_source(PathBuf::from("src/huge.rs"), "OVERSIZED".into());
-    reader.add_rust_file(PathBuf::from("src/good.rs"));
-    reader.add_rust_file(PathBuf::from("src/huge.rs"));
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/huge.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -433,7 +433,7 @@ fn project_with_oversized_file_marks_it_source_too_large() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }])
     .failing_when_source_contains(
@@ -477,8 +477,8 @@ fn project_json_marks_oversized_file_source_too_large() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
     reader.add_source(PathBuf::from("src/huge.rs"), "OVERSIZED".into());
-    reader.add_rust_file(PathBuf::from("src/good.rs"));
-    reader.add_rust_file(PathBuf::from("src/huge.rs"));
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/huge.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![ParsedFunction {
@@ -489,7 +489,7 @@ fn project_json_marks_oversized_file_source_too_large() {
         has_nested_loop: false,
         decision_points: 1,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }])
     .failing_when_source_contains(
@@ -537,7 +537,7 @@ fn project_json_marks_oversized_file_source_too_large() {
 fn handle_project_with_breached_energy_threshold_attaches_a_breaching_report() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
@@ -568,7 +568,7 @@ fn handle_project_with_breached_energy_threshold_attaches_a_breaching_report() {
 fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
@@ -612,7 +612,7 @@ fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
 fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
@@ -649,7 +649,7 @@ fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
 #[test]
 fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_threshold() {
     let mut reader = CodeReaderStub::new();
-    reader.add_rust_file(PathBuf::from("src/bad.rs")); // no source configured -> read fails
+    reader.add_source_file(PathBuf::from("src/bad.rs")); // no source configured -> read fails
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
@@ -689,7 +689,7 @@ fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_thr
 fn handle_project_return_value_carries_the_same_breach_outcome_as_the_graph() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
-    reader.add_rust_file(PathBuf::from("src/main.rs"));
+    reader.add_source_file(PathBuf::from("src/main.rs"));
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);

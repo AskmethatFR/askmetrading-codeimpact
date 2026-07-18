@@ -1,6 +1,8 @@
 use codeimpact_hexagon::analysis::CodeParser;
+use codeimpact_hexagon::analysis::DependencyContext;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
 use codeimpact_secondaries_integration_test::support::ensure_bin_built;
+use std::path::PathBuf;
 
 // Deliberately the only test in this file — it overrides the
 // process-global `CODEIMPACT_PARSE_PROBE`/`PROBE_CALL_LOG` env vars, which
@@ -8,7 +10,7 @@ use codeimpact_secondaries_integration_test::support::ensure_bin_built;
 // file's tests across multiple threads of one process by default).
 
 // ── Test List (#63 T2, single-entry verdict cache) ────────────────────
-//   1. Same source, `parse` then `parse_file_dependencies` back-to-back:
+//   1. Same source, `parse` then `resolve_dependencies` back-to-back:
 //      the probe is spawned once, not twice (cache hit).
 //   2. A different source afterwards: the probe is spawned again (cache
 //      correctly distinguishes by content, not just "has probed before").
@@ -29,11 +31,12 @@ fn probe_verdict_is_cached_per_source_not_per_call() {
 
     let parser = SynCodeParser::new();
     let source = "fn f() {}";
+    let ctx = DependencyContext::new(PathBuf::from("f.rs"), PathBuf::from("."), vec![]);
 
     parser.parse(source).expect("parse should succeed");
     parser
-        .parse_file_dependencies(source)
-        .expect("parse_file_dependencies should succeed");
+        .resolve_dependencies(source, &ctx)
+        .expect("resolve_dependencies should succeed");
 
     let calls_after_same_source = std::fs::read_to_string(&call_log).unwrap_or_default();
     assert_eq!(

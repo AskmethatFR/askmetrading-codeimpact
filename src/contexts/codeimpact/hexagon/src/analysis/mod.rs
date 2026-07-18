@@ -34,7 +34,7 @@ pub use analysis_target::{AnalysisTarget, TargetType};
 pub use call_graph::CallGraph;
 pub use code_location::CodeLocation;
 pub use code_metrics::{complexity_level_for, CodeMetrics, FunctionDetail};
-pub use code_parser::{CodeParser, LoopCall, ParsedFunction};
+pub use code_parser::{CodeParser, DependencyContext, LoopCall, ParsedFunction};
 pub use code_reader::CodeReader;
 pub use complexity_detector::{
     ComplexityDetector, ComplexityWarning, DetectionConfig, WarningPattern, WarningSeverity,
@@ -44,7 +44,7 @@ pub use ecological_impact::{EcologicalImpact, EcologicalImpactEstimator, Efficie
 pub use economic_impact::{EconomicImpact, EconomicImpactEstimator};
 pub use errors::AnalysisError;
 pub use file_consumption_graph::{
-    resolve_file_dependency, FileConsumptionGraph, FileDependency, ProjectMetrics, UnmeasurableFile,
+    FileConsumptionGraph, FileDependency, ProjectMetrics, UnmeasurableFile,
 };
 pub use gated_output::GatedOutput;
 pub use io_classification::IoClassification;

@@ -43,7 +43,7 @@ fn make_fn(name: &str, decision_points: u32, has_loop: bool, calls: Vec<&str>) -
         has_nested_loop: false,
         decision_points,
         depth: 0,
-        match_arms: 0,
+        branch_arms: 0,
         calls_in_loops: vec![],
     }
 }
