@@ -25,6 +25,10 @@ pub enum UnmeasurableReason {
     /// its memory limit, or ran past its timeout. The parent never re-runs
     /// `syn::parse_file` in that case — the file is refused, not measured.
     SourceTooComplex,
+    /// No registered `CodeParser` claims this file's extension (US16 T2,
+    /// `ParserRegistry::dispatch`) — refused before any parser ever sees
+    /// it, never silently mis-dispatched to another language's parser.
+    UnsupportedLanguage,
 }
 
 impl std::fmt::Display for UnmeasurableReason {
@@ -36,6 +40,7 @@ impl std::fmt::Display for UnmeasurableReason {
             Self::SourceUnreadable => write!(f, "fichier illisible"),
             Self::SourceTooLarge => write!(f, "code source trop volumineux pour être mesuré"),
             Self::SourceTooComplex => write!(f, "code source trop complexe pour être mesuré"),
+            Self::UnsupportedLanguage => write!(f, "langage non supporté"),
         }
     }
 }

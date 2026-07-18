@@ -6,11 +6,14 @@ use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ConfigReaderPort;
+use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::OutputFormat;
+use codeimpact_hexagon::analysis::ParserRegistry;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::RunStressTest;
 use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_secondaries::gateways::code_parsers::syn_code_parser::SynCodeParser;
+use codeimpact_secondaries::gateways::code_parsers::tree_sitter::tree_sitter_code_parser::TreeSitterCodeParser;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
 use codeimpact_secondaries::gateways::config_readers::file_system_config_reader::FileSystemConfigReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
@@ -67,6 +70,16 @@ enum Commands {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+}
+
+/// The composition root's `CodeParser` wiring (US16 T2) — one adapter per
+/// language, registered once, dispatched per file by `RunAnalysis`. Adding
+/// a language is adding one `.register(...)` line here, never touching the
+/// hexagon (ADR-0018).
+fn build_parser_registry() -> ParserRegistry {
+    ParserRegistry::new()
+        .register(Language::Rust, Box::new(SynCodeParser::new()))
+        .register(Language::CSharp, Box::new(TreeSitterCodeParser::csharp()))
 }
 
 fn main() {
@@ -153,7 +166,7 @@ fn main() {
             let target = AnalysisTarget::new(file_path, target_type);
             let is_project = *target.target_type() == TargetType::Project;
             let reader = FileSystemCodeReader::new();
-            let parser = SynCodeParser::new();
+            let registry = build_parser_registry();
             let rules = &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops];
 
             match output_format {
@@ -165,8 +178,7 @@ fn main() {
                         std::process::exit(1);
                     }
                     let writer = ConsoleReportWriter::new();
-                    let use_case =
-                        RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), registry);
                     match use_case.handle(&target, rules, &analysis_config) {
                         Ok(gated) => {
                             std::process::exit(gated_exit_code(*strict, gated.thresholds()))
@@ -179,8 +191,7 @@ fn main() {
                 }
                 OutputFormat::Json => {
                     let writer = JsonReportWriter::new();
-                    let use_case =
-                        RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), registry);
                     let result = if is_project {
                         use_case.handle_project_json(&target, rules, &analysis_config)
                     } else {
@@ -221,8 +232,7 @@ fn main() {
                         std::process::exit(1);
                     }
                     let writer = HtmlReportWriter::new();
-                    let use_case =
-                        RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+                    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), registry);
                     match use_case.handle_project_html(&target, rules, &analysis_config) {
                         Ok(gated) => {
                             let exit_code = gated_exit_code(*strict, gated.thresholds());

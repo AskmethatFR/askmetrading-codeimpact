@@ -14,26 +14,37 @@ use super::file_consumption_graph::{FileConsumptionGraph, UnmeasurableFile};
 use super::gated_output::GatedOutput;
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
+use super::parser_registry::ParserRegistry;
 use super::proactive_analyzer;
 use super::report_writer::ReportWriter;
 
 pub struct RunAnalysis {
     code_reader: Box<dyn CodeReader>,
     reporter: Box<dyn ReportWriter>,
-    parser: Box<dyn CodeParser>,
+    registry: ParserRegistry,
 }
 
 impl RunAnalysis {
     pub fn new(
         code_reader: Box<dyn CodeReader>,
         reporter: Box<dyn ReportWriter>,
-        parser: Box<dyn CodeParser>,
+        registry: ParserRegistry,
     ) -> Self {
         Self {
             code_reader,
             reporter,
-            parser,
+            registry,
         }
+    }
+
+    /// Resolves `path`'s extension to the `CodeParser` registered for its
+    /// language (US16 T2) — `Err(Unmeasurable(UnsupportedLanguage))` for an
+    /// extension no registered adapter claims, never a silent mis-dispatch
+    /// to another language's parser and never a panic.
+    fn dispatch_or_unsupported(&self, path: &Path) -> Result<&dyn CodeParser, AnalysisError> {
+        self.registry.dispatch(path).ok_or(AnalysisError::Unmeasurable(
+            UnmeasurableReason::UnsupportedLanguage,
+        ))
     }
 
     /// `config` (US8 thresholds + US31 file filter): thresholds are
@@ -52,8 +63,9 @@ impl RunAnalysis {
         if *target.target_type() == TargetType::Project {
             return self.handle_project(target, rules, config);
         }
+        let parser = self.dispatch_or_unsupported(target.path())?;
         let source = self.code_reader.read_source(target)?;
-        let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
+        let metrics = proactive_analyzer::analyze(&source, rules, parser)?;
         let metrics = Self::set_file_paths(metrics, target.path());
         let metrics = Self::gate_metrics(metrics, config.thresholds());
         let report = metrics.threshold_report().cloned().unwrap_or_default();
@@ -67,19 +79,35 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         config: &AnalysisConfig,
     ) -> Result<GatedOutput<()>, AnalysisError> {
+        let extensions = self.registry.extensions();
         let files =
             self.code_reader
-                .list_source_files(target.path(), &["rs"], config.file_filter())?;
+                .list_source_files(target.path(), &extensions, config.file_filter())?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
         let project_root = target.path().clone();
 
         for file in &files {
+            let parser = match self.registry.dispatch(file) {
+                Some(parser) => parser,
+                None => {
+                    // Defensive: `list_source_files` already filtered by
+                    // `extensions`, so this should be unreachable in
+                    // practice — never fatal either way (US16 T2 AC: one
+                    // undispatchable file must not kill the whole scan).
+                    unmeasurable.push(UnmeasurableFile {
+                        path: file.clone(),
+                        reason: UnmeasurableReason::UnsupportedLanguage,
+                    });
+                    continue;
+                }
+            };
+
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
             match self.code_reader.read_source(&file_target) {
                 Ok(source) => {
-                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                    match proactive_analyzer::analyze(&source, rules, parser) {
                         Ok(metrics) => {
                             let metrics = Self::set_file_paths(metrics, file);
                             per_file.push((file.clone(), metrics));
@@ -105,7 +133,7 @@ impl RunAnalysis {
                     // module semantics — US14 L1/L2)
                     let ctx =
                         DependencyContext::new(file.clone(), project_root.clone(), files.clone());
-                    match self.parser.resolve_dependencies(&source, &ctx) {
+                    match parser.resolve_dependencies(&source, &ctx) {
                         Ok(resolved) => {
                             for to in resolved {
                                 all_deps.push(super::file_consumption_graph::FileDependency {
@@ -220,8 +248,9 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         config: &AnalysisConfig,
     ) -> Result<GatedOutput<String>, AnalysisError> {
+        let parser = self.dispatch_or_unsupported(target.path())?;
         let source = self.code_reader.read_source(target)?;
-        let metrics = proactive_analyzer::analyze(&source, rules, self.parser.as_ref())?;
+        let metrics = proactive_analyzer::analyze(&source, rules, parser)?;
         let metrics = Self::set_file_paths(metrics, target.path());
         let metrics = Self::gate_metrics(metrics, config.thresholds());
         let report = metrics.threshold_report().cloned().unwrap_or_default();
@@ -277,19 +306,31 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         filter: &super::file_filter::FileFilter,
     ) -> Result<FileConsumptionGraph, AnalysisError> {
+        let extensions = self.registry.extensions();
         let files = self
             .code_reader
-            .list_source_files(target.path(), &["rs"], filter)?;
+            .list_source_files(target.path(), &extensions, filter)?;
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
         let project_root = target.path().clone();
 
         for file in &files {
+            let parser = match self.registry.dispatch(file) {
+                Some(parser) => parser,
+                None => {
+                    unmeasurable.push(UnmeasurableFile {
+                        path: file.clone(),
+                        reason: UnmeasurableReason::UnsupportedLanguage,
+                    });
+                    continue;
+                }
+            };
+
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
             match self.code_reader.read_source(&file_target) {
                 Ok(source) => {
-                    match proactive_analyzer::analyze(&source, rules, self.parser.as_ref()) {
+                    match proactive_analyzer::analyze(&source, rules, parser) {
                         Ok(metrics) => {
                             let metrics = Self::set_file_paths(metrics, file);
                             per_file.push((file.clone(), metrics));
@@ -307,7 +348,7 @@ impl RunAnalysis {
                     }
                     let ctx =
                         DependencyContext::new(file.clone(), project_root.clone(), files.clone());
-                    if let Ok(resolved) = self.parser.resolve_dependencies(&source, &ctx) {
+                    if let Ok(resolved) = parser.resolve_dependencies(&source, &ctx) {
                         for to in resolved {
                             all_deps.push(super::file_consumption_graph::FileDependency {
                                 from: file.clone(),
