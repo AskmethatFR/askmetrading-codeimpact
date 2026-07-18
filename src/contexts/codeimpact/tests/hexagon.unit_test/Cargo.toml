@@ -74,3 +74,7 @@ path = "tests/analysis_config_test.rs"
 [[test]]
 name = "language_test"
 path = "tests/language_test.rs"
+
+[[test]]
+name = "parser_registry_test"
+path = "tests/parser_registry_test.rs"
