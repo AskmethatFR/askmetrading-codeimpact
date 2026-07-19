@@ -45,7 +45,10 @@ fn two_language_registry() -> ParserRegistry {
 fn parser_for_returns_the_registered_parser_or_none() {
     let registry = two_language_registry();
 
-    assert_eq!(marker_of(registry.parser_for(Language::Rust).unwrap()), "rust-marker");
+    assert_eq!(
+        marker_of(registry.parser_for(Language::Rust).unwrap()),
+        "rust-marker"
+    );
 
     let rust_only = ParserRegistry::new().register(Language::Rust, Box::new(rust_parser()));
     assert!(rust_only.parser_for(Language::CSharp).is_none());

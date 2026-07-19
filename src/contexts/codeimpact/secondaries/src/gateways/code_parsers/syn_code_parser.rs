@@ -1260,7 +1260,10 @@ mod tests {
     fn capabilities_reports_every_metric_supported() {
         use codeimpact_hexagon::analysis::MetricSupport;
         let capabilities = SynCodeParser::new().capabilities();
-        assert_eq!(*capabilities.cyclomatic_complexity(), MetricSupport::Supported);
+        assert_eq!(
+            *capabilities.cyclomatic_complexity(),
+            MetricSupport::Supported
+        );
         assert_eq!(*capabilities.io_in_loops(), MetricSupport::Supported);
         assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
         assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);

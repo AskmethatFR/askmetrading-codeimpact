@@ -42,9 +42,11 @@ impl RunAnalysis {
     /// extension no registered adapter claims, never a silent mis-dispatch
     /// to another language's parser and never a panic.
     fn dispatch_or_unsupported(&self, path: &Path) -> Result<&dyn CodeParser, AnalysisError> {
-        self.registry.dispatch(path).ok_or(AnalysisError::Unmeasurable(
-            UnmeasurableReason::UnsupportedLanguage,
-        ))
+        self.registry
+            .dispatch(path)
+            .ok_or(AnalysisError::Unmeasurable(
+                UnmeasurableReason::UnsupportedLanguage,
+            ))
     }
 
     /// `config` (US8 thresholds + US31 file filter): thresholds are

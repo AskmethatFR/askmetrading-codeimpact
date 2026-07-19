@@ -39,7 +39,11 @@ fn handle_project_html_returns_writer_output_for_valid_project() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_html(
         &make_target("."),
@@ -72,7 +76,11 @@ fn handle_project_html_empty_project_returns_error() {
     let reader = CodeReaderStub::new(); // no files added
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_html(
         &make_target("."),
@@ -113,7 +121,11 @@ fn handle_project_html_records_unreadable_file_as_unmeasurable_and_excludes_it_f
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_html(
         &make_target("."),
@@ -166,7 +178,11 @@ fn handle_project_html_records_unparseable_file_as_unmeasurable_and_excludes_it_
         "@@@",
         codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed("parse error".to_string()),
     );
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_html(
         &make_target("."),

@@ -143,7 +143,8 @@ fn run_pipeline(
         .expect("grammar must load — a hardcoded, known-good constant");
 
     let bytes = source.as_bytes();
-    let mut read = |byte_offset: usize, _point: Point| -> &[u8] { bytes.get(byte_offset..).unwrap_or(&[]) };
+    let mut read =
+        |byte_offset: usize, _point: Point| -> &[u8] { bytes.get(byte_offset..).unwrap_or(&[]) };
     let mut parse_progress = |_state: &tree_sitter::ParseState| -> ControlFlow<()> {
         if Instant::now() > deadline {
             cancelled.set(true);
@@ -170,8 +171,7 @@ fn run_pipeline(
     let query_options = QueryCursorOptions::new().progress_callback(&mut query_progress);
 
     let mut cursor = QueryCursor::new();
-    let mut matches =
-        cursor.matches_with_options(&query, tree.root_node(), bytes, query_options);
+    let mut matches = cursor.matches_with_options(&query, tree.root_node(), bytes, query_options);
 
     let capture_names = query.capture_names();
     let mut captures: Vec<(&str, Node)> = Vec::new();
@@ -272,7 +272,9 @@ fn assign_captures_to_functions(source: &[u8], captures: Vec<(&str, Node)>) -> V
         call_nodes.sort_by_key(Node::start_byte);
         for call_node in &call_nodes {
             let name = field_text(call_node, "function", source);
-            let in_loop = loops_of[i].iter().any(|loop_node| contains(loop_node, call_node));
+            let in_loop = loops_of[i]
+                .iter()
+                .any(|loop_node| contains(loop_node, call_node));
             if in_loop {
                 let point = call_node.start_position();
                 results[i].calls_in_loops.push(LoopCall {
@@ -317,10 +319,12 @@ fn innermost_function_index(function_nodes: &[Node], target: &Node) -> Option<us
 /// `has_nested_loop`: two SIBLING loops (sequential, not nested) must not
 /// set it, only an actual loop-inside-loop does.
 fn any_contained(nodes: &[Node]) -> bool {
-    nodes
-        .iter()
-        .enumerate()
-        .any(|(i, a)| nodes.iter().enumerate().any(|(j, b)| i != j && contains(b, a)))
+    nodes.iter().enumerate().any(|(i, a)| {
+        nodes
+            .iter()
+            .enumerate()
+            .any(|(j, b)| i != j && contains(b, a))
+    })
 }
 
 /// 1 + the number of OTHER `nodes` entries that contain a given entry,
@@ -359,7 +363,11 @@ fn max_switch_section_count(switch_sections: &[Node]) -> u32 {
             None => per_switch.push((switch_id, 1)),
         }
     }
-    per_switch.into_iter().map(|(_, count)| count).max().unwrap_or(0)
+    per_switch
+        .into_iter()
+        .map(|(_, count)| count)
+        .max()
+        .unwrap_or(0)
 }
 
 fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
@@ -407,7 +415,10 @@ mod tests {
     #[test]
     fn capabilities_reports_every_metric_supported() {
         let capabilities = parser().capabilities();
-        assert_eq!(*capabilities.cyclomatic_complexity(), MetricSupport::Supported);
+        assert_eq!(
+            *capabilities.cyclomatic_complexity(),
+            MetricSupport::Supported
+        );
         assert_eq!(*capabilities.io_in_loops(), MetricSupport::Supported);
         assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
         assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);
@@ -484,23 +495,22 @@ mod tests {
 
     #[test]
     fn nested_loop_sets_has_nested_loop() {
-        let source =
-            "class C { void M() { for (int i = 0; i < 10; i++) { while (true) { } } } }";
+        let source = "class C { void M() { for (int i = 0; i < 10; i++) { while (true) { } } } }";
         let functions = parser().parse(source).unwrap();
         assert!(functions[0].has_nested_loop);
     }
 
     #[test]
     fn sibling_loops_do_not_set_has_nested_loop() {
-        let source =
-            "class C { void M() { for (int i = 0; i < 10; i++) { } while (true) { } } }";
+        let source = "class C { void M() { for (int i = 0; i < 10; i++) { } while (true) { } } }";
         let functions = parser().parse(source).unwrap();
         assert!(!functions[0].has_nested_loop);
     }
 
     #[test]
     fn switch_arms_count_branch_arms_and_decision_points() {
-        let source = "class C { void M() { switch (x) { case 1: break; case 2: break; default: break; } } }";
+        let source =
+            "class C { void M() { switch (x) { case 1: break; case 2: break; default: break; } } }";
         let functions = parser().parse(source).unwrap();
         assert_eq!(functions[0].branch_arms, 3);
         assert_eq!(functions[0].decision_points, 3);
@@ -527,10 +537,7 @@ mod tests {
         let functions = parser().parse(source).unwrap();
         assert_eq!(functions[0].calls_in_loops.len(), 1);
         assert_eq!(functions[0].calls_in_loops[0].name, "DoWork");
-        assert_eq!(
-            functions[0].calls_in_loops[0].io,
-            IoClassification::Unknown
-        );
+        assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Unknown);
     }
 
     #[test]

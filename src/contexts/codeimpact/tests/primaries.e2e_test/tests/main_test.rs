@@ -135,6 +135,173 @@ fn e2e_analyze_valid_file_exits_0() {
     );
 }
 
+// ── US16 T2 (step A/F) — C# support via tree-sitter, second CodeParser
+// adapter (ADR-0018). Test List:
+//   1. e2e_analyze_csharp_file_exits_0 — the slice's own behavioral test
+//      (RED until the registry wiring landed): a C# file that previously
+//      produced nothing now reports functions + nonzero complexity.
+//   2. e2e_analyze_path_with_mixed_rust_and_csharp_files_measures_both —
+//      dispatch per file in a real project scan, not stubs.
+
+#[test]
+fn e2e_analyze_csharp_file_exits_0() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.cs");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Complexité directe"),
+        "missing complexity: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Compute"),
+        "missing function name: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Complexité directe: 0"),
+        "expected a nonzero complexity for a file with an if+for: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_path_with_mixed_rust_and_csharp_files_measures_both() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_mixed_languages_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    std::fs::write(dir.join("a.rs"), "fn a() { if true {} }").expect("write rust fixture");
+    std::fs::write(dir.join("b.cs"), "class C { void M() { if (true) { } } }")
+        .expect("write csharp fixture");
+
+    let output = Command::new(binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected for a mixed-language project. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(
+        json["metrics"]["unmeasurable_files_count"], 0,
+        "both languages must be measured, none unmeasurable: {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["cyclomatic_complexity"], 4,
+        "1 (base) + 1 (if) for each of the two files: {}",
+        stdout
+    );
+}
+
+// ── US16 T2 (step H, Q2 security) — a pathologically deep C# file must
+// never crash the process, and must never abort a project scan for its
+// healthy siblings. Mirrors #63's own e2e test for the Rust/syn adapter.
+#[test]
+fn e2e_analyze_path_with_one_pathological_csharp_file_still_completes() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_csharp_pathological_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    std::fs::write(
+        dir.join("good.cs"),
+        "class C { void M() { if (true) { } } }",
+    )
+    .expect("write healthy fixture");
+
+    // Depth chosen empirically to exercise the PARSE_QUERY_BUDGET timeout
+    // path (Q2) specifically, not source_guard's separate 1 MB size cap:
+    // 80_000 * "if(x){\n" + "}\n" stays under ~720 KB (well inside 1 MB)
+    // while still exceeding the 5s wall-clock budget the query stage runs
+    // against.
+    let mut pathological = String::from("class P { void M() { bool x = true;\n");
+    for _ in 0..80_000 {
+        pathological.push_str("if(x){\n");
+    }
+    pathological.push_str("int z = 1;\n");
+    for _ in 0..80_000 {
+        pathological.push_str("}\n");
+    }
+    pathological.push_str("} }\n");
+    std::fs::write(dir.join("pathological.cs"), &pathological).expect("write pathological fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "the scan must finish (exit 0, never a crash) even with one pathological C# file. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let unmeasurable = json["metrics"]["unmeasurable_files"]
+        .as_array()
+        .expect("unmeasurable_files should be an array");
+    assert_eq!(
+        unmeasurable.len(),
+        1,
+        "exactly the pathological file should be unmeasurable, got: {:#?}",
+        unmeasurable
+    );
+    assert!(
+        unmeasurable[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("pathological.cs"),
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+    assert_eq!(
+        unmeasurable[0]["reason"], "SourceTooComplex",
+        "must be the Q2 parse/query budget, not the separate 1 MB size cap: {:#?}",
+        unmeasurable[0]
+    );
+}
+
 #[test]
 fn e2e_analyze_nonexistent_file_exits_1() {
     let binary = binary_path();

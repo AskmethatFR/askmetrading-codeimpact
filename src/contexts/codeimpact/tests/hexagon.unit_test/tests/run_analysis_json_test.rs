@@ -45,7 +45,11 @@ fn handle_json_returns_string_for_valid_file() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_json(
         &make_target("test.rs"),
@@ -65,7 +69,11 @@ fn handle_json_nonexistent_file_returns_error() {
     let reader = CodeReaderStub::new();
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_json(
         &make_target("nonexistent.rs"),
@@ -97,7 +105,11 @@ fn handle_project_json_returns_string() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_json(
         &make_target("."),
@@ -119,7 +131,11 @@ fn handle_project_json_empty_project_returns_error() {
     let reader = CodeReaderStub::new(); // no files added
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_json(
         &make_target("."),
@@ -160,7 +176,11 @@ fn handle_project_json_records_unreadable_file_as_unmeasurable_and_excludes_it_f
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_json(
         &make_project_target("."),
@@ -213,7 +233,11 @@ fn handle_project_json_records_unparseable_file_as_unmeasurable_and_excludes_it_
         "@@@",
         codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed("parse error".to_string()),
     );
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), ParserRegistry::new().register(Language::Rust, Box::new(parser)));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_json(
         &make_project_target("."),
