@@ -255,30 +255,23 @@ fn assign_captures_to_functions(
     let mut switch_sections_of: Vec<Vec<Node>> = vec![Vec::new(); function_nodes.len()];
     let mut calls_of: Vec<Vec<Node>> = vec![Vec::new(); function_nodes.len()];
 
-    for (name, node) in &captures {
-        if *name == "function" {
-            continue;
-        }
-        let Some(owner) = innermost_function_index(&function_nodes, node) else {
-            continue; // A top-level construct outside any function — ignored.
-        };
-
-        match *name {
+    for (owner, name, node) in owning_function_indices(&function_nodes, captures) {
+        match name {
             "loop" => {
                 results[owner].has_loop = true;
                 results[owner].decision_points += 1;
-                loops_of[owner].push(*node);
-                depth_nodes_of[owner].push(*node);
+                loops_of[owner].push(node);
+                depth_nodes_of[owner].push(node);
             }
             "branch.arm" => match node.kind() {
                 "switch_section" => {
                     results[owner].decision_points += 1;
-                    switch_sections_of[owner].push(*node);
-                    depth_nodes_of[owner].push(*node);
+                    switch_sections_of[owner].push(node);
+                    depth_nodes_of[owner].push(node);
                 }
                 "if_statement" => {
                     results[owner].decision_points += 1;
-                    depth_nodes_of[owner].push(*node);
+                    depth_nodes_of[owner].push(node);
                 }
                 _ => {}
             },
@@ -286,7 +279,7 @@ fn assign_captures_to_functions(
                 results[owner].decision_points += 1;
             }
             "call" => {
-                calls_of[owner].push(*node);
+                calls_of[owner].push(node);
             }
             _ => {}
         }
@@ -354,15 +347,80 @@ fn contains(outer: &Node, inner: &Node) -> bool {
 /// instead of leaking them into the enclosing method (US16 T2: local
 /// functions are captured as their own `@function`, deliberately unlike
 /// `SynCodeParser`'s fold-into-outer treatment of a nested Rust `fn` — see
-/// the tech spec's `.scm` capture list). `None` when `target` sits outside
-/// every captured function (e.g. field initializers at class scope).
-fn innermost_function_index(function_nodes: &[Node], target: &Node) -> Option<usize> {
-    function_nodes
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| contains(f, target))
-        .min_by_key(|(_, f)| f.end_byte() - f.start_byte())
-        .map(|(i, _)| i)
+/// the tech spec's `.scm` capture list). A capture outside every function
+/// (e.g. a field initializer at class scope) is simply absent from the
+/// result.
+///
+/// O(n log n): one sort (`captures`; `function_nodes` is already sorted by
+/// `start_byte`) plus a single left-to-right sweep maintaining a stack of
+/// currently-open functions — replaces a former O(functions x captures)
+/// linear-scan-per-capture (`innermost_function_index`, US16 T2 retry #2,
+/// Security HIGH). AST function nodes never partially overlap (a proper,
+/// laminar nesting family: two functions are either disjoint or one fully
+/// contains the other), so a bracket-matching stack is exactly correct —
+/// not a heuristic: whenever a function's `end_byte` is at or before the
+/// next position of interest, it MUST have already closed and is popped;
+/// the stack's top, if any, is always the innermost function still open at
+/// that position. Security reproduced a file of 58,000 individually-tiny
+/// functions (each far under `MAX_QUADRATIC_CAPTURES_PER_FUNCTION`, so
+/// retry #1's per-function cap never triggered) taking 16-33s in THIS
+/// function alone, with parse+query both finishing fast — many legitimate
+/// functions, not one pathological one, is not something a per-function
+/// cap can ever catch; only removing the O(functions) scan itself does.
+fn owning_function_indices<'a>(
+    function_nodes: &[Node<'a>],
+    captures: Vec<(&'a str, Node<'a>)>,
+) -> Vec<(usize, &'a str, Node<'a>)> {
+    let mut non_function_captures: Vec<(&str, Node)> = captures
+        .into_iter()
+        .filter(|(name, _)| *name != "function")
+        .collect();
+    non_function_captures.sort_by_key(|(_, node)| node.start_byte());
+
+    let mut owned = Vec::with_capacity(non_function_captures.len());
+    let mut open: Vec<usize> = Vec::new();
+    let mut next_function = 0usize;
+
+    for (name, node) in non_function_captures {
+        let start = node.start_byte();
+
+        // Open every function that starts at or before this capture,
+        // popping any sibling that has ALREADY closed first — a function
+        // whose range ends before the next function even starts cannot
+        // still be open (laminar nesting).
+        while next_function < function_nodes.len()
+            && function_nodes[next_function].start_byte() <= start
+        {
+            while let Some(&top) = open.last() {
+                if function_nodes[top].end_byte() <= function_nodes[next_function].start_byte() {
+                    open.pop();
+                } else {
+                    break;
+                }
+            }
+            open.push(next_function);
+            next_function += 1;
+        }
+
+        // Close any still-open function that ended before this capture
+        // starts (no NEW function's start crossed that boundary above to
+        // trigger the pop, e.g. a gap between two top-level functions).
+        while let Some(&top) = open.last() {
+            if function_nodes[top].end_byte() <= start {
+                open.pop();
+            } else {
+                break;
+            }
+        }
+
+        if let Some(&top) = open.last() {
+            if function_nodes[top].end_byte() >= node.end_byte() {
+                owned.push((top, name, node));
+            }
+        }
+    }
+
+    owned
 }
 
 /// Whether any node in `nodes` is contained by another — used for

@@ -384,6 +384,67 @@ fn e2e_analyze_path_with_one_flat_sibling_pathological_csharp_file_still_complet
     );
 }
 
+// ── US16 T2 retry #2 (Security HIGH) — MANY small functions must be
+// MEASURED FAST, not refused. Retry #1 gated the second loop's O(n^2)
+// containment helpers per function (MAX_QUADRATIC_CAPTURES_PER_FUNCTION);
+// this reproduces a DIFFERENT ungated path — the FIRST loop's
+// innermost_function_index scan, O(functions x captures), triggered by
+// MANY functions each individually under the per-function cap. 58,000
+// tiny one-`if` functions (~1.04 MB, matching Security's external repro
+// shape exactly — duplicate method names are syntactically fine for
+// tree-sitter even though a real C# compiler would reject them) is large
+// but entirely legitimate code: the correct outcome is a FAST, CORRECT
+// measurement, never Unmeasurable.
+#[test]
+fn e2e_analyze_path_with_many_small_csharp_functions_measures_fast() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_csharp_many_functions_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+
+    let mut source = String::from("class C {\n");
+    for _ in 0..58_000 {
+        source.push_str("void a(){if(x){}}\n");
+    }
+    source.push_str("}\n");
+    std::fs::write(dir.join("many_functions.cs"), &source).expect("write fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(
+        json["metrics"]["unmeasurable_files_count"], 0,
+        "58,000 tiny valid functions is large but legitimate code — it must be MEASURED, not refused: {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["cyclomatic_complexity"], 58_001,
+        "1 (base) + 1 (if) per function, summed across 58,000 functions: {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_nonexistent_file_exits_1() {
     let binary = binary_path();
