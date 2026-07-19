@@ -302,6 +302,88 @@ fn e2e_analyze_path_with_one_pathological_csharp_file_still_completes() {
     );
 }
 
+// ── US16 T2 retry #1 (Security HIGH) — a FLAT-sibling pathological C# file
+// (tens of thousands of `if(x){}` one after another in a single method,
+// NOT nested) must ALSO become Unmeasurable(SourceTooComplex) within
+// budget. The nested variant above trips the shared parse/query deadline
+// (PARSE_QUERY_BUDGET) quickly; a flat structure keeps parse+query fast
+// and instead blows up in the O(n) assign_captures_to_functions
+// post-processing pass, which the parse/query deadline alone does not
+// cover — reproduced by Security as a 45.9s measured (non-Unmeasurable)
+// run before the fix.
+#[test]
+fn e2e_analyze_path_with_one_flat_sibling_pathological_csharp_file_still_completes() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_csharp_flat_pathological_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    std::fs::write(
+        dir.join("good.cs"),
+        "class C { void M() { if (true) { } } }",
+    )
+    .expect("write healthy fixture");
+
+    // 80_000 SIBLING (not nested) `if(x){}` statements, one after another,
+    // in a single method — same shape/size class as the nested repro
+    // above (~640 KB, under the 1 MB source_guard cap), but flat instead
+    // of nested so parse+query finish fast and the O(n^2) containment
+    // work in assign_captures_to_functions is what must be bounded.
+    let mut pathological = String::from("class P { void M() { bool x = true;\n");
+    for _ in 0..80_000 {
+        pathological.push_str("if(x){}\n");
+    }
+    pathological.push_str("} }\n");
+    std::fs::write(dir.join("pathological.cs"), &pathological).expect("write pathological fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "the scan must finish (exit 0, never a crash) even with one flat-sibling pathological C# file. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let unmeasurable = json["metrics"]["unmeasurable_files"]
+        .as_array()
+        .expect("unmeasurable_files should be an array");
+    assert_eq!(
+        unmeasurable.len(),
+        1,
+        "exactly the pathological file should be unmeasurable (a flat-sibling explosion must not be silently measured), got: {:#?}",
+        unmeasurable
+    );
+    assert!(
+        unmeasurable[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("pathological.cs"),
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+    assert_eq!(
+        unmeasurable[0]["reason"], "SourceTooComplex",
+        "got: {:#?}",
+        unmeasurable[0]
+    );
+}
+
 #[test]
 fn e2e_analyze_nonexistent_file_exits_1() {
     let binary = binary_path();

@@ -46,6 +46,20 @@ const PARSE_QUERY_BUDGET: Duration = Duration::from_secs(5);
 /// a pathological function's O(depth) inner counting loop bounded.
 const MAX_NESTING_DEPTH: u32 = 2_000;
 
+/// Per-function cap on how many `@loop`/`@branch.arm`/`@call` captures may
+/// feed the O(n^2) containment helpers (`any_contained`, `max_nesting_depth`,
+/// `max_switch_section_count`, the calls-in-loops scan) before the WHOLE
+/// FILE is refused as `SourceTooComplex` (US16 T2 retry #1, Security HIGH).
+/// `MAX_NESTING_DEPTH` only capped the reported VALUE, not the compute cost
+/// — Security reproduced a 45.9s hang with 80,000 SIBLING (not nested)
+/// `if` statements in one method: a flat structure keeps parse+query fast
+/// (never trips `PARSE_QUERY_BUDGET`), then the O(n^2) post-processing
+/// pass for that single function is the entire cost. 2,000 is generous
+/// for any legitimate function (2,000^2 = 4M simple byte-range
+/// comparisons, sub-millisecond) while closing the unbounded-input class
+/// outright, independent of timing.
+const MAX_QUADRATIC_CAPTURES_PER_FUNCTION: usize = 2_000;
+
 /// Parses C# via `tree-sitter` (US16 T2) — the second `CodeParser` adapter
 /// ADR-0018 opened the hexagon up for. `resolve_dependencies` returns an
 /// empty result in this slice (C# `using`/namespace resolution is out of
@@ -184,7 +198,7 @@ fn run_pipeline(
         return None;
     }
 
-    Some(assign_captures_to_functions(bytes, captures))
+    assign_captures_to_functions(bytes, captures, deadline)
 }
 
 /// The generic range-containment post-processor (US16 T2): assigns every
@@ -198,7 +212,22 @@ fn run_pipeline(
 /// dispatch below are C#-shaped today because C# is the only second
 /// adapter that exists yet (cc-yagni — no abstraction was built for a
 /// second caller that isn't here).
-fn assign_captures_to_functions(source: &[u8], captures: Vec<(&str, Node)>) -> Vec<ParsedFunction> {
+///
+/// `deadline` (US16 T2 retry #1, Security HIGH) bounds THIS pass too, not
+/// just parse/query: checked once per function, defense in depth for many
+/// moderately-sized functions cumulatively exceeding the budget. The
+/// per-function `MAX_QUADRATIC_CAPTURES_PER_FUNCTION` cap is the load-
+/// bearing fix for the single-function case (a deadline check between
+/// functions never runs if there is only ONE pathological function —
+/// the O(n^2) work for it must never start in the first place). `None`
+/// means the file could not be safely measured within budget — the
+/// caller must never publish a partial/undercounted result as if it were
+/// complete (ADR-0010).
+fn assign_captures_to_functions(
+    source: &[u8],
+    captures: Vec<(&str, Node)>,
+    deadline: Instant,
+) -> Option<Vec<ParsedFunction>> {
     let mut function_nodes: Vec<Node> = captures
         .iter()
         .filter(|(name, _)| *name == "function")
@@ -264,6 +293,27 @@ fn assign_captures_to_functions(source: &[u8], captures: Vec<(&str, Node)>) -> V
     }
 
     for i in 0..function_nodes.len() {
+        // Defense in depth (Security HIGH, retry #1): many moderately-sized
+        // functions could cumulatively exceed the budget even when no
+        // SINGLE function trips the per-function cap below.
+        if Instant::now() > deadline {
+            return None;
+        }
+
+        // The load-bearing fix (Security HIGH, retry #1): the O(n^2)
+        // containment work below must never START for an unbounded input —
+        // a deadline check alone does not help when the entire cost lives
+        // in ONE function's computation (80,000 sibling `if` statements in
+        // a single method reproduced a 45.9s hang with parse+query both
+        // finishing well inside budget).
+        if loops_of[i].len() > MAX_QUADRATIC_CAPTURES_PER_FUNCTION
+            || depth_nodes_of[i].len() > MAX_QUADRATIC_CAPTURES_PER_FUNCTION
+            || switch_sections_of[i].len() > MAX_QUADRATIC_CAPTURES_PER_FUNCTION
+            || calls_of[i].len() > MAX_QUADRATIC_CAPTURES_PER_FUNCTION
+        {
+            return None;
+        }
+
         results[i].has_nested_loop = any_contained(&loops_of[i]);
         results[i].depth = max_nesting_depth(&depth_nodes_of[i]);
         results[i].branch_arms = max_switch_section_count(&switch_sections_of[i]);
@@ -291,7 +341,7 @@ fn assign_captures_to_functions(source: &[u8], captures: Vec<(&str, Node)>) -> V
         }
     }
 
-    results
+    Some(results)
 }
 
 fn contains(outer: &Node, inner: &Node) -> bool {
@@ -525,10 +575,44 @@ mod tests {
     }
 
     #[test]
+    fn ternary_operator_counts_as_one_decision_point() {
+        // csharp.scm's `(conditional_expression) @conditional` — a
+        // deliberate extension beyond SynCodeParser's exact node-kind
+        // list, since Rust has no ternary to mirror (retry #1, Dev-B/QA).
+        let source = "class C { void M() { int y = x > 0 ? 1 : 2; } }";
+        let functions = parser().parse(source).unwrap();
+        assert_eq!(functions[0].decision_points, 1);
+    }
+
+    #[test]
+    fn nested_if_for_if_tracks_depth_three() {
+        // Mirrors SynCodeParser's own nesting_depth_tracked test (retry #1,
+        // Dev-B/QA: the C# path had NO depth test, despite depth feeding
+        // the user-visible DeepConditional warning).
+        let source =
+            "class C { void M() { if (a) { for (int i = 0; i < 10; i++) { if (b) { } } } } }";
+        let functions = parser().parse(source).unwrap();
+        assert_eq!(functions[0].depth, 3);
+    }
+
+    #[test]
+    fn sibling_ifs_do_not_inflate_depth() {
+        // The negative case ruling out the false-positive class: three
+        // SIBLING (not nested) ifs must report depth 1, not 3.
+        let source = "class C { void M() { if (a) { } if (b) { } if (c) { } } }";
+        let functions = parser().parse(source).unwrap();
+        assert_eq!(functions[0].depth, 1);
+    }
+
+    #[test]
     fn calls_are_tracked() {
         let source = "class C { void M() { Foo(); this.Bar(); } }";
         let functions = parser().parse(source).unwrap();
         assert_eq!(functions[0].calls.len(), 2);
+        assert_eq!(
+            functions[0].calls,
+            vec!["Foo".to_string(), "this.Bar".to_string()]
+        );
     }
 
     #[test]
@@ -546,5 +630,38 @@ mod tests {
         let functions = parser().parse(source).unwrap();
         assert_eq!(functions[0].calls, vec!["DoWork".to_string()]);
         assert!(functions[0].calls_in_loops.is_empty());
+    }
+
+    // ── Security MEDIUM (retry #1) — Drop-of-deep-tree safety ──────────
+    // The Q2 spike proved PARSING a deeply-nested tree never aborts the
+    // process, but never verified DROPPING one — a distinct code path
+    // (recursive free of a deep AST is exactly the native-abort class
+    // that justified ADR-0015's subprocess canary for `syn`). Bypasses
+    // TreeSitterCodeParser's own budget/cap machinery entirely to isolate
+    // tree-sitter's OWN Drop implementation: this test PASSES by simply
+    // completing — if `Tree::drop` recursed natively over 50,000 levels,
+    // the whole process would abort right there (uncatchable by
+    // catch_unwind, same as the naive-walk spike finding), and no
+    // assertion after it would ever run.
+    #[test]
+    fn dropping_a_deeply_nested_tree_does_not_abort_the_process() {
+        let mut source = String::from("class C { void M() {\n");
+        for _ in 0..50_000 {
+            source.push_str("if(x){\n");
+        }
+        source.push_str("int z = 1;\n");
+        for _ in 0..50_000 {
+            source.push_str("}\n");
+        }
+        source.push_str("} }\n");
+
+        let mut ts_parser = tree_sitter::Parser::new();
+        ts_parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .expect("grammar must load");
+        let tree = ts_parser.parse(&source, None).expect("parse must succeed");
+        drop(tree);
+
+        // Reaching this line is the proof: the process survived the Drop.
     }
 }
