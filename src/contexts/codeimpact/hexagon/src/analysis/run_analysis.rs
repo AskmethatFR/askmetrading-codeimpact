@@ -85,12 +85,26 @@ impl RunAnalysis {
         let files =
             self.code_reader
                 .list_source_files(target.path(), &extensions, config.file_filter())?;
+        let project_root = target.path().clone();
+        let source_roots = resolve_source_roots(&project_root, config.source_roots());
+
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
-        let project_root = target.path().clone();
 
-        for file in &files {
+        // Pass 1: read every file's source ONCE (US16 T5) — a
+        // project-global dependency resolver (the C# namespace index)
+        // needs every OTHER file's text before it can resolve even the
+        // FIRST file's `using`s, not just the current one's, so every
+        // source must be in hand before the per-file resolution pass
+        // below runs.
+        let file_sources = self.read_all_sources(&files, &mut unmeasurable);
+
+        // Pass 2: analyze metrics and resolve dependencies per file,
+        // sharing the SAME `file_sources`/`source_roots` context (adapter
+        // owns the language's module/namespace semantics — US14 L1/L2,
+        // US16 T5).
+        for (file, source) in &file_sources {
             let parser = match self.registry.dispatch(file) {
                 Some(parser) => parser,
                 None => {
@@ -106,53 +120,73 @@ impl RunAnalysis {
                 }
             };
 
-            let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
-            match self.code_reader.read_source(&file_target) {
-                Ok(source) => {
-                    match proactive_analyzer::analyze(&source, rules, parser) {
-                        Ok(metrics) => {
-                            let metrics = Self::set_file_paths(metrics, file);
-                            per_file.push((file.clone(), metrics));
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "Avertissement: impossible d'analyser {}: {}",
-                                file.file_name().unwrap_or_default().to_string_lossy(),
-                                e
-                            );
-                            let reason = match e {
-                                AnalysisError::Unmeasurable(reason) => reason,
-                                _ => UnmeasurableReason::SourceUnparseable,
-                            };
-                            unmeasurable.push(UnmeasurableFile {
-                                path: file.clone(),
-                                reason,
-                            });
-                        }
-                    }
+            match proactive_analyzer::analyze(source, rules, parser) {
+                Ok(metrics) => {
+                    let metrics = Self::set_file_paths(metrics, file);
+                    per_file.push((file.clone(), metrics));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Avertissement: impossible d'analyser {}: {}",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        e
+                    );
+                    let reason = match e {
+                        AnalysisError::Unmeasurable(reason) => reason,
+                        _ => UnmeasurableReason::SourceUnparseable,
+                    };
+                    unmeasurable.push(UnmeasurableFile {
+                        path: file.clone(),
+                        reason,
+                    });
+                }
+            }
 
-                    // Resolve file dependencies (adapter owns the language's
-                    // module semantics — US14 L1/L2)
-                    let ctx =
-                        DependencyContext::new(file.clone(), project_root.clone(), files.clone());
-                    match parser.resolve_dependencies(&source, &ctx) {
-                        Ok(resolved) => {
-                            for to in resolved {
-                                all_deps.push(super::file_consumption_graph::FileDependency {
-                                    from: file.clone(),
-                                    to,
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "Avertissement: impossible de parser les dépendances de {}: {}",
-                                file.file_name().unwrap_or_default().to_string_lossy(),
-                                e
-                            );
-                        }
+            let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.clone())
+                .with_file_sources(file_sources.clone())
+                .with_source_roots(source_roots.clone());
+            match parser.resolve_dependencies(source, &ctx) {
+                Ok(resolved) => {
+                    for to in resolved {
+                        all_deps.push(super::file_consumption_graph::FileDependency {
+                            from: file.clone(),
+                            to,
+                        });
                     }
                 }
+                Err(e) => {
+                    eprintln!(
+                        "Avertissement: impossible de parser les dépendances de {}: {}",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        e
+                    );
+                }
+            }
+        }
+
+        let graph =
+            FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
+        let graph = Self::gate_project(graph, config.thresholds());
+        let report = graph.threshold_report().cloned().unwrap_or_default();
+        self.reporter.write_project_report(&graph)?;
+        Ok(GatedOutput::new((), report))
+    }
+
+    /// Reads every one of `files`' source text, appending an
+    /// `UnmeasurableFile` to `unmeasurable` for each that could not be
+    /// read (US16 T5) — pulled out because both project-level handlers
+    /// (`handle_project`, `build_project_graph`) need the SAME full
+    /// `file_sources` list before their own per-file pass runs.
+    fn read_all_sources(
+        &self,
+        files: &[PathBuf],
+        unmeasurable: &mut Vec<UnmeasurableFile>,
+    ) -> Vec<(PathBuf, String)> {
+        let mut file_sources = Vec::with_capacity(files.len());
+        for file in files {
+            let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
+            match self.code_reader.read_source(&file_target) {
+                Ok(source) => file_sources.push((file.clone(), source)),
                 Err(e) => {
                     eprintln!(
                         "Avertissement: impossible de lire {}: {}",
@@ -166,13 +200,7 @@ impl RunAnalysis {
                 }
             }
         }
-
-        let graph =
-            FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
-        let graph = Self::gate_project(graph, config.thresholds());
-        let report = graph.threshold_report().cloned().unwrap_or_default();
-        self.reporter.write_project_report(&graph)?;
-        Ok(GatedOutput::new((), report))
+        file_sources
     }
 
     /// Evaluates the project's aggregate energy (kWh)/CO2 impact against
@@ -274,7 +302,12 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         config: &AnalysisConfig,
     ) -> Result<GatedOutput<String>, AnalysisError> {
-        let graph = self.build_project_graph(target, rules, config.file_filter())?;
+        let graph = self.build_project_graph_with_source_roots(
+            target,
+            rules,
+            config.file_filter(),
+            config.source_roots(),
+        )?;
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
@@ -288,7 +321,12 @@ impl RunAnalysis {
         rules: &[AnalysisRule],
         config: &AnalysisConfig,
     ) -> Result<GatedOutput<String>, AnalysisError> {
-        let graph = self.build_project_graph(target, rules, config.file_filter())?;
+        let graph = self.build_project_graph_with_source_roots(
+            target,
+            rules,
+            config.file_filter(),
+            config.source_roots(),
+        )?;
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
@@ -296,28 +334,36 @@ impl RunAnalysis {
         Ok(GatedOutput::new(html, report))
     }
 
-    /// Walks every Rust file under `target` matching `filter` (US31),
-    /// analyzes it, and resolves inter-file dependencies into a
+    /// Walks every file under `target` matching `filter` (US31), analyzes
+    /// it, and resolves inter-file dependencies into a
     /// `FileConsumptionGraph`. Analysis or parsing failures on an
     /// individual file are silently skipped (best effort over a whole
-    /// project) — shared by handle_project_json and handle_project_html,
+    /// project) — shared by `handle_project_json` and `handle_project_html`,
     /// which differ only in what they do with the resulting graph.
-    fn build_project_graph(
+    /// `raw_source_roots` is `.codeimpact.json`'s `sourceRoots` (US16 T5,
+    /// Q2) — resolved to absolute roots via `resolve_source_roots` and
+    /// threaded onto every file's `DependencyContext`.
+    fn build_project_graph_with_source_roots(
         &self,
         target: &AnalysisTarget,
         rules: &[AnalysisRule],
         filter: &super::file_filter::FileFilter,
+        raw_source_roots: &[String],
     ) -> Result<FileConsumptionGraph, AnalysisError> {
         let extensions = self.registry.extensions();
         let files = self
             .code_reader
             .list_source_files(target.path(), &extensions, filter)?;
+        let project_root = target.path().clone();
+        let source_roots = resolve_source_roots(&project_root, raw_source_roots);
+
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
-        let project_root = target.path().clone();
 
-        for file in &files {
+        let file_sources = self.read_all_sources(&files, &mut unmeasurable);
+
+        for (file, source) in &file_sources {
             let parser = match self.registry.dispatch(file) {
                 Some(parser) => parser,
                 None => {
@@ -329,40 +375,31 @@ impl RunAnalysis {
                 }
             };
 
-            let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
-            match self.code_reader.read_source(&file_target) {
-                Ok(source) => {
-                    match proactive_analyzer::analyze(&source, rules, parser) {
-                        Ok(metrics) => {
-                            let metrics = Self::set_file_paths(metrics, file);
-                            per_file.push((file.clone(), metrics));
-                        }
-                        Err(e) => {
-                            let reason = match e {
-                                AnalysisError::Unmeasurable(reason) => reason,
-                                _ => UnmeasurableReason::SourceUnparseable,
-                            };
-                            unmeasurable.push(UnmeasurableFile {
-                                path: file.clone(),
-                                reason,
-                            });
-                        }
-                    }
-                    let ctx =
-                        DependencyContext::new(file.clone(), project_root.clone(), files.clone());
-                    if let Ok(resolved) = parser.resolve_dependencies(&source, &ctx) {
-                        for to in resolved {
-                            all_deps.push(super::file_consumption_graph::FileDependency {
-                                from: file.clone(),
-                                to,
-                            });
-                        }
-                    }
+            match proactive_analyzer::analyze(source, rules, parser) {
+                Ok(metrics) => {
+                    let metrics = Self::set_file_paths(metrics, file);
+                    per_file.push((file.clone(), metrics));
                 }
-                Err(_) => {
+                Err(e) => {
+                    let reason = match e {
+                        AnalysisError::Unmeasurable(reason) => reason,
+                        _ => UnmeasurableReason::SourceUnparseable,
+                    };
                     unmeasurable.push(UnmeasurableFile {
                         path: file.clone(),
-                        reason: UnmeasurableReason::SourceUnreadable,
+                        reason,
+                    });
+                }
+            }
+
+            let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.clone())
+                .with_file_sources(file_sources.clone())
+                .with_source_roots(source_roots.clone());
+            if let Ok(resolved) = parser.resolve_dependencies(source, &ctx) {
+                for to in resolved {
+                    all_deps.push(super::file_consumption_graph::FileDependency {
+                        from: file.clone(),
+                        to,
                     });
                 }
             }
@@ -376,4 +413,24 @@ impl RunAnalysis {
 
         Ok(FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable))
     }
+}
+
+/// Resolves `.codeimpact.json`'s raw `sourceRoots` (relative strings)
+/// against `project_root` into absolute `PathBuf`s (US16 T5, Q2) — an
+/// empty/absent config list resolves to an EMPTY `Vec`, not to
+/// `vec![project_root]`: an adapter that cares about source roots treats
+/// empty as "unrestricted" (see `TreeSitterCodeParser::under_any_root`),
+/// which is exactly the "absent -> behaves like before T5" contract this
+/// function exists to keep. Materializing `project_root` itself here would
+/// risk comparing a raw CLI `--path` (frequently relative, e.g. `.`)
+/// against `available_files`' CANONICALIZED absolute paths — the same
+/// representation mismatch already documented in
+/// `html_report_writer_test.rs`'s `tree_ids_are_relative_when_target_
+/// resolves_to_the_files_common_root` — an empty list sidesteps that
+/// mismatch entirely instead of reproducing it.
+fn resolve_source_roots(project_root: &Path, raw_source_roots: &[String]) -> Vec<PathBuf> {
+    raw_source_roots
+        .iter()
+        .map(|root| project_root.join(root))
+        .collect()
 }

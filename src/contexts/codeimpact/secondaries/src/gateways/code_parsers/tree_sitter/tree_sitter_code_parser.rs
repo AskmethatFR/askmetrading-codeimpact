@@ -1,7 +1,9 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use codeimpact_hexagon::analysis::source_guard;
@@ -61,15 +63,24 @@ const MAX_NESTING_DEPTH: u32 = 2_000;
 /// outright, independent of timing.
 const MAX_QUADRATIC_CAPTURES_PER_FUNCTION: usize = 2_000;
 
-/// Parses C# via `tree-sitter` (US16 T2) — the second `CodeParser` adapter
-/// ADR-0018 opened the hexagon up for. `resolve_dependencies` returns an
-/// empty result in this slice (C# `using`/namespace resolution is out of
-/// T2's scope, tracked as a T3+ follow-up); `parse` runs a `.scm` query
-/// over the file and assigns each capture to its innermost enclosing
-/// function by byte range (`assign_captures_to_functions`).
+/// `namespace -> declaring-files` (US16 T5) — named so
+/// `namespace_index_cache`'s type stays readable (clippy::type_complexity).
+type NamespaceIndex = HashMap<String, Vec<PathBuf>>;
+
+/// Parses C# via `tree-sitter` (US16 T2). `parse` runs a `.scm` query over
+/// the file and assigns each capture to its innermost enclosing function by
+/// byte range (`assign_captures_to_functions`). `resolve_dependencies`
+/// (US16 T5) resolves C#'s `using` directives through a project-global
+/// `namespace -> declaring-files` index, built once per run from
+/// `DependencyContext::file_sources` and memoized in
+/// `namespace_index_cache` (keyed on a file-set fingerprint) — every file
+/// in a project scan shares the SAME `file_sources`/`source_roots`, so the
+/// expensive tree-sitter pass over every OTHER project file runs once, not
+/// once per file.
 pub struct TreeSitterCodeParser {
     language: Language,
     profile: LanguageProfile,
+    namespace_index_cache: Mutex<Option<(u64, Arc<NamespaceIndex>)>>,
 }
 
 impl TreeSitterCodeParser {
@@ -88,9 +99,34 @@ impl TreeSitterCodeParser {
             profile: LanguageProfile {
                 grammar: tree_sitter_c_sharp::LANGUAGE.into(),
                 scm: include_str!("queries/csharp.scm"),
+                deps_scm: include_str!("queries/csharp_deps.scm"),
                 io_table,
             },
+            namespace_index_cache: Mutex::new(None),
         }
+    }
+
+    /// The memoized `namespace -> declaring-files` index for `ctx`'s
+    /// project — rebuilt only when `ctx.file_sources` changes shape
+    /// (US16 T5). `Arc` keeps a cache hit's clone O(1) rather than O(index
+    /// size).
+    fn namespace_index(&self, ctx: &DependencyContext) -> Arc<NamespaceIndex> {
+        let fingerprint = file_set_fingerprint(&ctx.file_sources);
+        {
+            let cache = self.namespace_index_cache.lock().unwrap();
+            if let Some((cached_fingerprint, index)) = cache.as_ref() {
+                if *cached_fingerprint == fingerprint {
+                    return Arc::clone(index);
+                }
+            }
+        }
+        let index = Arc::new(build_namespace_index(
+            &self.profile,
+            &ctx.file_sources,
+            &ctx.source_roots,
+        ));
+        *self.namespace_index_cache.lock().unwrap() = Some((fingerprint, Arc::clone(&index)));
+        index
     }
 }
 
@@ -100,20 +136,30 @@ impl CodeParser for TreeSitterCodeParser {
     }
 
     fn capabilities(&self) -> LanguageCapabilities {
-        // T4.2 (US16, #33, Q1 human-approved): io_in_loops flips from T3's
-        // Unsupported to Degraded — `classify_csharp_call` now measures
-        // real (syntactic) I/O for static-qualified calls, but instance/EF
-        // receivers still abstain (Unknown) rather than assert, so the
-        // metric is honestly partial, never fully Supported. call_graph
-        // stays Degraded from T3 (`assign_captures_to_functions` resolves
-        // calls by NAME only, so recursive/overloaded/shadowed calls can
-        // produce ambiguous or dropped edges).
+        // T3+T4+T5 (US16, #33, Q1 human-approved): C# honestly degrades
+        // three metrics rather than claiming full support.
+        // - io_in_loops is Degraded (T4): `classify_csharp_call` measures
+        //   real (syntactic) I/O for static-qualified calls, but instance/EF
+        //   receivers abstain (Unknown) rather than assert, so the metric is
+        //   honestly partial, never fully Supported.
+        // - call_graph is Degraded (T3): `assign_captures_to_functions`
+        //   resolves calls by NAME only — an unresolved receiver can make
+        //   two different calls merge into the same recorded name. Precise
+        //   dropping of ambiguous edges is deferred (T5.3, human-approved).
+        // - cross_file_dependencies is Degraded (T5): `resolve_dependencies`
+        //   resolves at NAMESPACE granularity — a `using` links to every
+        //   file that declares the used namespace, not necessarily the one
+        //   that actually declares what this file needed.
         LanguageCapabilities::all_supported(self.language)
             .with_io_in_loops(MetricSupport::Degraded(
                 "syntactic only; instance/EF receivers abstained, not asserted".to_string(),
             ))
             .with_call_graph(MetricSupport::Degraded(
-                "name-based resolution; ambiguous edges dropped".to_string(),
+                "name-based resolution; unresolved-receiver calls may merge".to_string(),
+            ))
+            .with_cross_file_dependencies(MetricSupport::Degraded(
+                "namespace-level resolution; a file links to every declarer of a used namespace"
+                    .to_string(),
             ))
     }
 
@@ -122,18 +168,224 @@ impl CodeParser for TreeSitterCodeParser {
         parse_source(&self.profile, source)
     }
 
-    /// T2 scope note (tech spec): C# `using`/namespace resolution is out of
-    /// scope for this slice. An empty result matches ADR-0018's own
-    /// contract for `resolve_dependencies` — "a dependency that cannot be
-    /// resolved... is simply absent from the result, never an error" — this
-    /// adapter simply never looks for any yet.
+    /// Resolves `source`'s `using` directives to actual project files
+    /// (US16 T5) — C#'s `using`/namespace semantics are entirely owned by
+    /// this adapter (ADR-0018). A `using` resolves to every project file
+    /// that DECLARES the used namespace (namespace-granularity resolution,
+    /// honestly reported as `Degraded` in `capabilities`) via the memoized
+    /// `namespace_index`; `current_file` is excluded from its own result
+    /// (never a self-edge) and the result is deduped. A `using` with no
+    /// project declarer (e.g. `using System;`) contributes no edge — same
+    /// "absent, never an error" contract as `SynCodeParser`.
     fn resolve_dependencies(
         &self,
-        _source: &str,
-        _ctx: &DependencyContext,
+        source: &str,
+        ctx: &DependencyContext,
     ) -> Result<Vec<PathBuf>, AnalysisError> {
-        Ok(vec![])
+        source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
+
+        let extraction = extract_deps_safe(&self.profile, source).ok_or(
+            AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooComplex),
+        )?;
+        let index = self.namespace_index(ctx);
+
+        let mut resolved: Vec<PathBuf> = Vec::new();
+        for used_namespace in &extraction.usings {
+            let Some(declarers) = index.get(used_namespace) else {
+                continue;
+            };
+            for declarer in declarers {
+                if declarer != &ctx.current_file && !resolved.contains(declarer) {
+                    resolved.push(declarer.clone());
+                }
+            }
+        }
+        Ok(resolved)
     }
+}
+
+/// Every namespace declared, and every namespace used (via `using`), by one
+/// file's source — the raw material both the namespace-index builder and
+/// `resolve_dependencies` extract from a `deps_scm` query pass (US16 T5).
+struct DepsExtraction {
+    namespaces: Vec<String>,
+    usings: Vec<String>,
+}
+
+/// Whether `path` is in scope for the namespace index, given the
+/// configured `roots` (US16 T5). Empty `roots` means "unset" — treated as
+/// unrestricted (never as "nothing is in scope"), which is also what an
+/// absent `sourceRoots` config resolves to (`run_analysis::
+/// resolve_source_roots`): there is no materialized "project_root" PathBuf
+/// here that could mismatch a canonicalized file path, only an honest
+/// "no restriction configured."
+fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.is_empty() || roots.iter().any(|root| path.starts_with(root))
+}
+
+/// Builds the `namespace -> declaring-files` index from every project
+/// file's source, scoped to `under_any_root` (US16 T5). Each file is
+/// guarded independently (`extract_deps_safe`) — a single hostile/
+/// oversized/pathological file is simply excluded from the index, never
+/// fatal to the whole project scan.
+fn build_namespace_index(
+    profile: &LanguageProfile,
+    file_sources: &[(PathBuf, String)],
+    source_roots: &[PathBuf],
+) -> NamespaceIndex {
+    let mut index: NamespaceIndex = HashMap::new();
+    for (path, source) in file_sources {
+        if !under_any_root(path, source_roots) {
+            continue;
+        }
+        let Some(extraction) = extract_deps_safe(profile, source) else {
+            continue;
+        };
+        for namespace in extraction.namespaces {
+            index.entry(namespace).or_default().push(path.clone());
+        }
+    }
+    index
+}
+
+/// A cheap fingerprint of a file SET (US16 T5) — paths and source
+/// LENGTHS, not full content: enough to detect "this is the same project
+/// scan's file list as last time" (memoization's actual purpose — a
+/// `TreeSitterCodeParser` instance lives for one project scan) without
+/// hashing every byte of every file on every one of a project's N calls.
+fn file_set_fingerprint(file_sources: &[(PathBuf, String)]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    file_sources.len().hash(&mut hasher);
+    for (path, source) in file_sources {
+        path.hash(&mut hasher);
+        source.len().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Runs `guard_admissible`-style checks then `extract_deps` inside
+/// `catch_unwind` (US16 T5) — the pre-pass parses every OTHER project
+/// file, an untrusted-input surface identical in kind to `parse()`'s own
+/// (Q2/#33 T2 precedent), so it gets the same defense: an oversized
+/// source is refused before tree-sitter ever sees it, and an ordinary Rust
+/// panic in extraction never takes down the whole project scan.
+fn extract_deps_safe(profile: &LanguageProfile, source: &str) -> Option<DepsExtraction> {
+    source_guard::check_admissible(source).ok()?;
+
+    let deadline = Instant::now() + PARSE_QUERY_BUDGET;
+    let owned = source.to_string();
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| extract_deps(profile, &owned, deadline)));
+    outcome.ok().flatten()
+}
+
+/// Parses `source` and runs `deps_scm`'s query over it, returning every
+/// declared namespace's name and every `using`'s target namespace text
+/// (US16 T5) — `None` when parse/query is cancelled by `deadline`
+/// (mirrors `run_pipeline`'s own budget contract).
+fn extract_deps(
+    profile: &LanguageProfile,
+    source: &str,
+    deadline: Instant,
+) -> Option<DepsExtraction> {
+    let grammar = &profile.grammar;
+    let bytes = source.as_bytes();
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(grammar)
+        .expect("grammar must load — a hardcoded, known-good constant");
+
+    let mut read =
+        |byte_offset: usize, _point: Point| -> &[u8] { bytes.get(byte_offset..).unwrap_or(&[]) };
+    let mut parse_progress = |_state: &tree_sitter::ParseState| -> ControlFlow<()> {
+        if Instant::now() > deadline {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let parse_options = ParseOptions::new().progress_callback(&mut parse_progress);
+    let tree = parser.parse_with_options(&mut read, None, Some(parse_options))?;
+    if Instant::now() > deadline {
+        return None;
+    }
+
+    let query = Query::new(grammar, profile.deps_scm).expect("the deps .scm query must compile");
+    let mut query_progress = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
+        if Instant::now() > deadline {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let query_options = QueryCursorOptions::new().progress_callback(&mut query_progress);
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches_with_options(&query, tree.root_node(), bytes, query_options);
+
+    let capture_names = query.capture_names();
+    let mut namespaces = Vec::new();
+    let mut usings = Vec::new();
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            match capture_names[capture.index as usize] {
+                "namespace" => {
+                    if let Some(text) = field_text_opt(&capture.node, "name", bytes) {
+                        namespaces.push(text);
+                    }
+                }
+                "using" => {
+                    if let Some(text) = using_target_text(&capture.node, bytes) {
+                        usings.push(text);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if Instant::now() > deadline {
+        return None;
+    }
+
+    Some(DepsExtraction { namespaces, usings })
+}
+
+/// The namespace text a `using_directive` node targets (US16 T5) — the
+/// grammar gives this child NO field name for a plain `using Foo.Bar;`
+/// (only an alias target, `using Alias = Foo.Bar;`, has a field, and it
+/// names the ALIAS `Alias`, not the target). The target is therefore the
+/// first namespace-shaped child (`qualified_name`/`identifier`/
+/// `alias_qualified_name`/`generic_name`) that is NOT the `"name"`-field
+/// alias identifier — this same rule handles both the plain and the
+/// aliased/`using static`/`global using` shapes without special-casing
+/// any of them (verified against the real grammar, tree-sitter-c-sharp
+/// 0.23).
+fn using_target_text(node: &Node, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    for (index, child) in node.children(&mut cursor).enumerate() {
+        let is_namespace_shaped = matches!(
+            child.kind(),
+            "qualified_name" | "identifier" | "alias_qualified_name" | "generic_name"
+        );
+        let is_alias_name_field = node.field_name_for_child(index as u32) == Some("name");
+        if is_namespace_shaped && !is_alias_name_field {
+            return child.utf8_text(source).ok().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// `field_text`'s `Option`-returning twin (US16 T5) — `field_text` falls
+/// back to the sentinel string `"<unresolved>"`, which is the right
+/// contract for a `ParsedFunction`'s displayed name but would silently
+/// poison the namespace index with a bogus `"<unresolved>"` entry here.
+fn field_text_opt(node: &Node, field: &str, source: &[u8]) -> Option<String> {
+    node.child_by_field_name(field)
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(|s| s.to_string())
 }
 
 /// Runs the parse+query+assign pipeline inside `catch_unwind` (Q2: defense
@@ -641,19 +893,151 @@ mod tests {
         match capabilities.call_graph() {
             MetricSupport::Degraded(reason) => {
                 assert!(
-                    reason.contains("name-based"),
-                    "expected the name-based-resolution reason, got: {}",
+                    reason.contains("unresolved-receiver"),
+                    "expected the corrected (T5) name-based-resolution reason, got: {}",
                     reason
                 );
             }
             other => panic!("expected call_graph to be Degraded, got {:?}", other),
         }
+        match capabilities.cross_file_dependencies() {
+            MetricSupport::Degraded(reason) => {
+                assert!(
+                    reason.contains("namespace-level"),
+                    "expected the namespace-level-resolution reason, got: {}",
+                    reason
+                );
+            }
+            other => panic!(
+                "expected cross_file_dependencies to be Degraded, got {:?}",
+                other
+            ),
+        }
+    }
+
+    // Discriminating test (T5.2 tech spec): a C# call/dep capability
+    // reported as Supported must FAIL — proves the two Degraded builders
+    // above are actually wired, not merely present as dead code.
+    #[test]
+    fn call_graph_and_cross_file_dependencies_are_never_reported_supported() {
+        let capabilities = parser().capabilities();
+        assert_ne!(*capabilities.call_graph(), MetricSupport::Supported);
+        assert_ne!(
+            *capabilities.cross_file_dependencies(),
+            MetricSupport::Supported
+        );
     }
 
     #[test]
-    fn resolve_dependencies_is_always_empty_in_t2() {
+    fn resolve_dependencies_returns_empty_when_no_using_directives() {
         let ctx = DependencyContext::new(PathBuf::from("a.cs"), PathBuf::from("."), vec![]);
         let resolved = parser().resolve_dependencies("class C {}", &ctx).unwrap();
+        assert!(resolved.is_empty());
+    }
+
+    // ── resolve_dependencies tests (US16 T5 — the C# namespace-index
+    // resolver: extraction (namespace_declaration/file_scoped_namespace_
+    // declaration/using_directive) + project-global index + lookup,
+    // wired together through the real tree-sitter grammar) ──
+    //
+    // Test List (tech spec T5.1):
+    //   1. edge file2 -> file1 via `namespace A` (file1) / `using A;` (file2)
+    //   2. N:M multi-declarer -> every declaring file gets an edge
+    //   3. `using System;` (no project declarer) -> no edge
+    //   4. no self-edges (a file declaring AND using its own namespace)
+    //   5. a namespace declared only OUTSIDE the configured source_roots
+    //      does not resolve (source_roots scopes the index)
+
+    fn deps_ctx(
+        current_file: &str,
+        file_sources: &[(&str, &str)],
+        source_roots: &[&str],
+    ) -> DependencyContext {
+        let available_files: Vec<PathBuf> =
+            file_sources.iter().map(|(p, _)| PathBuf::from(p)).collect();
+        DependencyContext::new(
+            PathBuf::from(current_file),
+            PathBuf::from("."),
+            available_files,
+        )
+        .with_file_sources(
+            file_sources
+                .iter()
+                .map(|(p, s)| (PathBuf::from(*p), s.to_string()))
+                .collect(),
+        )
+        .with_source_roots(source_roots.iter().map(PathBuf::from).collect())
+    }
+
+    #[test]
+    fn using_a_declared_namespace_resolves_to_its_declaring_file() {
+        let file1 = "namespace A { class Foo {} }";
+        let file2 = "using A;\nclass Bar {}";
+        let ctx = deps_ctx("file2.cs", &[("file1.cs", file1), ("file2.cs", file2)], &[]);
+
+        let resolved = parser().resolve_dependencies(file2, &ctx).unwrap();
+
+        assert_eq!(resolved, vec![PathBuf::from("file1.cs")]);
+    }
+
+    #[test]
+    fn using_a_namespace_declared_by_multiple_files_resolves_to_every_declarer() {
+        let file1 = "namespace A { class Foo {} }";
+        let file3 = "namespace A { class Baz {} }";
+        let file2 = "using A;\nclass Bar {}";
+        let ctx = deps_ctx(
+            "file2.cs",
+            &[
+                ("file1.cs", file1),
+                ("file2.cs", file2),
+                ("file3.cs", file3),
+            ],
+            &[],
+        );
+
+        let mut resolved = parser().resolve_dependencies(file2, &ctx).unwrap();
+        resolved.sort();
+
+        assert_eq!(
+            resolved,
+            vec![PathBuf::from("file1.cs"), PathBuf::from("file3.cs")]
+        );
+    }
+
+    #[test]
+    fn using_a_namespace_with_no_project_declarer_produces_no_edge() {
+        let file1 = "using System;\nclass Bar {}";
+        let ctx = deps_ctx("file1.cs", &[("file1.cs", file1)], &[]);
+
+        let resolved = parser().resolve_dependencies(file1, &ctx).unwrap();
+
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn a_file_using_its_own_declared_namespace_does_not_link_to_itself() {
+        let file1 = "using A;\nnamespace A { class Foo {} }";
+        let ctx = deps_ctx("file1.cs", &[("file1.cs", file1)], &[]);
+
+        let resolved = parser().resolve_dependencies(file1, &ctx).unwrap();
+
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn a_namespace_declared_outside_configured_source_roots_does_not_resolve() {
+        let outside = "namespace A { class Foo {} }";
+        let inside = "using A;\nclass Bar {}";
+        // file1.cs lives outside "src/" (the only configured source root) —
+        // its declaration of namespace A must not enter the index.
+        let ctx = deps_ctx(
+            "src/file2.cs",
+            &[("file1.cs", outside), ("src/file2.cs", inside)],
+            &["src"],
+        );
+
+        let resolved = parser().resolve_dependencies(inside, &ctx).unwrap();
+
         assert!(resolved.is_empty());
     }
 

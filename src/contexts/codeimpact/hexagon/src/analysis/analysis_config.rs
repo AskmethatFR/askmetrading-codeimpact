@@ -51,16 +51,23 @@ pub struct AnalysisConfig {
     /// base `File.`/`Directory.` table. Empty by default — reproduces
     /// T4.1/T4.2 behavior byte-for-byte when absent.
     io_signature_prefixes: Vec<String>,
+    /// `.codeimpact.json`'s `sourceRoots` (US16 T5, Q2), raw and relative
+    /// to the project root — resolution to absolute `PathBuf`s is
+    /// `run_analysis`'s job (the adapter never sees the raw string form).
+    /// Empty means "absent from config" — `run_analysis` falls back to
+    /// `[project_root]`, never to "nothing is in scope."
+    source_roots: Vec<String>,
 }
 
 impl AnalysisConfig {
-    /// No thresholds configured, no file filtering (D4: absent config file
-    /// reproduces today's behavior byte-for-byte).
+    /// No thresholds configured, no file filtering, no source roots (D4:
+    /// absent config file reproduces today's behavior byte-for-byte).
     pub fn defaults() -> Self {
         Self {
             thresholds: AlertThresholds::none(),
             filter: FileFilter::unrestricted(),
             io_signature_prefixes: Vec::new(),
+            source_roots: Vec::new(),
         }
     }
 
@@ -69,7 +76,15 @@ impl AnalysisConfig {
             thresholds,
             filter,
             io_signature_prefixes: Vec::new(),
+            source_roots: Vec::new(),
         }
+    }
+
+    /// Builder-style attachment (mirrors `LanguageCapabilities::with_*`) —
+    /// keeps `new`'s 2-arg call sites untouched (US16 T5).
+    pub fn with_source_roots(mut self, source_roots: Vec<String>) -> Self {
+        self.source_roots = source_roots;
+        self
     }
 
     pub fn thresholds(&self) -> &AlertThresholds {
@@ -107,5 +122,9 @@ impl AnalysisConfig {
 
     pub fn io_signature_prefixes(&self) -> &[String] {
         &self.io_signature_prefixes
+    }
+
+    pub fn source_roots(&self) -> &[String] {
+        &self.source_roots
     }
 }

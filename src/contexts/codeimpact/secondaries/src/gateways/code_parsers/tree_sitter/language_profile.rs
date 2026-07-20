@@ -10,5 +10,13 @@
 pub struct LanguageProfile {
     pub grammar: tree_sitter::Language,
     pub scm: &'static str,
+    /// The dependency-extraction query (US16 T5) — captures the
+    /// namespace/module declarations and import-style directives a
+    /// project-global pre-pass turns into a `namespace → declaring-files`
+    /// index (`@namespace`/`@using` for C#). Separate from `scm` (the
+    /// metric-extraction query): the two run over the same file for
+    /// different purposes, at different times (`deps_scm` is also run,
+    /// once per file, over every OTHER project file during the pre-pass).
+    pub deps_scm: &'static str,
     pub io_table: Vec<String>,
 }

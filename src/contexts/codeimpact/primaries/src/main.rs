@@ -167,7 +167,7 @@ fn main() {
                 match AnalysisConfig::new(thresholds, file_config.file_filter().clone())
                     .with_io_signature_prefixes(file_config.io_signature_prefixes().to_vec())
                 {
-                    Ok(c) => c,
+                    Ok(c) => c.with_source_roots(file_config.source_roots().to_vec()),
                     Err(e) => {
                         eprintln!("erreur: {}", e);
                         std::process::exit(1);

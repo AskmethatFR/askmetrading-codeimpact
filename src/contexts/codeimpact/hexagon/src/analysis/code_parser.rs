@@ -42,6 +42,20 @@ pub struct DependencyContext {
     pub current_file: PathBuf,
     pub project_root: PathBuf,
     pub available_files: Vec<PathBuf>,
+    /// Every project file's own path + source text (US16 T5, C# L1) — the
+    /// project-global pre-pass a namespace-based resolver needs (a file's
+    /// declared namespace can only be known by looking at every OTHER
+    /// file, not just `current_file`'s own text). `SynCodeParser` ignores
+    /// this field entirely (Rust's `mod`/`use` resolve from `current_file`
+    /// and `available_files` alone) — additive, non-breaking (ADR-0018).
+    pub file_sources: Vec<(PathBuf, String)>,
+    /// The configured source roots (US16 T5, absolute, `.codeimpact.json`'s
+    /// `sourceRoots` resolved against `project_root` by the composition
+    /// root) a language adapter may use to scope which of `file_sources`
+    /// contributes to a project-global index. Empty means "unset" — an
+    /// adapter that cares about this field treats empty as "no
+    /// restriction," never as "nothing is in scope."
+    pub source_roots: Vec<PathBuf>,
 }
 
 impl DependencyContext {
@@ -54,7 +68,23 @@ impl DependencyContext {
             current_file,
             project_root,
             available_files,
+            file_sources: Vec::new(),
+            source_roots: Vec::new(),
         }
+    }
+
+    /// Builder-style attachment (mirrors `LanguageCapabilities::with_*`) —
+    /// every project file's own source text, for an adapter whose
+    /// resolution needs more than `current_file` alone (US16 T5).
+    pub fn with_file_sources(mut self, file_sources: Vec<(PathBuf, String)>) -> Self {
+        self.file_sources = file_sources;
+        self
+    }
+
+    /// Builder-style attachment — the configured source roots (US16 T5).
+    pub fn with_source_roots(mut self, source_roots: Vec<PathBuf>) -> Self {
+        self.source_roots = source_roots;
+        self
     }
 }
 
