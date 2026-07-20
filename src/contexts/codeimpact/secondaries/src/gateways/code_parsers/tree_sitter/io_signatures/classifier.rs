@@ -37,10 +37,18 @@ use codeimpact_hexagon::analysis::IoClassification;
 ///   field names.
 /// - `.AsQueryable(` / `DbSet` — EF Core query-surface markers (the N+1
 ///   `IQueryable`-in-`foreach` case named in the human ruling).
-/// - `HttpClient.`/`SqlCommand.`/`Stream.`/`DbContext.` — T2's original
-///   (provisional) confident-prefix guesses, demoted here: these BCL types
-///   are normally INSTANCE-typed, so a literal prefix match on them is a
-///   name-only assertion ADR-0016 §1 forbids — abstention, not `Io`.
+/// - `_httpClient.`/`_sqlCommand.`/`_stream.`/`_dbContext.` — T2's original
+///   (provisional) confident-prefix guesses (`HttpClient`/`SqlCommand`/
+///   `Stream`/`DbContext`), demoted here: these BCL types are normally
+///   INSTANCE-typed, so a literal prefix match on the TYPE name is a
+///   name-only assertion ADR-0016 §1 forbids — abstention, not `Io`. The
+///   marker itself is the idiomatic underscore-camelCase FIELD name a real
+///   receiver is actually written as (`_httpClient.GetAsync(...)`), not the
+///   PascalCase type name — retry #1 (Dev-B BLOCKING): the original
+///   PascalCase markers (`"HttpClient."` etc.) never match real C# field
+///   receivers at all (case-sensitive `contains`), silently falling through
+///   to a fabricated `NotIo` — exactly the ADR-0016 §3 silent-false-
+///   negative failure this list exists to prevent.
 ///
 /// A call matching NONE of these AND no confident prefix is an honest
 /// negative (`NotIo`) — flooding `Unknown` with every unresolved receiver
@@ -51,10 +59,10 @@ const SUSPICIOUS_RECEIVER_MARKERS: &[&str] = &[
     "_db.",
     ".AsQueryable(",
     "DbSet",
-    "HttpClient.",
-    "SqlCommand.",
-    "Stream.",
-    "DbContext.",
+    "_httpClient.",
+    "_sqlCommand.",
+    "_stream.",
+    "_dbContext.",
 ];
 
 fn is_suspicious_receiver(call_name: &str) -> bool {

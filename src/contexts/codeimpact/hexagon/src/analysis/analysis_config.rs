@@ -90,7 +90,17 @@ impl AnalysisConfig {
         mut self,
         prefixes: Vec<String>,
     ) -> Result<Self, AnalysisConfigError> {
-        // T4.3 retry #1 scaffold: cap enforcement wired in the next step.
+        if prefixes.len() > MAX_IO_SIGNATURE_COUNT {
+            return Err(AnalysisConfigError::TooManyIoSignaturePrefixes(
+                prefixes.len(),
+            ));
+        }
+        if let Some(too_long) = prefixes.iter().find(|p| p.len() > MAX_IO_SIGNATURE_LENGTH) {
+            return Err(AnalysisConfigError::IoSignaturePrefixTooLong(
+                too_long.clone(),
+            ));
+        }
+
         self.io_signature_prefixes = prefixes;
         Ok(self)
     }
