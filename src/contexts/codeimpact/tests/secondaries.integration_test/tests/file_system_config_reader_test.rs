@@ -22,9 +22,9 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 //    both metrics None (absent section is not an error)
 // 9. a genuinely unknown/typo top-level key is now REJECTED
 //    (deny_unknown_fields, US31 — a change from US8's tolerant schema)
-// 10. reserved forward-compat keys (languages, sourceRoots, extensions,
-//     parser) are tolerated (parsed, not wired) — ioSignatures is now WIRED
-//     (US16 T4.3, see 18-20 below), an empty array still round-trips fine
+// 10. reserved forward-compat keys (languages, extensions, parser) are
+//     tolerated (parsed, not wired) — ioSignatures is WIRED (US16 T4.3,
+//     see 18-21) and sourceRoots is WIRED (US16 T5, see 22)
 // 11. auto-discovery: target dir is tried before cwd
 // 12. error messages never leak the absolute path (ADR-0006)
 // 13. explicit --config pointing to a FIFO -> Err, without hanging
@@ -45,6 +45,10 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 // 21. (retry #1, Security MEDIUM) ioSignatures with 257 entries (over
 //     AnalysisConfig::MAX_IO_SIGNATURE_COUNT) -> a clean config Err, not a
 //     per-file wall-clock/complexity blowup downstream
+//
+// US16 T5 — sourceRoots wiring:
+// 22. sourceRoots is parsed AND wired into AnalysisConfig::source_roots()
+//     (Q2 — no longer inert)
 
 fn isolated_dir(test_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -496,5 +500,24 @@ fn syntactically_odd_but_shape_valid_glob_parses_successfully_here() {
         .expect("read should succeed — glob syntax is validated at walk time, not here")
         .expect("file was present");
     assert_eq!(config.file_filter().exclude(), &["src/[".to_string()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn source_roots_are_parsed_and_wired_into_analysis_config() {
+    let dir = isolated_dir("source_roots_wired");
+    let config_path = dir.join(".codeimpact.json");
+    std::fs::write(&config_path, r#"{"sourceRoots":["src","lib"]}"#).unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    let config = result
+        .expect("read should succeed")
+        .expect("file was present");
+    assert_eq!(
+        config.source_roots(),
+        &["src".to_string(), "lib".to_string()]
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

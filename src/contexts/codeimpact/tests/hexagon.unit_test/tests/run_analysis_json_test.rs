@@ -10,7 +10,9 @@ use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::code_parsers::code_parser_stub::CodeParserStub;
+use codeimpact_secondaries::gateways::code_parsers::tree_sitter::tree_sitter_code_parser::TreeSitterCodeParser;
 use codeimpact_secondaries::gateways::code_readers::code_reader_stub::CodeReaderStub;
+use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::report_writers::report_writer_stub::SharedReportWriterStub;
 
 fn make_target(path: &str) -> AnalysisTarget {
@@ -25,6 +27,17 @@ fn make_project_target(path: &str) -> AnalysisTarget {
 // 1. handle_json returns a non-empty string for valid file
 // 2. handle_json with nonexistent file returns error
 // 3. handle_project_json returns a non-empty string for project target
+//
+// Test List (US16 T5 — C# cross-file dependency graph, slice-level/
+// behavioral: real TreeSitterCodeParser::csharp() through the full
+// RunAnalysis wiring, the user-observable outcome of the slice):
+// 4. a 2-file C# project where fileA `using`s fileB's namespace and
+//    vice versa is reported as a real dependency CYCLE in the project
+//    JSON (functions_with_cycles) — proves config -> run_analysis ->
+//    DependencyContext -> TreeSitterCodeParser -> FileConsumptionGraph is
+//    wired end-to-end, with NO sourceRoots configured (AnalysisConfig::
+//    defaults()), pinning the "absent sourceRoots" default in the same
+//    breath.
 
 #[test]
 fn handle_json_returns_string_for_valid_file() {
@@ -123,6 +136,42 @@ fn handle_project_json_returns_string() {
     assert!(
         json.contains("project"),
         "project JSON should contain target_type project"
+    );
+}
+
+#[test]
+fn csharp_project_with_mutual_using_reports_a_dependency_cycle() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(
+        PathBuf::from("FileA.cs"),
+        "using B;\nnamespace A { class Foo {} }".into(),
+    );
+    reader.add_source_file(PathBuf::from("FileA.cs"));
+    reader.add_source(
+        PathBuf::from("FileB.cs"),
+        "using A;\nnamespace B { class Bar {} }".into(),
+    );
+    reader.add_source_file(PathBuf::from("FileB.cs"));
+
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(JsonReportWriter::new()),
+        ParserRegistry::new().register(Language::CSharp, Box::new(TreeSitterCodeParser::csharp())),
+    );
+
+    let result = use_case.handle_project_json(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    let json = result
+        .expect("handle_project_json should succeed")
+        .into_payload();
+    assert!(
+        json.contains("\"FileA.cs\"") && json.contains("\"FileB.cs\""),
+        "both files of the mutual-using cycle must appear in functions_with_cycles: {}",
+        json
     );
 }
 
