@@ -585,6 +585,15 @@ mod tests {
     //       — T4 measures SOMETHING now, syntactically) with a reason
     //       naming the instance/EF abstention; the other metrics are
     //       unchanged from T3.
+    //   15b. (retry #1, Dev-B BLOCKING + QA HIGH) the four demoted instance
+    //        receivers — idiomatic underscore-camelCase field names
+    //        (`_httpClient.`, `_sqlCommand.`, `_stream.`, `_dbContext.`) —
+    //        in a loop classify Unknown, never NotIo (the silent false
+    //        negative Dev-B reproduced: PascalCase markers never match real
+    //        C# field-name receivers) and never Io (re-promoting any of
+    //        them into IO_PREFIXES/confident_prefixes must fail this test —
+    //        QA's mutation: re-adding "DbContext." to IO_PREFIXES survived
+    //        the whole suite before this test existed).
     //
     // ── Test List (US16 T4.3 — user-configured confident prefixes) ───────
     //   16. csharp(extra_prefixes) with a user prefix ("MyIoWrapper.") ->
@@ -861,6 +870,35 @@ mod tests {
         let functions = parser().parse(source).unwrap();
         assert_eq!(functions[0].calls_in_loops.len(), 1);
         assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Unknown);
+    }
+
+    // Retry #1 (Dev-B BLOCKING, QA HIGH): the four demoted instance
+    // receivers must abstain on their REAL idiomatic C# shape — an
+    // underscore-camelCase field (`_httpClient`, `_sqlCommand`, `_stream`,
+    // `_dbContext`), never the PascalCase type name itself. Also pins the
+    // static-vs-instance demotion QA's mutation found untested: none of
+    // these may ever classify Io.
+    #[test]
+    fn idiomatic_instance_receiver_call_in_loop_classifies_unknown_never_io() {
+        for call in [
+            "_httpClient.GetAsync(url);",
+            "_sqlCommand.ExecuteNonQuery();",
+            "_stream.Read(buffer, 0, len);",
+            "_dbContext.SaveChanges();",
+        ] {
+            let source = format!(
+                "class C {{ void M() {{ for (int i = 0; i < 10; i++) {{ {} }} }} }}",
+                call
+            );
+            let functions = parser().parse(&source).unwrap();
+            assert_eq!(functions[0].calls_in_loops.len(), 1, "case: {}", call);
+            assert_eq!(
+                functions[0].calls_in_loops[0].io,
+                IoClassification::Unknown,
+                "case: {}",
+                call
+            );
+        }
     }
 
     #[test]

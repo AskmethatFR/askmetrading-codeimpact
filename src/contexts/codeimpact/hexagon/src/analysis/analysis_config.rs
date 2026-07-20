@@ -1,6 +1,43 @@
 use super::alert_thresholds::AlertThresholds;
 use super::file_filter::FileFilter;
 
+/// Retry #1 (Security MEDIUM, #33 T4): mirrors `FileFilter`'s
+/// `MAX_PATTERN_COUNT` — an unbounded `ioSignatures` list let a 90,000-entry
+/// config (still under FileSystemConfigReader's 1 MiB cap) inflate per-file
+/// wall-clock 6x and trip a false `SourceTooComplex`.
+const MAX_IO_SIGNATURE_COUNT: usize = 256;
+/// Mirrors `FileFilter`'s `MAX_PATTERN_LENGTH`, scaled down: a confident I/O
+/// prefix is a short qualified-name fragment (`"File."`, `"MyIoWrapper."`),
+/// never a long payload.
+const MAX_IO_SIGNATURE_LENGTH: usize = 256;
+
+/// Rejected construction of `AnalysisConfig::with_io_signature_prefixes`
+/// (retry #1, Security MEDIUM) — mirrors `FileFilterError`'s shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AnalysisConfigError {
+    TooManyIoSignaturePrefixes(usize),
+    IoSignaturePrefixTooLong(String),
+}
+
+impl std::fmt::Display for AnalysisConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyIoSignaturePrefixes(count) => write!(
+                f,
+                "trop de préfixes ioSignatures: {} (max {})",
+                count, MAX_IO_SIGNATURE_COUNT
+            ),
+            Self::IoSignaturePrefixTooLong(prefix) => write!(
+                f,
+                "préfixe ioSignatures trop long (max {} caractères): {}",
+                MAX_IO_SIGNATURE_LENGTH, prefix
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AnalysisConfigError {}
+
 /// Value Object (US31): the two independent knobs an analysis run is
 /// configured by — alert thresholds (US8) and the file filter (US31).
 /// Immutable, pure composition of two already-validated VOs — no
@@ -45,9 +82,17 @@ impl AnalysisConfig {
 
     /// Builder-style override (mirrors `with_call_graph`/
     /// `with_economic_impact` elsewhere in this codebase) — additive, T4.3.
-    pub fn with_io_signature_prefixes(mut self, prefixes: Vec<String>) -> Self {
+    /// Fallible since retry #1 (Security MEDIUM): validates count + per-
+    /// entry length the same way `FileFilter::new` validates include/
+    /// exclude, so the invariant holds regardless of which caller
+    /// constructs this VO (ddd-value-object), not just the config reader.
+    pub fn with_io_signature_prefixes(
+        mut self,
+        prefixes: Vec<String>,
+    ) -> Result<Self, AnalysisConfigError> {
+        // T4.3 retry #1 scaffold: cap enforcement wired in the next step.
         self.io_signature_prefixes = prefixes;
-        self
+        Ok(self)
     }
 
     pub fn io_signature_prefixes(&self) -> &[String] {

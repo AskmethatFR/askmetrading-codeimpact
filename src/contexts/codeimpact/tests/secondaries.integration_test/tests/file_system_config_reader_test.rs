@@ -42,6 +42,9 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 // 19. ioSignatures absent -> io_signature_prefixes() is empty (byte-
 //     identical to no config at all)
 // 20. ioSignatures with a non-string element (malformed shape) -> Err
+// 21. (retry #1, Security MEDIUM) ioSignatures with 257 entries (over
+//     AnalysisConfig::MAX_IO_SIGNATURE_COUNT) -> a clean config Err, not a
+//     per-file wall-clock/complexity blowup downstream
 
 fn isolated_dir(test_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -449,6 +452,32 @@ fn io_signatures_with_a_non_string_element_is_rejected() {
     assert!(
         result.is_err(),
         "a malformed (non-string) ioSignatures element must be rejected, got {:?}",
+        result
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Retry #1 (Security MEDIUM, #33 T4): an unbounded ioSignatures list (still
+// under the 1 MiB config-size cap) let a 90,000-entry array inflate
+// per-file wall-clock 6x and trip a false SourceTooComplex downstream. The
+// cap must reject it here, at config-load time, before any file is parsed.
+#[test]
+fn oversized_io_signatures_list_is_rejected_with_a_clean_error() {
+    let dir = isolated_dir("io_signatures_oversized");
+    let config_path = dir.join(".codeimpact.json");
+    let prefixes: Vec<String> = (0..257).map(|i| format!("\"P{}.\"", i)).collect();
+    std::fs::write(
+        &config_path,
+        format!(r#"{{"ioSignatures":[{}]}}"#, prefixes.join(",")),
+    )
+    .unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    assert!(
+        result.is_err(),
+        "an over-cap ioSignatures list must be rejected, got {:?}",
         result
     );
     let _ = std::fs::remove_dir_all(&dir);

@@ -136,10 +136,11 @@ impl FileSystemConfigReader {
         let filter = FileFilter::new(config.include, config.exclude, config.respect_gitignore)
             .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
 
-        Ok(
-            AnalysisConfig::new(thresholds, filter)
-                .with_io_signature_prefixes(config.io_signatures),
-        )
+        let analysis_config = AnalysisConfig::new(thresholds, filter)
+            .with_io_signature_prefixes(config.io_signatures)
+            .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
+
+        Ok(analysis_config)
     }
 }
 

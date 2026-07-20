@@ -164,8 +164,15 @@ fn main() {
             let thresholds =
                 AlertThresholds::from_sources(*file_config.thresholds(), cli_thresholds);
             let analysis_config =
-                AnalysisConfig::new(thresholds, file_config.file_filter().clone())
-                    .with_io_signature_prefixes(file_config.io_signature_prefixes().to_vec());
+                match AnalysisConfig::new(thresholds, file_config.file_filter().clone())
+                    .with_io_signature_prefixes(file_config.io_signature_prefixes().to_vec())
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("erreur: {}", e);
+                        std::process::exit(1);
+                    }
+                };
 
             let target = AnalysisTarget::new(file_path, target_type);
             let is_project = *target.target_type() == TargetType::Project;
