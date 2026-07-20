@@ -39,7 +39,7 @@ hexagon → rien
 
 | Port (hexagon) | Méthodes (signatures agnostiques du langage) | Adapter P0 (secondaries) | Adapter futur |
 |---|---|---|---|
-| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str], filter: &FileFilter)` | FileSystemCodeReader (`&["rs","cs"]` fourni par la racine ; walk `ignore` + `globset`, [[ADR-0019]]) | TsCodeReader (`&["ts","tsx"]`) |
+| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str], filter: &FileFilter)` · `canonical_root(root) -> PathBuf` ([[ADR-0023]], défaut identité + surcharge FS) | FileSystemCodeReader (`&["rs","cs"]` fourni par la racine ; walk `ignore` + `globset`, [[ADR-0019]]) | TsCodeReader (`&["ts","tsx"]`) |
 | CodeParser | `parse(source)` · `resolve_dependencies(source, &DependencyContext) -> Vec<PathBuf>` · `language()` · `capabilities()` | **SynCodeParser** (Rust, sémantique modules `crate::`/`super::`/`mod.rs` **privée**) + **TreeSitterCodeParser** (C#, générique, paramétré par `LanguageProfile`, feature `lang-csharp`, [[ADR-0020]]), dispatchés par **`ParserRegistry`** (extension → parser) | + un `LanguageProfile` TS (grammaire + `.scm` + table I/O), **pas** un nouvel adaptateur ([[ADR-0020]]) |
 | ProfilerPort | — | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | — | CargoTestRunner | — |
@@ -55,6 +55,8 @@ hexagon → rien
 > **Deux modèles de menace de parsing, deux remèdes.** `syn` (descente récursive) peut **déborder la pile → `abort` process-level** : isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, [[ADR-0015]]). tree-sitter (table-driven, pile sur le tas) **n'abandonne pas le processus** même à 500 000 d'imbrication : la menace est une **DoS wall-clock**, fermée par des **gardes in-process** (budget partagé 5 s parse+requête+post-traitement, plafonds de captures, balayage d'appartenance O(n log n)). Voir [[ADR-0020]] § D5 et l'amendement d'[[ADR-0015]].
 
 > **Canal de dégradation honnête jusqu'aux writers ([[ADR-0021]]).** La capacité par-métrique par-langage déclarée par un parseur (`CodeParser::capabilities() -> LanguageCapabilities`, carte `métrique -> MetricSupport ∈ Supported/Degraded/Unsupported`) **circule de bout en bout** : `RunAnalysis` l'interroge une fois et la pose dans un nouveau champ `CodeMetrics.capabilities: Option<LanguageCapabilities>`, que les **trois writers** lisent. Chaque writer branche **dynamiquement sur `MetricSupport`, jamais sur l'identité du langage** — une métrique non-`Supported` est rendue `n/a`, **jamais `0`** (le principe d'[[ADR-0010]] étendu de la *mesure* à la *capacité d'un langage*). Console → `n/a — non supporté` (fr) + `[dégradé: reason]` ; JSON → `null` (jamais `[]`/`0`) + objet `metric_support` (valeurs anglaises, [[ADR-0007]] §7.9) ; HTML → `MetricVm.support`/`note` via whitelist fermée `SUP` (classes `sup-ok`/`sup-degraded`/`sup-na`, discipline [[ADR-0008]] §8.10, [[ADR-0008]] §8.12). Le branchement par état (non par langage) fait **composer** T4 (`io_in_loops` C# : `Unsupported`→`Degraded`) et T5 (`cross_file_dependencies`) **sans rouvrir les writers**. Sortie Rust byte-inchangée (`None`/tout-`Supported` → aucune annotation). Agrégat projet (tuile top-level) différé en **T3b**. Voir [[ADR-0021]].
+
+> **Résolution de dépendances inter-fichiers — le C# ajoute une pré-passe namespace ([[ADR-0023]], US14-T5).** Là où `SynCodeParser` résout des **modules** fichier-par-fichier (`crate::`/`super::`/`mod.rs`), `TreeSitterCodeParser` résout des **namespaces** — une relation **N:M** (un namespace déclaré par N fichiers, un fichier déclarant M namespaces). Il construit d'abord un **index projet-global `namespace → fichiers déclarants`** (pré-passe, requête `csharp_deps.scm`, mémoïsée et gardée), puis mappe les `using` de chaque fichier à travers l'index. `FileConsumptionGraph` et la signature `CodeParser::resolve_dependencies` **restent inchangés** — l'algèbre de graphe pure se généralise gratuitement, la sémantique namespace est **privée à l'adaptateur** (discipline [[ADR-0018]]). `DependencyContext` est étendu **additivement** (`file_sources: Arc<…>`, `source_roots`) — tout l'I/O disque reste centralisé dans le `CodeReader` ([[ADR-0006]]), l'adaptateur de parsing ne lit jamais de fichier. La clé `sourceRoots` réservée par [[ADR-0019]] est câblée (résolue contre la racine canonique via `CodeReader::canonical_root`). La dépendance C# est annoncée **`Degraded`** (grain namespace, pas fichier-exact) via le canal `capabilities()` ([[ADR-0021]], honnêteté [[ADR-0010]]).
 
 ### Naming conventions
 
@@ -190,7 +192,7 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | US6 | P1 | Stress test instrumenté | ✅ Livré |
 | US7 | P1 | Rapport HTML | ✅ Livré |
 | US8 | P1 | Seuils d'alerte personnalisés | ✅ Livré |
-| US14 | P1 | Support multi-langage (étude + de-Rustification) | 🔄 En cours — T1 (de-Rustify hexagone) ✅, **T2 C# ✅ (US16/#33)**, **T4 I/O-en-boucle C# ✅ (#33)**, T3 (dégradation), T5 (deps C#), T6 (TS) à venir |
+| US14 | P1 | Support multi-langage (étude + de-Rustification) | 🔄 En cours — T1 (de-Rustify hexagone) ✅, **T2 C# ✅ (US16/#33)**, **T3 (dégradation) ✅ (#33)**, **T4 I/O-en-boucle C# ✅ (#33)**, **T5 (deps inter-fichiers C#) ✅ (#33, [[ADR-0023]])**, T5.3 (drop arêtes d'appel ambiguës) + T6 (TS) à venir |
 | US15 | P1 | Fichier de configuration `.codeimpact.json` (include/exclude, respectGitignore) | ✅ Livré (#31) |
 | US16 | P1 | Support C#/.NET via tree-sitter (US14-T2) — `analyze <csharp-dir>` rend complexité + impact | ✅ Livré (cette PR, #33) |
 
@@ -211,3 +213,4 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | 0020 | Parsing multi-langage tree-sitter — un adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | ✅ Appliqué dans #33 |
 | 0021 | Dégradation honnête — `MetricSupport` circule jusqu'aux writers, `n/a` jamais `0` (US14-T3) | ✅ Appliqué dans #33 |
 | 0022 | Classification I/O-en-boucle C# — le qualificatif statique affirme, le récepteur s'abstient (US14-T4) | ✅ Appliqué dans #33 |
+| 0023 | Résolution des dépendances inter-fichiers C# — index namespace→fichiers, arêtes N:M, `sourceRoots` câblé, dégradation honnête (US14-T5) | ✅ Appliqué dans #33 |

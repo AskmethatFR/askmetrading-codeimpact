@@ -2,13 +2,13 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-20 (US14-T4 / #33 — ADR-0022, classification I/O-en-boucle C# ; sur ADR-0021 dégradation honnête T3, ADR-0020 tree-sitter)
+> **Updated:** 2026-07-20 (US14-T5 / #33 — ADR-0023, graphe de dépendances inter-fichiers C# ; sur ADR-0022 I/O-en-boucle T4, ADR-0021 dégradation honnête T3)
 
 ## Nodes
 
 | ID | Type | Title | Status | Updated | Links | Path |
 |---|---|---|---|---|---|---|
-| architecture-overview | technical | Architecture — CodeImpact | Applied | 2026-07-20 | [[ADR-0001]], [[ADR-0002]], [[ADR-0003]], [[ADR-0004]], [[ADR-0005]], [[ADR-0006]], [[ADR-0007]], [[ADR-0008]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[economic-impact-estimator]], [[json-report-schema]], [[html-report]], [[alert-thresholds]] | docs/architecture.md |
+| architecture-overview | technical | Architecture — CodeImpact | Applied | 2026-07-20 | [[ADR-0001]], [[ADR-0002]], [[ADR-0003]], [[ADR-0004]], [[ADR-0005]], [[ADR-0006]], [[ADR-0007]], [[ADR-0008]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]], [[economic-impact-estimator]], [[json-report-schema]], [[html-report]], [[alert-thresholds]] | docs/architecture.md |
 | console-report-enriched | technical | Console Report Format — CodeImpact (Enriched) | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[html-report]], [[ADR-0021]] | docs/technical/console-report-enriched.md |
 | economic-impact-estimator | technical | Economic Impact Estimator — Technical Rationale | Applied | 2026-07-08 | [[ADR-0004]], [[architecture-overview]] | docs/technical/economic-impact.md |
 | json-report-schema | technical | JSON Report Schema — CodeImpact | Applied | 2026-07-20 | [[ADR-0007]], [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/technical/json-report-schema.md |
@@ -19,7 +19,7 @@
 | ADR-0003 | technical | Pas de Stryker — exécution directe + mesure | Accepted | 2026-07-08 | [[architecture-overview]] | docs/ADR-0003-no-stryker.md |
 | ADR-0004 | technical | Economic Impact — Heuristics P0, Profiling P2 | Accepted | 2026-07-08 | [[architecture-overview]], [[economic-impact-estimator]] | docs/ADR-0004-economic-impact-heuristics.md |
 | ADR-0005 | technical | Package-by-Context, Package-by-Layer à l'intérieur | Accepted | 2026-07-08 | [[architecture-overview]] | docs/ADR-0005-package-by-context.md |
-| ADR-0006 | technical | Sécurité — Canonicalize, Limite Taille, Pas de Fuite de Path | Applied | 2026-07-17 | [[architecture-overview]], [[ADR-0015]], [[ADR-0017]], [[ADR-0019]], [[ADR-0020]] | docs/ADR-0006-security-measures.md |
+| ADR-0006 | technical | Sécurité — Canonicalize, Limite Taille, Pas de Fuite de Path | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0015]], [[ADR-0017]], [[ADR-0019]], [[ADR-0020]], [[ADR-0023]] | docs/ADR-0006-security-measures.md |
 | ADR-0007 | technical | JSON Report Format — Output Format & Schema | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[ADR-0021]] | docs/ADR-0007-json-report-format.md |
 | ADR-0008 | technical | HTML Report Format — Self-Contained Output & XSS Defense | Applied | 2026-07-20 | [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/ADR-0008-html-report-format.md |
 | ADR-0009 | technical | CI GitHub Actions & posture supply-chain (dépôt public) | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0006]] | docs/ADR-0009-ci-supply-chain.md |
@@ -32,15 +32,17 @@
 | ADR-0016 | technical | Classification des I/O en boucle — le type affirme, le nom s'abstient, trois états, calibration mesurée | Applied | 2026-07-16 | [[architecture-overview]], [[ADR-0004]], [[ADR-0010]], [[ADR-0013]], [[ADR-0014]], [[ADR-0015]], [[ADR-0022]], [[glossary]] | docs/ADR-0016-io-in-loops-type-asserts-name-abstains.md |
 | ADR-0017 | technical | Seuils d'alerte — porte domaine pure, `.codeimpact.json` partagé, exit 3 CI | Applied | 2026-07-17 | [[architecture-overview]], [[alert-thresholds]], [[ADR-0001]], [[ADR-0004]], [[ADR-0006]], [[ADR-0009]], [[ADR-0010]], [[ADR-0019]], [[json-report-schema]], [[html-report]], [[glossary]] | docs/ADR-0017-alert-thresholds-config-schema.md |
 | ADR-0018 | technical | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0001]], [[ADR-0013]], [[ADR-0014]], [[ADR-0019]], [[ADR-0020]], [[glossary]] | docs/ADR-0018-de-rustified-hexagon-language-agnostic.md |
-| ADR-0019 | technical | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0017]], [[ADR-0006]], [[ADR-0001]], [[ADR-0018]], [[ADR-0022]], [[alert-thresholds]], [[glossary]] | docs/ADR-0019-configuration-file-analysis-config.md |
-| ADR-0020 | technical | Parsing multi-langage tree-sitter — adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0018]], [[ADR-0001]], [[ADR-0015]], [[ADR-0006]], [[ADR-0022]], [[glossary]] | docs/ADR-0020-multi-language-parsing-tree-sitter.md |
-| ADR-0021 | technical | Dégradation honnête — `MetricSupport` circule jusqu'aux writers, `n/a` jamais `0` (US14-T3) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]], [[console-report-enriched]], [[glossary]] | docs/ADR-0021-honest-degradation-metric-support-flows-to-writers.md |
+| ADR-0019 | technical | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0017]], [[ADR-0006]], [[ADR-0001]], [[ADR-0018]], [[ADR-0022]], [[ADR-0023]], [[alert-thresholds]], [[glossary]] | docs/ADR-0019-configuration-file-analysis-config.md |
+| ADR-0020 | technical | Parsing multi-langage tree-sitter — adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0018]], [[ADR-0001]], [[ADR-0015]], [[ADR-0006]], [[ADR-0022]], [[ADR-0023]], [[glossary]] | docs/ADR-0020-multi-language-parsing-tree-sitter.md |
+| ADR-0021 | technical | Dégradation honnête — `MetricSupport` circule jusqu'aux writers, `n/a` jamais `0` (US14-T3) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]], [[console-report-enriched]], [[ADR-0023]], [[glossary]] | docs/ADR-0021-honest-degradation-metric-support-flows-to-writers.md |
 | ADR-0022 | technical | Classification I/O-en-boucle C# — le qualificatif statique affirme, le récepteur s'abstient (US14-T4) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0016]], [[ADR-0020]], [[ADR-0019]], [[ADR-0021]], [[ADR-0010]], [[glossary]] | docs/ADR-0022-csharp-io-in-loops-static-asserts-receiver-abstains.md |
-| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]] | docs/glossary.md |
+| ADR-0023 | technical | Résolution des dépendances inter-fichiers C# — index namespace→fichiers, arêtes N:M, `sourceRoots` câblé, dégradation honnête (US14-T5) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[glossary]] | docs/ADR-0023-csharp-cross-file-dependency-namespace-index.md |
+| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]] | docs/glossary.md |
 
 ## Graph Health
 
-- **Total nodes:** 29
+- **Total nodes:** 30
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅
+- **Standing nodes présents & à jour :** `architecture-overview` ✅ (frontière résolution de dépendances + roadmap T5 + ADR table). Pas de `bounded-contexts`/`module-structure`/`event-flows` séparés — projet mono-contexte ([[ADR-0002]]), structure décrite dans `architecture-overview` ; T5 n'a pas changé la forme des contextes ni ajouté de flux d'événement.

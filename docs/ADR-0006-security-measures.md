@@ -5,7 +5,7 @@
 **Applied in:** US1  
 **Relations:**  
   depends-on: ["architecture-overview"]  
-  related-to: ["ADR-0015", "ADR-0017"]  
+  related-to: ["ADR-0015", "ADR-0017", "ADR-0019", "ADR-0020", "ADR-0023"]  
 
 ## Context
 
@@ -31,9 +31,18 @@ Quand `.codeimpact.json` sert de **gate CI dur** (`--strict`, exit 3, [[ADR-0017
 - **Remédiation opérationnelle, pas code.** Couvrir `.codeimpact.json` par **CODEOWNERS / branch protection**, ou faire passer la CI des flags **`--max-kwh`/`--max-co2` explicites** — qui **surclassent** le fichier par métrique ([[ADR-0017]] §5). Même schéma accepté que `.eslintrc` / `codecov.yml` : un fichier de config versionné est de confiance au niveau du contrôle d'accès au dépôt, pas au niveau du code.
 - **Résiduel accepté.** Aucune contre-mesure code n'est ajoutée : la surface est trop étroite et la remédiation opérationnelle est le pattern standard de l'écosystème.
 
+## Menace *agrégée* — consommation de ressource projet-globale (finding Security, US14-T5 #33, voir [[ADR-0023]])
+
+Jusqu'à US14-T5, le modèle de menace ressource ne bornait qu'une **unité isolée** : le RSS d'**un** fichier (`MAX_MEASURABLE_SOURCE_BYTES` 1 Mo, `MAX_FILE_SIZE` 10 Mo, point 2). La résolution de dépendances inter-fichiers C# ([[ADR-0023]]) a introduit une **dimension nouvelle** : une pré-passe qui **lit tout le projet en mémoire d'un coup** pour construire l'index namespace→fichiers. Deux classes de coût, invisibles d'une garde par-unité, apparaissent alors :
+
+7. **Plafond mémoire *agrégé* `MAX_PROJECT_SOURCE_BYTES` = 100 Mo (ajouté US14-T5, #33).** Mille fichiers de 1 Mo passent **chacun** la garde par-fichier (point 2) mais somment à ~1 Go en RAM. `source_guard::check_project_admissible` refuse le projet **avant** de charger l'ensemble des sources — **fail-fast**, jamais un OOM ni un swap. C'est la **borne agrégée** complémentaire de la borne par-fichier : la première protège contre *beaucoup de fichiers admissibles*, la seconde contre *un fichier hostile*. Les deux coexistent.
+
+8. **Classe de complexité exponentielle latente — `FileConsumptionGraph::compute_depth` (mémoïsé, #33).** Le comptage de profondeur du graphe était **exponentiel** (comptage de chemins non mémoïsé). **Dormant pour Rust** (faible fan-out des modules), il devenait un **DoS algorithmique atteignable par du C# ordinaire** : la résolution de grain namespace produit des arêtes **denses** ([[ADR-0023]] D5), et un graphe dense fait exploser le nombre de chemins. Fermé par **mémoïsation** (cache `HashMap`, `O(V+E)`), calquée sur `detect_cycles`. Leçon : une borne de *taille d'entrée* ne couvre pas une *classe de complexité* — un petit projet à graphe dense suffit à déclencher un coût super-linéaire.
+
 ## Consequences
 
 - Path traversal impossible (canonicalize résout les `../../`).
+- (#33, [[ADR-0023]]) La lecture *projet-globale* est bornée (`MAX_PROJECT_SOURCE_BYTES`, fail-fast) et le coût de profondeur du graphe est ramené de exponentiel à `O(V+E)` : la surface de résolution inter-fichiers C# n'ouvre ni OOM agrégé ni DoS algorithmique. Résiduel accepté : la borne 100 Mo est fixe (un très gros monorepo légitime est refusé net plutôt que mesuré — configurable si un cas réel l'exige).
 - Fichier de 100 MB ne fait pas planter l'analyse.
 - Les logs utilisateur ne contiennent pas de chemins sensibles.
 - (#40) Un futur refactor ne peut plus contourner en silence le confinement du binaire exécuté : `measure_cmd` re-valide au point d'exécution. Résiduel accepté : la fenêtre TOCTOU canonicalize→exec (déjà documentée, non aggravée) et le confinement OS-level (sandbox/seccomp) restent hors scope.
