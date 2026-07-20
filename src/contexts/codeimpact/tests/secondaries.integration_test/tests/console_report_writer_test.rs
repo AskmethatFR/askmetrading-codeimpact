@@ -8,7 +8,10 @@ use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FileDependency;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::Language;
+use codeimpact_hexagon::analysis::LanguageCapabilities;
 use codeimpact_hexagon::analysis::Measurement;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::UnmeasurableFile;
@@ -164,6 +167,98 @@ fn write_console_shows_unclassifiable_io_in_loops_count() {
         "expected the unclassifiable synthesis line, got: {}",
         output
     );
+}
+
+// T3 (US16, #33): a language whose io_in_loops capability is Unsupported
+// (C#, Q1 human-approved) must render an honest "n/a", never a `0` that
+// reads as "measured, nothing found" — the DISCRIMINATING assertion is the
+// second one: a naive implementation that just always prints
+// `unclassifiable_io_in_loops_count()` (0 by construction here, since
+// CodeMetrics::new never populates it) would pass the first assertion by
+// accident too, so the negative assertion is what actually pins the fix.
+#[test]
+fn write_console_shows_na_for_unsupported_io_capability_never_a_zero_count() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_io_in_loops(MetricSupport::Unsupported);
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("n/a — non supporté pour C#"),
+        "expected the honest n/a line for an unsupported I/O capability, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("Appels en boucle non classifiables: 0"),
+        "an unsupported io_in_loops capability must never render as a measured 0, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_console_supported_io_capability_still_shows_the_real_count() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp);
+    let metrics = CodeMetrics::new(5)
+        .with_unclassifiable_io_in_loops_count(4)
+        .with_capabilities(capabilities);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Appels en boucle non classifiables: 4"),
+        "a Supported io_in_loops capability must still show the real measured count, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_console_appends_degraded_note_to_transitive_complexity_line() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp).with_call_graph(
+        MetricSupport::Degraded("name-based resolution; ambiguous edges dropped".to_string()),
+    );
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains(
+            "Complexité transitive: 5 (dont 0 cachée dans les appels) [dégradé: name-based resolution; ambiguous edges dropped]"
+        ),
+        "expected the degraded note appended to the transitive-complexity line, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_console_rust_output_unchanged_when_capabilities_all_supported() {
+    // Zero behavior change for Rust (all-Supported, or no capabilities
+    // attached at all): the transitive line carries no note, and the
+    // unclassifiable line still shows its real (possibly-zero) count.
+    let writer = ConsoleReportWriter::new();
+    let metrics_no_capabilities = CodeMetrics::new(5);
+    let metrics_all_supported =
+        CodeMetrics::new(5).with_capabilities(LanguageCapabilities::all_supported(Language::Rust));
+
+    for metrics in [metrics_no_capabilities, metrics_all_supported] {
+        let mut buf = Vec::new();
+        writer.write_console_to(&mut buf, &metrics);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("Complexité transitive: 5 (dont 0 cachée dans les appels)\n"),
+            "expected no degraded note on the transitive line, got: {}",
+            output
+        );
+        assert!(
+            output.contains("Appels en boucle non classifiables: 0"),
+            "expected the real (zero) count, not n/a, got: {}",
+            output
+        );
+        assert!(!output.contains("n/a — non supporté"));
+    }
 }
 
 #[test]
