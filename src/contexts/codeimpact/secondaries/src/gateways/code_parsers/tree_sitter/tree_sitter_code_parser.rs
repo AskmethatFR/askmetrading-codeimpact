@@ -367,6 +367,20 @@ fn contains(outer: &Node, inner: &Node) -> bool {
 /// function alone, with parse+query both finishing fast — many legitimate
 /// functions, not one pathological one, is not something a per-function
 /// cap can ever catch; only removing the O(functions) scan itself does.
+///
+/// Grammar precondition (US16 T2 retry #3, Security LOW — read this
+/// before reusing this helper for a future language's `.scm`): the
+/// ownership check below is a single `open.last()` (innermost) with no
+/// deeper-stack fallback — it silently drops a capture whose wrapping
+/// node shares the EXACT `start_byte` of the `@function` it contains.
+/// This never fires for `csharp.scm` today: every wrapping capture
+/// (`for(`/`while(`/`if(`/`case`/`?:`/a call) requires at least one
+/// literal token before any nested content, so a wrapping capture can
+/// never start at the same byte as a `@function` it contains. A future
+/// grammar that allows a zero-byte-gap tie (e.g. a construct whose own
+/// span starts exactly where a nested function begins) would need a
+/// down-stack fallback here instead of the single `top` check — do not
+/// assume this precondition holds for a new `.scm` without verifying it.
 fn owning_function_indices<'a>(
     function_nodes: &[Node<'a>],
     captures: Vec<(&'a str, Node<'a>)>,
@@ -375,6 +389,17 @@ fn owning_function_indices<'a>(
         .into_iter()
         .filter(|(name, _)| *name != "function")
         .collect();
+    // Correctness, not just tidiness (retry #3, QA minor): the sweep below
+    // assumes non-decreasing start_byte order. tree-sitter's own query
+    // iteration is roughly a tree-position walk in practice, so this sort
+    // is currently unexercised by any fixture (QA's mutation: removing it
+    // survives every current test) — but that iteration order is not a
+    // documented API guarantee this code should silently depend on.
+    // Constructing a REAL parsed source that forces the query engine's
+    // OWN iteration out of position order (rather than a hand-built,
+    // impossible-to-fabricate `Node`) was judged not worth it for a
+    // currently-unreachable case; kept as defensive, load-bearing-by-
+    // contract code instead of being removed.
     non_function_captures.sort_by_key(|(_, node)| node.start_byte());
 
     let mut owned = Vec::with_capacity(non_function_captures.len());
@@ -570,6 +595,27 @@ mod tests {
         // M's own body is just the local declaration + one call — no
         // decision points of its own, whatever Local's body contains.
         assert_eq!(outer.decision_points, 0);
+    }
+
+    // Retry #3 (QA HIGH) — the ONLY shape that distinguishes innermost
+    // (correct) from outermost ownership in owning_function_indices's
+    // stack: a capture INSIDE Local's body, while M is still open on the
+    // stack underneath it. The test above never exercises this — its only
+    // non-function capture (the `Local()` call) sits AFTER Local has
+    // already closed, so the stack has already collapsed back to depth 1
+    // by the time ownership is evaluated; `open.first()` and
+    // `open.last()` are indistinguishable there. QA proved by mutation
+    // that swapping to `open.first()` (outermost) survives the entire
+    // suite without this test.
+    #[test]
+    fn nested_local_function_if_is_attributed_to_local_not_outer() {
+        let source =
+            "class C { void M() { if (a) { } int Local() { if (b) { } return 1; } Local(); } }";
+        let functions = parser().parse(source).unwrap();
+        let outer = functions.iter().find(|f| f.name == "M").unwrap();
+        let local = functions.iter().find(|f| f.name == "Local").unwrap();
+        assert_eq!(outer.decision_points, 1, "M's own if only");
+        assert_eq!(local.decision_points, 1, "Local's own if only");
     }
 
     #[test]
