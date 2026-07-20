@@ -1,11 +1,12 @@
 # ADR-0008: HTML Report Format — Self-Contained Output & XSS Defense
 
 **Status:** Applied  
-**Date:** 2026-07-11 (amended 2026-07-12 — #27: ADR-8.10, ADR-8.11, addenda 8.8a/8.8b; ADR-8.7's font clause superseded)  
-**Decided in:** #7, #27  
+**Date:** 2026-07-11 (amended 2026-07-12 — #27: ADR-8.10, ADR-8.11, addenda 8.8a/8.8b; ADR-8.7's font clause superseded; amended 2026-07-20 — #33/T3: ADR-8.12 support/note + `SUP` whitelist)  
+**Decided in:** #7, #27, #33  
 **Relations:**  
   supersedes: []  
   depends-on: ["architecture-overview", "ADR-0001", "ADR-0006", "ADR-0007"]  
+  related: ["ADR-0021"]  
   prerequisite: []
 
 ## Context
@@ -46,6 +47,16 @@ T2 (see `html-report` node, staged breakdown).
 | ADR-8.10 | **The tree, aggregation, thresholds, bar percentages and number formatting are computed in Rust** (`html/view_model.rs`); the JS is a pure `VM → DOM` projection. Rendering discipline: one `el()` node factory (`textContent` only); colours as CSS classes resolved through closed whitelists (`hasOwnProperty` + fallback), never style strings built from data; **exactly two** clamped numeric `.style` sinks; total ban on `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`/`setAttribute`/`eval`/`new Function`/`javascript:`/`srcdoc`/`cssText`; handlers only via `addEventListener` + closure | This is the **enforceable form of ADR-8.5/8.6 for a dynamic DOM**. T2's DOM is ~10× bigger with far more interpolation sites, so "remember to use `textContent`" stops being a defense. The smaller and dumber the JS, the more auditable the boundary — and pushing the arithmetic into Rust puts it under tests that bite. The reference design markup interpolates into `style="…"` everywhere: a sink T1 did not have, deliberately not ported. Pinned by two structural tests. |
 | ADR-8.11 | **Embedded base64 `@font-face`, 2 latin-subset faces** — Barlow 400 (body) + Barlow Condensed 600 (headings), committed as `.woff2`, `include_bytes!`-ed and base64-encoded in-crate (`html/base64.rs`, hand-rolled RFC 4648, **no new dependency**), emitted as `data:font/woff2;base64,`. Supersedes ADR-8.7's font clause | ~40 KB of base64 per report. **The zero-network-request invariant is preserved and strengthened** — the fonts are *in* the document, so the report renders identically offline, emailed or zipped. Trimmed from the 5 faces offered to the 2 the design actually uses (Lean). System stack kept as the CSS fallback, so a font that fails to decode degrades instead of breaking. SIL OFL 1.1 licence committed beside the binaries. |
 
+### Amendment (#33 / US14-T3) — honest degradation in the HTML view-model
+
+Honest degradation ([[ADR-0021]]) reaches the HTML writer. See [[ADR-0021]] D3 for the cross-format decision; the HTML-specific clause:
+
+| # | Decision | Rationale |
+|---|---|---|
+| ADR-8.12 | `MetricVm` gains a `support` field (`ok` / `degraded` / `na`) and a `note` field; the JS maps `support` through a **closed `SUP` whitelist** to one of three fixed CSS classes `sup-ok` / `sup-degraded` / `sup-na` | This is [[ADR-0008]] §8.10 (**"colours reach the DOM as class names resolved through a closed whitelist, never a style string built from data"**) applied to the *support* dimension. `SUP` is resolved with `hasOwnProperty` + fallback exactly like the existing colour whitelist; **no `innerHTML`, no data-driven `.style`** — the two-numeric-`.style`-sink budget of §8.10 is untouched. An `Unsupported` metric renders `n/a` with its note; a `Degraded` metric shows the value plus the reason note. The whole ADR-8.5/8.6/8.10 XSS boundary is preserved — the support state is an enum projected to a fixed class, never a string. |
+
+Rust output is byte-unchanged: `capabilities: None` / all-`Supported` produces `support: ok` with no note, i.e. the pre-T3 markup ([[ADR-0021]] D1).
+
 ## Consequences
 
 - **Positive**: XSS is structurally impossible for dynamic content (not merely "escaped"); confirmed by a live end-to-end test with a real malicious file name and an independent mutation check (bypassing `json_island_escape` fails exactly the 2 breakout integration tests).
@@ -73,6 +84,7 @@ T2 (see `html-report` node, staged breakdown).
 - [[ADR-0001]] — zero-dep hexagon (foundation)
 - [[ADR-0006]] — file-write / path-leak discipline
 - [[ADR-0007]] — JSON report format (sibling adapter, same pattern)
+- [[ADR-0021]] — honest degradation: `support`/`note` + `SUP` whitelist (ADR-8.12)
 - Source: `secondaries/src/gateways/report_writers/html_report_writer.rs`
 - Source: `hexagon/src/analysis/report_writer.rs`, `output_format.rs`, `run_analysis.rs`
 - Source: `primaries/src/main.rs` (`write_html_report`, `--format html -o`)
