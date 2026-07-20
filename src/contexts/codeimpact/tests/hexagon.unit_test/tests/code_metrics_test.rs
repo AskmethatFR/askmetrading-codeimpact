@@ -163,3 +163,23 @@ fn economic_impact_none_by_default() {
     let m = CodeMetrics::new(5);
     assert!(m.economic_impact().is_none());
 }
+
+// Test List (LanguageCapabilities carrier — US16 T3, #33):
+// 1. with_capabilities stores it, retrievable via the getter.
+// 2. capabilities is None by default (mirrors economic/ecological/threshold
+//    — no calling use case ever attached one).
+
+#[test]
+fn with_capabilities_stores_it() {
+    use codeimpact_hexagon::analysis::Language;
+    let capabilities =
+        codeimpact_hexagon::analysis::LanguageCapabilities::all_supported(Language::CSharp);
+    let m = CodeMetrics::new(5).with_capabilities(capabilities.clone());
+    assert_eq!(m.capabilities(), Some(&capabilities));
+}
+
+#[test]
+fn capabilities_none_by_default() {
+    let m = CodeMetrics::new(5);
+    assert!(m.capabilities().is_none());
+}

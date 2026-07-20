@@ -1267,6 +1267,10 @@ mod tests {
         assert_eq!(*capabilities.io_in_loops(), MetricSupport::Supported);
         assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
         assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);
+        // T3 (US16, #33): call_graph joined the capability set — Rust stays
+        // all-Supported, zero behavior change (same-shape sweep, this test's
+        // own assertions already prove the other 4 fields untouched).
+        assert_eq!(*capabilities.call_graph(), MetricSupport::Supported);
     }
 
     // ── Test List (source_guard wiring, #62) ──────────────────────────

@@ -545,16 +545,30 @@ mod tests {
         assert_eq!(parser().language(), Language::CSharp);
     }
 
+    // T3 (US16, #33, Q1 human-approved): C# honestly degrades two metrics —
+    // io_in_loops is Unsupported (nothing measured until T4's real I/O
+    // detection), call_graph is Degraded (name-based resolution, ambiguous
+    // edges dropped) — the other three stay Supported, unchanged since T2.
     #[test]
-    fn capabilities_reports_every_metric_supported() {
+    fn capabilities_reports_csharp_degradation() {
         let capabilities = parser().capabilities();
         assert_eq!(
             *capabilities.cyclomatic_complexity(),
             MetricSupport::Supported
         );
-        assert_eq!(*capabilities.io_in_loops(), MetricSupport::Supported);
         assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
         assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);
+        assert_eq!(*capabilities.io_in_loops(), MetricSupport::Unsupported);
+        match capabilities.call_graph() {
+            MetricSupport::Degraded(reason) => {
+                assert!(
+                    reason.contains("name-based"),
+                    "expected the name-based-resolution reason, got: {}",
+                    reason
+                );
+            }
+            other => panic!("expected call_graph to be Degraded, got {:?}", other),
+        }
     }
 
     #[test]
