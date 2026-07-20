@@ -1153,6 +1153,42 @@ fn write_html_neutralizes_payload_in_io_call_name() {
     );
 }
 
+// Security review (#33 T3 retry #1, LOW): regression hygiene alongside the
+// write_html_neutralizes_payload_in_* family above — pins that a
+// MetricSupport::Degraded reason (T3, rendered into MetricVm.note) is
+// injection-safe by the same construction (textContent via el(), no new
+// style-from-data sink, closed SUP whitelist).
+#[test]
+fn write_html_neutralizes_script_breakout_payload_in_degraded_note() {
+    let writer = HtmlReportWriter::new();
+    let payload = "</script><script>alert(1)</script>\"><img src=x onerror=alert(2)>";
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_call_graph(MetricSupport::Degraded(payload.to_string()));
+    let metrics = make_metrics(1, 1).with_capabilities(capabilities);
+    let graph = graph_from(vec![("f.cs", metrics)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        !html.contains("</script><script>alert(1)</script>"),
+        "Degraded-note payload must not appear as a literal script breakout: {}",
+        html
+    );
+    assert!(
+        !html.contains("<img"),
+        "Degraded-note payload must not inject a literal <img> tag: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<script").count(),
+        2,
+        "Degraded-note payload must not add a third <script> tag: {}",
+        html
+    );
+}
+
 // ── US7 T2 slice S4: embedded base64 @font-face (ADR-8.11) ──
 //
 // Test List (S4):

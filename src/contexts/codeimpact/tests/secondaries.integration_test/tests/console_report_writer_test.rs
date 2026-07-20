@@ -197,6 +197,31 @@ fn write_console_shows_na_for_unsupported_io_capability_never_a_zero_count() {
     );
 }
 
+// QA retry #1 (#33 T3): the summary line's n/a text alone does not
+// discriminate the DETAIL-section branch (`if let Some(language) =
+// io_na_language { ... "=== I/O dans boucles ===" ... }`) — QA proved by
+// mutation that deleting that whole branch (falling back to plain `if
+// !io_in_loops.is_empty()`) left every prior test green, because the
+// summary line above already contains the same "n/a — non supporté pour
+// C#" substring `write_console_shows_na_for_unsupported_io_capability_
+// never_a_zero_count` was matching against. This test pins the detail
+// section itself, independent of the summary line.
+#[test]
+fn write_console_shows_na_in_the_io_detail_section_not_just_the_summary_line() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_io_in_loops(MetricSupport::Unsupported);
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("=== I/O dans boucles ===\nn/a — non supporté pour C#"),
+        "expected the honest n/a DETAIL section (not just the summary line), got: {}",
+        output
+    );
+}
+
 #[test]
 fn write_console_supported_io_capability_still_shows_the_real_count() {
     let writer = ConsoleReportWriter::new();
