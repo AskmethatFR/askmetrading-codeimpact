@@ -7,7 +7,9 @@ use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
+use codeimpact_hexagon::analysis::LanguageCapabilities;
 use codeimpact_hexagon::analysis::Measurement;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::ThresholdBreach;
@@ -49,8 +51,13 @@ struct MetricsDto {
     ecological_impact: Option<EcologicalImpactDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<WarningDto>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    io_in_loops: Vec<IoInLoopDto>,
+    /// `None` (amends ADR-0007, T3 #33) exactly when `metric_support.
+    /// io_in_loops` is `"unsupported"` — an empty-but-measured array would
+    /// read as "measured, nothing found" when nothing was measured at all.
+    /// `Some(vec![])` still skips (an empty array is honestly omitted, same
+    /// as pre-T3), so Rust's wire shape is unchanged.
+    #[serde(skip_serializing_if = "is_empty_supported_io")]
+    io_in_loops: Option<Vec<IoInLoopDto>>,
     /// Files that could not be measured — omitted when empty, consistent
     /// with `warnings`/`io_in_loops` above; always empty for a single-file
     /// report, which has no notion of other files (D3, #50).
@@ -62,15 +69,69 @@ struct MetricsDto {
     unmeasurable_files_count: usize,
     /// Loop-nested calls whose receiver could not be classified at all
     /// (#56 T2, `IoClassification::Unknown`) — an aggregate signal only
-    /// (ADR-0010/ADR-0014 §4), never skipped: `0` is an honest, meaningful
-    /// answer. There is deliberately no per-call array here — abstention
-    /// must not become a pseudo-warning.
-    unclassifiable_io_in_loops_count: usize,
+    /// (ADR-0010/ADR-0014 §4). `None` (T3 #33) exactly when `io_in_loops`
+    /// is `None` above — same "unsupported, not a measured 0" rule. There
+    /// is deliberately no per-call array here — abstention must not become
+    /// a pseudo-warning.
+    unclassifiable_io_in_loops_count: Option<usize>,
     /// Threshold-breach outcome (US8, AD-3) — never skipped, same "0/false
     /// is honest" convention as `unclassifiable_io_in_loops_count`: an
     /// empty `breaches` array with `has_breach: false` is a meaningful
     /// answer ("evaluated, nothing exceeded"), not an omission.
     thresholds: ThresholdsDto,
+    /// Per-metric honesty signal (T3 #33, amends ADR-0007) — what the
+    /// parser that produced this file's metrics can actually claim. Never
+    /// skipped: absent capabilities (Rust, or no calling use case attached
+    /// one) reads as fully `"supported"`, the same shape every consumer
+    /// already saw pre-T3.
+    metric_support: MetricSupportDto,
+}
+
+#[derive(serde::Serialize)]
+struct MetricSupportDto {
+    cyclomatic_complexity: String,
+    call_graph: String,
+    economic_impact: String,
+    ecological_impact: String,
+    io_in_loops: String,
+}
+
+/// Skips `io_in_loops` only when it is `Some(vec![])` — an empty-but-
+/// measured array, the pre-T3 shape. `None` (Unsupported) is NEVER skipped:
+/// it must serialize as literal JSON `null`, not be silently omitted.
+fn is_empty_supported_io(io_in_loops: &Option<Vec<IoInLoopDto>>) -> bool {
+    matches!(io_in_loops, Some(v) if v.is_empty())
+}
+
+fn metric_support_label(support: &MetricSupport) -> String {
+    match support {
+        MetricSupport::Supported => "supported".to_string(),
+        MetricSupport::Degraded(reason) => format!("degraded: {}", reason),
+        MetricSupport::Unsupported => "unsupported".to_string(),
+    }
+}
+
+/// Builds the metric-support DTO from a (possibly absent) `LanguageCapabilities`
+/// — `None` (no calling use case ever attached one, e.g. the project
+/// aggregate, out of scope for T3 per Q2) reads as fully `"supported"`,
+/// identical to the pre-T3 default every consumer already saw.
+fn metric_support_dto(capabilities: Option<&LanguageCapabilities>) -> MetricSupportDto {
+    match capabilities {
+        Some(caps) => MetricSupportDto {
+            cyclomatic_complexity: metric_support_label(caps.cyclomatic_complexity()),
+            call_graph: metric_support_label(caps.call_graph()),
+            economic_impact: metric_support_label(caps.economic_impact()),
+            ecological_impact: metric_support_label(caps.ecological_impact()),
+            io_in_loops: metric_support_label(caps.io_in_loops()),
+        },
+        None => MetricSupportDto {
+            cyclomatic_complexity: "supported".to_string(),
+            call_graph: "supported".to_string(),
+            economic_impact: "supported".to_string(),
+            ecological_impact: "supported".to_string(),
+            io_in_loops: "supported".to_string(),
+        },
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -281,19 +342,38 @@ pub fn serialize_metrics(
         })
         .collect();
 
-    let io_in_loops: Vec<IoInLoopDto> = metrics
-        .io_in_loops()
-        .iter()
-        .map(|w| IoInLoopDto {
-            function: w.function.clone(),
-            io_call: w.io_call.clone(),
-            location: LocationDto {
-                file: w.location.file_path().to_string(),
-                line: w.location.line(),
-                col: w.location.col(),
-            },
-        })
-        .collect();
+    // T3 (US16, #33, amends ADR-0007): an Unsupported io_in_loops capability
+    // means nothing was measured at all — the array and its count must
+    // serialize as `null`, never an empty-but-measured `[]`/`0`.
+    let io_unsupported = metrics
+        .capabilities()
+        .map(|c| matches!(c.io_in_loops(), MetricSupport::Unsupported))
+        .unwrap_or(false);
+
+    let io_in_loops: Option<Vec<IoInLoopDto>> = if io_unsupported {
+        None
+    } else {
+        Some(
+            metrics
+                .io_in_loops()
+                .iter()
+                .map(|w| IoInLoopDto {
+                    function: w.function.clone(),
+                    io_call: w.io_call.clone(),
+                    location: LocationDto {
+                        file: w.location.file_path().to_string(),
+                        line: w.location.line(),
+                        col: w.location.col(),
+                    },
+                })
+                .collect(),
+        )
+    };
+    let unclassifiable_io_in_loops_count: Option<usize> = if io_unsupported {
+        None
+    } else {
+        Some(metrics.unclassifiable_io_in_loops_count())
+    };
 
     let economic = metrics
         .economic_impact()
@@ -336,8 +416,9 @@ pub fn serialize_metrics(
             // measure — that is a project-level concept (D3, #50).
             unmeasurable_files: vec![],
             unmeasurable_files_count: 0,
-            unclassifiable_io_in_loops_count: metrics.unclassifiable_io_in_loops_count(),
+            unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(metrics.threshold_report()),
+            metric_support: metric_support_dto(metrics.capabilities()),
         },
     };
 
@@ -390,11 +471,15 @@ pub fn serialize_project_metrics(
             economic_impact: None,
             ecological_impact: None,
             warnings: vec![],
-            io_in_loops: vec![],
+            // Project aggregate honesty (io_in_loops Unsupported for a
+            // mixed-language project) is OUT OF SCOPE for T3 (human-
+            // approved Q2, deferred to T3b) — always the pre-T3 shape.
+            io_in_loops: Some(vec![]),
             unmeasurable_files_count: unmeasurable_files.len(),
             unmeasurable_files,
-            unclassifiable_io_in_loops_count: aggregated.total_unclassifiable_io_in_loops,
+            unclassifiable_io_in_loops_count: Some(aggregated.total_unclassifiable_io_in_loops),
             thresholds: threshold_dto(graph.threshold_report()),
+            metric_support: metric_support_dto(None),
         },
     };
 
