@@ -31,16 +31,16 @@ hexagon → rien
 
 ### DDD Tactical
 
-- **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation, OutputFormat, AlertThresholds, **FileFilter**, **AnalysisConfig** (VO composite thresholds + filter — pas un Aggregate DDD, voir [[ADR-0019]])
-- **Domain Services:** ProactiveAnalyzer (statique), ReactiveAnalyzer (dynamique), EconomicImpactEstimator
+- **Value Objects:** CodeMetrics, AnalysisTarget, EconomicImpact, EcologicalImpact, CodeLocation, OutputFormat, AlertThresholds, FileFilter, AnalysisConfig (VO composite thresholds + filter — pas un Aggregate DDD, voir [[ADR-0019]]), **Language** (enum Rust/CSharp), **LanguageCapabilities** / **MetricSupport** (couture de dégradation par-métrique, tout `Supported` en T2, voir [[ADR-0020]])
+- **Domain Services:** ProactiveAnalyzer (statique), ReactiveAnalyzer (dynamique), EconomicImpactEstimator, **ParserRegistry** (dispatch `Language → CodeParser` par extension, peuplé à la racine de composition, voir [[ADR-0020]])
 - **Pas d'Entity / Aggregate** dans le MVP (pas de persistence, pas de cycle de vie)
 
 ### Ports & Adapters
 
 | Port (hexagon) | Méthodes (signatures agnostiques du langage) | Adapter P0 (secondaries) | Adapter futur |
 |---|---|---|---|
-| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str], filter: &FileFilter)` | FileSystemCodeReader (`&["rs"]` fourni par la racine ; walk `ignore` + `globset`, [[ADR-0019]]) | RoslynCodeReader (`&["cs"]`), TsCodeReader (`&["ts","tsx"]`) |
-| CodeParser | `parse(source)` · `resolve_dependencies(source, &DependencyContext) -> Vec<PathBuf>` | SynCodeParser (sémantique modules `crate::`/`super::`/`mod.rs` **privée à l'adaptateur**) | RoslynCodeParser, TsCodeParser |
+| CodeReader | `read_source(target)` · `list_source_files(dir, extensions: &[&str], filter: &FileFilter)` | FileSystemCodeReader (`&["rs","cs"]` fourni par la racine ; walk `ignore` + `globset`, [[ADR-0019]]) | TsCodeReader (`&["ts","tsx"]`) |
+| CodeParser | `parse(source)` · `resolve_dependencies(source, &DependencyContext) -> Vec<PathBuf>` · `language()` · `capabilities()` | **SynCodeParser** (Rust, sémantique modules `crate::`/`super::`/`mod.rs` **privée**) + **TreeSitterCodeParser** (C#, générique, paramétré par `LanguageProfile`, feature `lang-csharp`, [[ADR-0020]]), dispatchés par **`ParserRegistry`** (extension → parser) | + un `LanguageProfile` TS (grammaire + `.scm` + table I/O), **pas** un nouvel adaptateur ([[ADR-0020]]) |
 | ProfilerPort | — | *heuristiques* (EconomicImpactEstimator) | ClrMdProfiler, V8Profiler, JvmtiProfiler |
 | TestRunnerPort | — | CargoTestRunner | — |
 | ReportWriterPort | — | ConsoleReportWriter, JsonReportWriter, HtmlReportWriter | — |
@@ -48,7 +48,9 @@ hexagon → rien
 
 > **Frontière agnostique du langage ([[ADR-0018]]).** L'hexagone est ~100 % agnostique du langage : la sémantique par-langage — résolution de modules/namespaces, extensions de fichiers, signatures d'I/O — vit **entièrement** dans l'adaptateur pilote. `CodeParser::resolve_dependencies` rend des `PathBuf` **déjà résolus** (le protocole `"mod:"`/`"use:"` a disparu) via le VO neutre `DependencyContext`; `CodeReader::list_source_files` filtre sur un ensemble d'extensions passé par la racine de composition. Un adaptateur C#/TS s'ajoute **sans toucher `hexagon/`** — invariant zéro-dép d'[[ADR-0001]] renforcé, pas seulement préservé.
 
-> **Frontière de processus dans `SynCodeParser`.** Le parsing risqué est isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, une cible binaire Cargo dédiée de `secondaries/`) pour contenir un débordement de pile de `syn` sans tuer le scan. Voir [[ADR-0015]].
+> **Deux moteurs de parsing derrière un port ([[ADR-0020]]).** `ParserRegistry` (domain service) dispatche **par extension** : `.rs` → `SynCodeParser` (Rust), `.cs` → `TreeSitterCodeParser` (C#). Ce dernier est un **adaptateur générique** paramétré par un `LanguageProfile` (grammaire tree-sitter + requête `.scm` + table de signatures d'I/O) — ajouter un langage = ajouter un profil, pas un adaptateur (feature Cargo `lang-csharp` pour le C#). Comptage cyclomatique **épinglé sur `syn`** (`1 + Σ points de décision`), + le ternaire C# (`?:`). Fichier d'extension inconnue : sauté, non fatal.
+
+> **Deux modèles de menace de parsing, deux remèdes.** `syn` (descente récursive) peut **déborder la pile → `abort` process-level** : isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, [[ADR-0015]]). tree-sitter (table-driven, pile sur le tas) **n'abandonne pas le processus** même à 500 000 d'imbrication : la menace est une **DoS wall-clock**, fermée par des **gardes in-process** (budget partagé 5 s parse+requête+post-traitement, plafonds de captures, balayage d'appartenance O(n log n)). Voir [[ADR-0020]] § D5 et l'amendement d'[[ADR-0015]].
 
 ### Naming conventions
 
@@ -184,8 +186,9 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | US6 | P1 | Stress test instrumenté | ✅ Livré |
 | US7 | P1 | Rapport HTML | ✅ Livré |
 | US8 | P1 | Seuils d'alerte personnalisés | ✅ Livré |
-| US14 | P1 | Support multi-langage (étude + de-Rustification) | 🔄 En cours — T1 (de-Rustify hexagone) livré, T2 C# en cours |
-| US15 | P1 | Fichier de configuration `.codeimpact.json` (include/exclude, respectGitignore) | 🔄 En revue (cette PR) |
+| US14 | P1 | Support multi-langage (étude + de-Rustification) | 🔄 En cours — T1 (de-Rustify hexagone) ✅, **T2 C# ✅ (US16/#33)**, T3 (dégradation), T5 (deps C#), T6 (TS) à venir |
+| US15 | P1 | Fichier de configuration `.codeimpact.json` (include/exclude, respectGitignore) | ✅ Livré (#31) |
+| US16 | P1 | Support C#/.NET via tree-sitter (US14-T2) — `analyze <csharp-dir>` rend complexité + impact | ✅ Livré (cette PR, #33) |
 
 ## Décisions enregistrées (ADR)
 
@@ -201,3 +204,4 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | … | (0008–0017 — voir docs/INDEX.md, spine canonique) | — |
 | 0018 | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | ✅ Appliqué dans #32 |
 | 0019 | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | ✅ Appliqué dans #31 |
+| 0020 | Parsing multi-langage tree-sitter — un adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | ✅ Appliqué dans #33 |
