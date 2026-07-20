@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use super::errors::AnalysisError;
 use super::io_classification::IoClassification;
+use super::language::Language;
+use super::language_capabilities::LanguageCapabilities;
 
 /// A call — method or free-function — recorded at `loop_depth > 0`.
 ///
@@ -57,6 +59,16 @@ impl DependencyContext {
 }
 
 pub trait CodeParser: Send + Sync {
+    /// The language this adapter parses (US16 T2) — the key `ParserRegistry`
+    /// dispatches on.
+    fn language(&self) -> Language;
+
+    /// What this adapter can measure for its language (US16 T2, human-
+    /// approved Q1 seam) — a forward-compat hook: T2 constructs only
+    /// `LanguageCapabilities::all_supported`, T3 is free to report a
+    /// degraded/unsupported metric without reopening this trait.
+    fn capabilities(&self) -> LanguageCapabilities;
+
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError>;
 
     /// Resolves `source`'s declared dependencies (Rust's `mod`/`use`, or

@@ -4,7 +4,7 @@
 > **Status:** Accepted
 > **Date:** 2026-07-16
 > **Decided in:** Issue #63
-> **Links:** [[architecture-overview]], [[ADR-0006]], [[ADR-0010]]
+> **Links:** [[architecture-overview]], [[ADR-0006]], [[ADR-0010]], [[ADR-0020]]
 
 ## Contexte
 
@@ -80,6 +80,17 @@ Le mécanisme est **agnostique de la plateforme par construction** :
 Seuls **deux** points sont spécifiques à la plateforme :
 - `RLIMIT_AS` 2 GiB → `cfg(unix)` uniquement (§6).
 - Le nom de la sonde utilise `EXE_SUFFIX` (`.exe` sur Windows) dans `discover_probe_path`.
+
+## Amendement (US14-T2, #33) — le modèle de menace couvre désormais **deux** moteurs de parsing
+
+Depuis [[ADR-0020]], CodeImpact parse via **deux moteurs**, dont les modèles de menace divergent en **nature** — et donc les remèdes :
+
+| Moteur | Nature | Menace | Remède |
+|---|---|---|---|
+| `syn` (Rust) | **descente récursive** | débordement de **pile → `abort` process-level** (sûreté-mémoire) | **sonde sous-processus canari** (cet ADR) — seule une frontière de processus contient un `abort` |
+| tree-sitter (C#, et futurs langages) | **table-driven (pile sur le tas)** | **DoS wall-clock** — pas d'`abort` même à 500 000 d'imbrication (vérifié au spike) | **gardes in-process** — budget de temps partagé parse+requête+post-traitement, plafonds de captures, balayage O(n log n) |
+
+**La sonde canari de cet ADR reste spécifique à `syn`** : elle existe parce que `syn` *abandonne le processus*, ce que tree-sitter ne fait pas. Étendre la sonde à tree-sitter aurait payé le fork+exec par fichier contre une menace inexistante pour ce moteur. Le détail des gardes in-process et leur rationale (spike-vérifié) vivent dans [[ADR-0020]] § D5. **Le principe commun** aux deux moteurs reste celui d'[[ADR-0010]] : un fichier pathologique devient une ligne `NON MESURÉ`, jamais un crash du scan, jamais un `0` confiant.
 
 ## Dette connue, explicitement non traitée
 

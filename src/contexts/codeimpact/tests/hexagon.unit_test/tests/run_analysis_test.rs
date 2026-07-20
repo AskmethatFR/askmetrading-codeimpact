@@ -7,7 +7,9 @@ use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
+use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::ParsedFunction;
+use codeimpact_hexagon::analysis::ParserRegistry;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::TargetType;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
@@ -34,7 +36,11 @@ fn analyze_project_target_returns_ok() {
     let reader = CodeReaderStub::new();
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -63,7 +69,11 @@ fn analyze_valid_file_writes_metrics() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     use_case
         .handle(
@@ -83,7 +93,11 @@ fn analyze_nonexistent_file_returns_error() {
     let reader = CodeReaderStub::new();
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_target("nonexistent.rs"),
@@ -138,7 +152,11 @@ fn analyze_project_target_writes_per_file_report() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -171,7 +189,11 @@ fn parser_error_propagates_through_use_case() {
     let parser = CodeParserStub::new(Err(AnalysisError::AnalysisFailed(
         "parse error".to_string(),
     )));
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_target("bad.rs"),
@@ -203,7 +225,11 @@ fn handle_project_continues_on_read_error() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -239,7 +265,11 @@ fn handle_project_continues_on_parse_error() {
     let parser = CodeParserStub::new(Err(AnalysisError::AnalysisFailed(
         "parse error".to_string(),
     )));
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -283,7 +313,11 @@ fn handle_project_continues_on_deps_parse_error() {
     }])
     .with_resolved_dependencies(Err(AnalysisError::AnalysisFailed("deps error".to_string())));
 
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -334,7 +368,11 @@ fn handle_project_records_unreadable_file_as_unmeasurable() {
         branch_arms: 0,
         calls_in_loops: vec![],
     }]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -382,7 +420,11 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
         "@@@",
         AnalysisError::AnalysisFailed("parse error".to_string()),
     );
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -442,7 +484,11 @@ fn project_with_oversized_file_marks_it_source_too_large() {
         "OVERSIZED",
         AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
     );
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -498,7 +544,11 @@ fn project_json_marks_oversized_file_source_too_large() {
         "OVERSIZED",
         AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
     );
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let result = use_case.handle_project_json(
         &make_project_target("."),
@@ -543,7 +593,11 @@ fn handle_project_with_breached_energy_threshold_attaches_a_breaching_report() {
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(0.0), None).unwrap(),
         FileFilter::unrestricted(),
@@ -577,7 +631,11 @@ fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(1_000_000.0), None).unwrap(),
         FileFilter::unrestricted(),
@@ -624,7 +682,11 @@ fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(0.001), None).unwrap(),
         FileFilter::unrestricted(),
@@ -664,7 +726,11 @@ fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_thr
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(0.0), Some(0.0)).unwrap(),
         FileFilter::unrestricted(),
@@ -707,7 +773,11 @@ fn handle_project_return_value_carries_the_same_breach_outcome_as_the_graph() {
 
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(0.0), None).unwrap(),
         FileFilter::unrestricted(),
@@ -736,7 +806,11 @@ fn handle_single_file_with_breached_threshold_returns_a_breaching_report() {
     reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(0.0), None).unwrap(),
         FileFilter::unrestricted(),
@@ -778,7 +852,11 @@ fn handle_single_file_energy_threshold_discriminates_joules_from_kwh() {
     reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
     let thresholds = AnalysisConfig::new(
         AlertThresholds::new(Some(0.001), None).unwrap(),
         FileFilter::unrestricted(),
@@ -799,13 +877,157 @@ fn handle_single_file_energy_threshold_discriminates_joules_from_kwh() {
     );
 }
 
+// ── Test List (US16 T2, step F — ParserRegistry dispatch through RunAnalysis) ──
+//   1. A project mixing .rs and .cs files dispatches each to its OWN
+//      registered parser — both measured, neither mis-dispatched to the
+//      other's parser.
+//   2. A single-file target whose extension has no registered parser
+//      (.md) is refused non-fatally (Unmeasurable(UnsupportedLanguage)),
+//      never a panic, never silently parsed as Rust.
+//   3. A project containing one file with no registered parser tolerates
+//      it (added to unmeasurable_files, AC: one hostile/unsupported file
+//      never kills the whole scan) — exercises the defensive branch in
+//      handle_project's per-file loop directly (a stub CodeReader can
+//      return files list_source_files' real extension filter would
+//      normally have excluded already).
+
+#[test]
+fn handle_project_dispatches_each_file_to_its_own_language_parser() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source_file(PathBuf::from("a.rs"));
+    reader.add_source(PathBuf::from("a.rs"), "fn rust_fn() {}".into());
+    reader.add_source_file(PathBuf::from("b.cs"));
+    reader.add_source(
+        PathBuf::from("b.cs"),
+        "class C { void CsharpFn() {} }".into(),
+    );
+
+    let rust_parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "rust_fn".into(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        branch_arms: 0,
+        calls_in_loops: vec![],
+    }]);
+    let csharp_parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "CsharpFn".into(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        branch_arms: 0,
+        calls_in_loops: vec![],
+    }]);
+
+    let writer = SharedReportWriterStub::new();
+    let registry = ParserRegistry::new()
+        .register(Language::Rust, Box::new(rust_parser))
+        .register(Language::CSharp, Box::new(csharp_parser));
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), registry);
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    let graph = writer.last_graph.lock().unwrap().clone().unwrap();
+    assert_eq!(graph.files().len(), 2, "both languages must be measured");
+    assert!(graph.unmeasurable_files().is_empty());
+}
+
+#[test]
+fn handle_single_file_with_unsupported_extension_is_refused_non_fatally() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("notes.md"), "# not code".into());
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+
+    let result = use_case.handle(
+        &make_target("notes.md"),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    match result {
+        Err(AnalysisError::Unmeasurable(UnmeasurableReason::UnsupportedLanguage)) => {}
+        other => panic!(
+            "expected Unmeasurable(UnsupportedLanguage), got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn handle_project_with_one_unsupported_file_still_measures_the_rest() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source_file(PathBuf::from("a.rs"));
+    reader.add_source(PathBuf::from("a.rs"), "fn a() {}".into());
+    reader.add_source_file(PathBuf::from("notes.md"));
+    reader.add_source(PathBuf::from("notes.md"), "# not code".into());
+
+    let parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "a".into(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 0,
+        depth: 0,
+        branch_arms: 0,
+        calls_in_loops: vec![],
+    }]);
+
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "one unsupported file must not fail the whole scan: {:?}",
+        result
+    );
+    let graph = writer.last_graph.lock().unwrap().clone().unwrap();
+    assert_eq!(graph.files().len(), 1, "a.rs must still be measured");
+    assert_eq!(graph.unmeasurable_files().len(), 1);
+    assert_eq!(
+        graph.unmeasurable_files()[0].reason,
+        UnmeasurableReason::UnsupportedLanguage
+    );
+}
+
 #[test]
 fn handle_single_file_without_threshold_flags_shows_no_breach() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
-    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
 
     let gated = use_case
         .handle(

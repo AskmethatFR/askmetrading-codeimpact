@@ -21,6 +21,13 @@ proc-macro2 = { version = "1", features = ["span-locations"], optional = true }
 # adapter concern, hexagon stays zero-dep).
 ignore = "0.4"
 globset = "0.4"
+# US16 T2 — C-scanner grammar only (`tree-sitter-c-sharp` ships `scanner.c`,
+# confirmed wasm32-compatible by the architecture spike). The `wasm`/
+# `wasmtime-c-api` cargo features on `tree-sitter` itself are NEVER enabled
+# here — they pull in cranelift and break native builds; the browser path
+# stays open at ~zero cost by simply not touching them.
+tree-sitter = { version = "0.26", default-features = false, features = ["std"], optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
 
 # `libc` backs `parse_probe.rs`'s `RLIMIT_AS` call, which is itself
 # `#[cfg(unix)]` (#63) — an unconditional dependency would pull it in on
@@ -29,8 +36,10 @@ globset = "0.4"
 libc = "0.2"
 
 [features]
-default = ["syn-parser"]
+default = ["lang-rust", "lang-csharp"]
 syn-parser = ["syn", "proc-macro2"]
+lang-rust = ["syn-parser"]
+lang-csharp = ["dep:tree-sitter", "dep:tree-sitter-c-sharp"]
 
 [dev-dependencies]
 tempfile = "3"
