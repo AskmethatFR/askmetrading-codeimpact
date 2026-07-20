@@ -12,6 +12,7 @@ use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::LanguageCapabilities;
 use codeimpact_hexagon::analysis::LoopCall;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
 use tree_sitter::Node;
@@ -90,7 +91,17 @@ impl CodeParser for TreeSitterCodeParser {
     }
 
     fn capabilities(&self) -> LanguageCapabilities {
+        // T3 (US16, #33, Q1 human-approved): C# honestly degrades two
+        // metrics rather than claiming full support — io_in_loops is
+        // Unsupported (nothing measured until T4's real I/O detection),
+        // call_graph is Degraded (`assign_captures_to_functions` resolves
+        // calls by NAME only, so recursive/overloaded/shadowed calls can
+        // produce ambiguous or dropped edges).
         LanguageCapabilities::all_supported(self.language)
+            .with_io_in_loops(MetricSupport::Unsupported)
+            .with_call_graph(MetricSupport::Degraded(
+                "name-based resolution; ambiguous edges dropped".to_string(),
+            ))
     }
 
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
@@ -514,7 +525,6 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
 mod tests {
     use super::*;
     use codeimpact_hexagon::analysis::Language;
-    use codeimpact_hexagon::analysis::MetricSupport;
 
     // ── Test List (US16 T2, step D + E's TreeSitterCodeParser half) ──────
     //   1. language()/capabilities()/resolve_dependencies() — the port
