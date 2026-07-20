@@ -6,6 +6,7 @@ use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::Measurement;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
@@ -25,6 +26,16 @@ impl ConsoleReportWriter {
 
     /// Write console report to a custom writer (used for testing).
     pub fn write_console_to(&self, writer: &mut dyn Write, metrics: &CodeMetrics) {
+        // T3 (US16, #33): a language whose io_in_loops capability is
+        // Unsupported (C#, Q1 human-approved — nothing measured until T4)
+        // must never render a `0` that reads as "measured, nothing found".
+        // `None` (Rust, or no capabilities attached at all) keeps today's
+        // behavior exactly — zero behavior change.
+        let io_na_language = metrics.capabilities().and_then(|c| {
+            matches!(c.io_in_loops(), MetricSupport::Unsupported)
+                .then(|| c.language().display_name())
+        });
+
         writeln!(writer, "=== Rapport d'analyse ===").unwrap();
         writeln!(
             writer,
@@ -32,11 +43,16 @@ impl ConsoleReportWriter {
             metrics.cyclomatic_complexity()
         )
         .unwrap();
+        let call_graph_note = match metrics.capabilities().map(|c| c.call_graph()) {
+            Some(MetricSupport::Degraded(reason)) => format!(" [dégradé: {}]", reason),
+            _ => String::new(),
+        };
         writeln!(
             writer,
-            "Complexité transitive: {} (dont {} cachée dans les appels)",
+            "Complexité transitive: {} (dont {} cachée dans les appels){}",
             metrics.transitive_complexity(),
             metrics.hidden_complexity(),
+            call_graph_note,
         )
         .unwrap();
         writeln!(
@@ -51,13 +67,23 @@ impl ConsoleReportWriter {
         // #56 T2 — abstention (ADR-0010/ADR-0014 §4): one synthesis line,
         // always printed (a measured `0` is legitimate and honest, never
         // omitted) — never per-line detail, which would turn an
-        // abstention into a pseudo-warning.
-        writeln!(
-            writer,
-            "Appels en boucle non classifiables: {}",
-            metrics.unclassifiable_io_in_loops_count()
-        )
-        .unwrap();
+        // abstention into a pseudo-warning. T3: an Unsupported io_in_loops
+        // capability overrides this with an explicit n/a — the count
+        // itself carries no honest meaning when nothing was measured.
+        match io_na_language {
+            Some(language) => writeln!(
+                writer,
+                "Appels en boucle non classifiables: n/a — non supporté pour {}",
+                language
+            )
+            .unwrap(),
+            None => writeln!(
+                writer,
+                "Appels en boucle non classifiables: {}",
+                metrics.unclassifiable_io_in_loops_count()
+            )
+            .unwrap(),
+        }
 
         let details = metrics.function_details();
         if !details.is_empty() {
@@ -148,7 +174,15 @@ impl ConsoleReportWriter {
         }
 
         let io_in_loops = metrics.io_in_loops();
-        if !io_in_loops.is_empty() {
+        if let Some(language) = io_na_language {
+            // T3: an explicit n/a, never the silent-omit an empty Vec would
+            // otherwise produce below — silence here would read as
+            // "measured, nothing found", not "not supported".
+            writeln!(writer).unwrap();
+            writeln!(writer, "=== I/O dans boucles ===").unwrap();
+            writeln!(writer, "n/a — non supporté pour {}", language).unwrap();
+            writeln!(writer, "========================").unwrap();
+        } else if !io_in_loops.is_empty() {
             writeln!(writer).unwrap();
             writeln!(writer, "=== I/O dans boucles ===").unwrap();
             for w in io_in_loops {
