@@ -393,10 +393,11 @@ fn io_in_loops_rule_counts_unclassifiable_calls() {
 // capabilities to the metrics it builds — this is the calling use case for
 // CodeMetrics::with_capabilities (a real C# adapter, not a stub, so the
 // wiring is proven end-to-end from a parser that actually degrades a
-// metric).
+// metric). T4.2: io_in_loops flips from T3's Unsupported to Degraded — real
+// (syntactic) classification exists now, just not a full assertion.
 #[test]
 fn analyze_through_csharp_parser_attaches_its_declared_capabilities() {
-    let parser = TreeSitterCodeParser::csharp();
+    let parser = TreeSitterCodeParser::csharp(Vec::new());
     let metrics = proactive_analyzer::analyze(
         "class C { void M() { } }",
         &[AnalysisRule::CyclomaticComplexity],
@@ -407,7 +408,10 @@ fn analyze_through_csharp_parser_attaches_its_declared_capabilities() {
     let capabilities = metrics
         .capabilities()
         .expect("analyze() should attach the parser's capabilities");
-    assert_eq!(*capabilities.io_in_loops(), MetricSupport::Unsupported);
+    match capabilities.io_in_loops() {
+        MetricSupport::Degraded(_) => {}
+        other => panic!("expected io_in_loops to be Degraded, got {:?}", other),
+    }
 }
 
 #[test]

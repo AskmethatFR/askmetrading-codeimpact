@@ -258,6 +258,33 @@ fn write_console_appends_degraded_note_to_transitive_complexity_line() {
     );
 }
 
+// US16 T4.2 (#33) — coordination fix flagged by Dev-B on T3: once
+// io_in_loops can be Degraded (not just Unsupported), the console line must
+// carry the same "[dégradé: <reason>]" append the transitive-complexity
+// line already has for a Degraded call_graph.
+#[test]
+fn write_console_appends_degraded_note_to_io_in_loops_line() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp).with_io_in_loops(
+        MetricSupport::Degraded(
+            "syntactic only; instance/EF receivers abstained, not asserted".to_string(),
+        ),
+    );
+    let metrics = CodeMetrics::new(5)
+        .with_unclassifiable_io_in_loops_count(3)
+        .with_capabilities(capabilities);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains(
+            "Appels en boucle non classifiables: 3 [dégradé: syntactic only; instance/EF receivers abstained, not asserted]"
+        ),
+        "expected the degraded note appended to the unclassifiable-io line, got: {}",
+        output
+    );
+}
+
 #[test]
 fn write_console_rust_output_unchanged_when_capabilities_all_supported() {
     // Zero behavior change for Rust (all-Supported, or no capabilities

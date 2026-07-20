@@ -76,10 +76,13 @@ enum Commands {
 /// language, registered once, dispatched per file by `RunAnalysis`. Adding
 /// a language is adding one `.register(...)` line here, never touching the
 /// hexagon (ADR-0018).
-fn build_parser_registry() -> ParserRegistry {
+fn build_parser_registry(io_signature_prefixes: Vec<String>) -> ParserRegistry {
     ParserRegistry::new()
         .register(Language::Rust, Box::new(SynCodeParser::new()))
-        .register(Language::CSharp, Box::new(TreeSitterCodeParser::csharp()))
+        .register(
+            Language::CSharp,
+            Box::new(TreeSitterCodeParser::csharp(io_signature_prefixes)),
+        )
 }
 
 fn main() {
@@ -161,12 +164,13 @@ fn main() {
             let thresholds =
                 AlertThresholds::from_sources(*file_config.thresholds(), cli_thresholds);
             let analysis_config =
-                AnalysisConfig::new(thresholds, file_config.file_filter().clone());
+                AnalysisConfig::new(thresholds, file_config.file_filter().clone())
+                    .with_io_signature_prefixes(file_config.io_signature_prefixes().to_vec());
 
             let target = AnalysisTarget::new(file_path, target_type);
             let is_project = *target.target_type() == TargetType::Project;
             let reader = FileSystemCodeReader::new();
-            let registry = build_parser_registry();
+            let registry = build_parser_registry(analysis_config.io_signature_prefixes().to_vec());
             let rules = &[AnalysisRule::CyclomaticComplexity, AnalysisRule::IoInLoops];
 
             match output_format {

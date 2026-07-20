@@ -6,6 +6,10 @@ use codeimpact_hexagon::analysis::{AlertThresholds, AnalysisConfig, FileFilter};
 // 1. defaults() -> AlertThresholds::none() + FileFilter::unrestricted()
 //    (D4: reproduces today's behavior byte-for-byte)
 // 2. new() stores and exposes exactly the thresholds/filter given
+//
+// Test List (US16 T4.3 — additive io_signature_prefixes field):
+// 3. defaults() -> io_signature_prefixes() is empty
+// 4. with_io_signature_prefixes() stores and exposes exactly what was given
 
 #[test]
 fn defaults_has_no_thresholds_and_unrestricted_filter() {
@@ -13,6 +17,18 @@ fn defaults_has_no_thresholds_and_unrestricted_filter() {
 
     assert_eq!(config.thresholds(), &AlertThresholds::none());
     assert_eq!(config.file_filter(), &FileFilter::unrestricted());
+    assert!(config.io_signature_prefixes().is_empty());
+}
+
+#[test]
+fn with_io_signature_prefixes_stores_and_exposes_exactly_what_was_given() {
+    let config =
+        AnalysisConfig::defaults().with_io_signature_prefixes(vec!["MyIoWrapper.".to_string()]);
+
+    assert_eq!(
+        config.io_signature_prefixes(),
+        &["MyIoWrapper.".to_string()]
+    );
 }
 
 #[test]

@@ -73,13 +73,22 @@ pub struct TreeSitterCodeParser {
 }
 
 impl TreeSitterCodeParser {
-    pub fn csharp() -> Self {
+    /// `extra_prefixes` (US16 T4.3, ADR-0019's reserved `ioSignatures` key)
+    /// are user-configured confident I/O prefixes, additive to the base
+    /// `File.`/`Directory.` table — an empty `Vec` reproduces T4.1/T4.2's
+    /// behavior byte-for-byte.
+    pub fn csharp(extra_prefixes: Vec<String>) -> Self {
+        let mut io_table: Vec<String> = io_signatures::csharp::IO_PREFIXES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        io_table.extend(extra_prefixes);
         Self {
             language: Language::CSharp,
             profile: LanguageProfile {
                 grammar: tree_sitter_c_sharp::LANGUAGE.into(),
                 scm: include_str!("queries/csharp.scm"),
-                io_table: io_signatures::csharp::IO_PREFIXES,
+                io_table,
             },
         }
     }
@@ -524,6 +533,7 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codeimpact_hexagon::analysis::IoClassification;
     use codeimpact_hexagon::analysis::Language;
 
     // ── Test List (US16 T2, step D + E's TreeSitterCodeParser half) ──────
@@ -545,9 +555,41 @@ mod tests {
     //   8. calls tracked in source order.
     //   9. call-in-loop -> calls_in_loops, IoClassification::Unknown (T2:
     //      honest abstention, real I/O detection is T4).
+    //
+    // ── Test List (US16 T4.1 — real C# I/O classification, replaces item 9
+    //    above's hardcoded Unknown seam) ──────────────────────────────────
+    //   10. a call whose name starts with a confident (static-class) prefix
+    //       (e.g. "File.") in a loop -> classified Io.
+    //   11. that same confident-prefix call OUTSIDE any loop -> not tracked
+    //       in calls_in_loops at all (membership, not classification).
+    //   12. a call with no confident-prefix match — free-function-shaped
+    //       ("DoWork()") or method-shaped with a receiver ("list.Add(x)") —
+    //       classifies NotIo. One behavior (no match -> NotIo), two
+    //       divergent call shapes, one cycle.
+    //   13. a call whose text merely CONTAINS a confident prefix without
+    //       starting with it ("Fil.ReadAllText()", "MyFile.ReadAllText()")
+    //       must NOT match (mutation-bite: `starts_with`, never `contains`).
+    //
+    // ── Test List (US16 T4.2 — EF/instance receiver-name abstention) ─────
+    //   14. an EF-shaped call ("_context.Users.Where(...)") in a loop ->
+    //       classified Unknown, never Io (no type proof) and never NotIo
+    //       (human-approved Q1: EF receiver-name I/O is a counted
+    //       abstention, not a warned assertion — ADR-0016 §3 split).
+    //   15. capabilities() reports io_in_loops as Degraded (not Unsupported
+    //       — T4 measures SOMETHING now, syntactically) with a reason
+    //       naming the instance/EF abstention; the other metrics are
+    //       unchanged from T3.
+    //
+    // ── Test List (US16 T4.3 — user-configured confident prefixes) ───────
+    //   16. csharp(extra_prefixes) with a user prefix ("MyIoWrapper.") ->
+    //       a call starting with it, in a loop, classifies Io (additive to
+    //       the base File./Directory. table).
+    //   17. csharp(Vec::new()) — an absent/empty config — is byte-identical
+    //       to T4.1/T4.2 (already proven by every test above still using
+    //       `parser()`, which now passes Vec::new()).
 
     fn parser() -> TreeSitterCodeParser {
-        TreeSitterCodeParser::csharp()
+        TreeSitterCodeParser::csharp(Vec::new())
     }
 
     #[test]
@@ -568,7 +610,19 @@ mod tests {
         );
         assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
         assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);
-        assert_eq!(*capabilities.io_in_loops(), MetricSupport::Unsupported);
+        // T4.2 (US16, #33): io_in_loops flips from T3's Unsupported to
+        // Degraded — real (syntactic) classification now happens, but
+        // instance/EF receivers still abstain rather than assert.
+        match capabilities.io_in_loops() {
+            MetricSupport::Degraded(reason) => {
+                assert!(
+                    reason.contains("instance/EF receivers abstained"),
+                    "expected the instance/EF abstention reason, got: {}",
+                    reason
+                );
+            }
+            other => panic!("expected io_in_loops to be Degraded, got {:?}", other),
+        }
         match capabilities.call_graph() {
             MetricSupport::Degraded(reason) => {
                 assert!(
@@ -743,13 +797,81 @@ mod tests {
         );
     }
 
+    // T4.1: supersedes T2's `call_in_loop_is_recorded_with_unknown_io_
+    // classification` — the hardcoded `IoClassification::Unknown` seam is
+    // gone, replaced by `classify_csharp_call`. A call with no confident-
+    // prefix match and (T4.1-only, no suspicion heuristic yet) no receiver
+    // marker classifies NotIo. Two divergent call shapes, same behavior.
     #[test]
-    fn call_in_loop_is_recorded_with_unknown_io_classification() {
-        let source = "class C { void M() { for (int i = 0; i < 10; i++) { DoWork(); } } }";
+    fn call_with_no_confident_prefix_match_classifies_not_io() {
+        for call in ["DoWork();", "list.Add(x);"] {
+            let source = format!(
+                "class C {{ void M() {{ for (int i = 0; i < 10; i++) {{ {} }} }} }}",
+                call
+            );
+            let functions = parser().parse(&source).unwrap();
+            assert_eq!(functions[0].calls_in_loops.len(), 1, "case: {}", call);
+            assert_eq!(
+                functions[0].calls_in_loops[0].io,
+                IoClassification::NotIo,
+                "case: {}",
+                call
+            );
+        }
+    }
+
+    #[test]
+    fn confident_static_prefix_call_in_loop_classifies_io() {
+        let source =
+            "class C { void M() { for (int i = 0; i < 10; i++) { File.ReadAllText(p); } } }";
         let functions = parser().parse(source).unwrap();
         assert_eq!(functions[0].calls_in_loops.len(), 1);
-        assert_eq!(functions[0].calls_in_loops[0].name, "DoWork");
+        assert_eq!(functions[0].calls_in_loops[0].name, "File.ReadAllText");
+        assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Io);
+    }
+
+    #[test]
+    fn confident_static_prefix_call_outside_any_loop_is_not_tracked_in_calls_in_loops() {
+        let source = "class C { void M() { File.ReadAllText(p); } }";
+        let functions = parser().parse(source).unwrap();
+        assert_eq!(functions[0].calls, vec!["File.ReadAllText".to_string()]);
+        assert!(functions[0].calls_in_loops.is_empty());
+    }
+
+    #[test]
+    fn user_configured_prefix_call_in_loop_classifies_io() {
+        let source =
+            "class C { void M() { for (int i = 0; i < 10; i++) { MyIoWrapper.DoSomething(); } } }";
+        let functions = TreeSitterCodeParser::csharp(vec!["MyIoWrapper.".to_string()])
+            .parse(source)
+            .unwrap();
+        assert_eq!(functions[0].calls_in_loops.len(), 1);
+        assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Io);
+    }
+
+    #[test]
+    fn ef_receiver_marker_call_in_loop_classifies_unknown() {
+        let source = "class C { void M() { foreach (var x in xs) { _context.Users.Where(u => u.Id == x); } } }";
+        let functions = parser().parse(source).unwrap();
+        assert_eq!(functions[0].calls_in_loops.len(), 1);
         assert_eq!(functions[0].calls_in_loops[0].io, IoClassification::Unknown);
+    }
+
+    #[test]
+    fn call_merely_containing_a_confident_prefix_does_not_match() {
+        for call in ["Fil.ReadAllText(p);", "MyFile.ReadAllText(p);"] {
+            let source = format!(
+                "class C {{ void M() {{ for (int i = 0; i < 10; i++) {{ {} }} }} }}",
+                call
+            );
+            let functions = parser().parse(&source).unwrap();
+            assert_eq!(
+                functions[0].calls_in_loops[0].io,
+                IoClassification::NotIo,
+                "case: {}",
+                call
+            );
+        }
     }
 
     #[test]
