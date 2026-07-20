@@ -28,8 +28,10 @@ pub struct LanguageCapabilities {
     ecological_impact: MetricSupport,
     /// Whether the call graph (transitive/hidden complexity, call depth,
     /// cycles) is built from real resolution or a weaker heuristic — T3's
-    /// C# adapter reports `Degraded` here (name-based resolution, ambiguous
-    /// edges dropped), never a fabricated `Supported`.
+    /// C# adapter reports `Degraded` here (name-based resolution;
+    /// unresolved-receiver calls may merge — T5 corrected this message to
+    /// describe what happens TODAY, the precise dropping of ambiguous
+    /// edges is deferred to T5.3), never a fabricated `Supported`.
     call_graph: MetricSupport,
     /// Whether the cross-file dependency graph (`resolve_dependencies`) is
     /// built from exact resolution or a coarser heuristic (US16 T5) — T5's

@@ -24,4 +24,20 @@ pub trait CodeReader: Send + Sync {
         extensions: &[&str],
         filter: &FileFilter,
     ) -> Result<Vec<PathBuf>, AnalysisError>;
+
+    /// Resolves `dir` to the SAME canonical representation
+    /// `list_source_files` returns its paths in (US16 T5, Security
+    /// CRITICAL retry #1) — a caller that derives a path from `dir` (e.g.
+    /// a configured `sourceRoots` entry joined onto the project root) and
+    /// needs to compare it against `list_source_files`'s own results must
+    /// canonicalize `dir` the SAME way first, or the comparison silently
+    /// never matches (a raw CLI `--path` vs. `FileSystemCodeReader`'s
+    /// canonicalized output). Default: identity — correct for a reader
+    /// with no real filesystem of its own (`CodeReaderStub`: every
+    /// fixture path already agrees on representation by construction, so
+    /// canonicalizing would be a no-op at best, or corrupt the fixture at
+    /// worst).
+    fn canonical_root(&self, dir: &Path) -> PathBuf {
+        dir.to_path_buf()
+    }
 }

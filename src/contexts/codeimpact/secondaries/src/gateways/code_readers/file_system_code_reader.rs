@@ -156,4 +156,12 @@ impl CodeReader for FileSystemCodeReader {
 
         Ok(files)
     }
+
+    /// Real canonicalization (US16 T5, Security CRITICAL retry #1) —
+    /// falls back to `dir` unchanged when it does not exist on disk,
+    /// mirroring `html/view_model.rs`'s `build_tree` fallback (the same
+    /// representation-mismatch class of bug, fixed the same way there).
+    fn canonical_root(&self, dir: &Path) -> PathBuf {
+        std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+    }
 }

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::errors::AnalysisError;
 use super::io_classification::IoClassification;
@@ -48,7 +49,13 @@ pub struct DependencyContext {
     /// file, not just `current_file`'s own text). `SynCodeParser` ignores
     /// this field entirely (Rust's `mod`/`use` resolve from `current_file`
     /// and `available_files` alone) — additive, non-breaking (ADR-0018).
-    pub file_sources: Vec<(PathBuf, String)>,
+    ///
+    /// `Arc`-wrapped (Security HIGH, retry #1): the composition root
+    /// builds ONE `DependencyContext` per file in the project, and the
+    /// SAME full project text is attached to every one of them — a plain
+    /// `Vec` would deep-clone the entire project's source on every
+    /// iteration (O(files × total source bytes)); `Arc::clone` is O(1).
+    pub file_sources: Arc<Vec<(PathBuf, String)>>,
     /// The configured source roots (US16 T5, absolute, `.codeimpact.json`'s
     /// `sourceRoots` resolved against `project_root` by the composition
     /// root) a language adapter may use to scope which of `file_sources`
@@ -68,15 +75,18 @@ impl DependencyContext {
             current_file,
             project_root,
             available_files,
-            file_sources: Vec::new(),
+            file_sources: Arc::new(Vec::new()),
             source_roots: Vec::new(),
         }
     }
 
     /// Builder-style attachment (mirrors `LanguageCapabilities::with_*`) —
     /// every project file's own source text, for an adapter whose
-    /// resolution needs more than `current_file` alone (US16 T5).
-    pub fn with_file_sources(mut self, file_sources: Vec<(PathBuf, String)>) -> Self {
+    /// resolution needs more than `current_file` alone (US16 T5). Takes an
+    /// `Arc` the caller already built ONCE — see `file_sources`'s own doc
+    /// for why a plain owned `Vec` here would be an O(files × total
+    /// bytes) foot-gun.
+    pub fn with_file_sources(mut self, file_sources: Arc<Vec<(PathBuf, String)>>) -> Self {
         self.file_sources = file_sources;
         self
     }

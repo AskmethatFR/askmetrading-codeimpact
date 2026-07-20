@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::alert_thresholds::AlertThresholds;
 use super::analysis_config::AnalysisConfig;
@@ -86,7 +87,8 @@ impl RunAnalysis {
             self.code_reader
                 .list_source_files(target.path(), &extensions, config.file_filter())?;
         let project_root = target.path().clone();
-        let source_roots = resolve_source_roots(&project_root, config.source_roots());
+        let canonical_project_root = self.code_reader.canonical_root(&project_root);
+        let source_roots = resolve_source_roots(&canonical_project_root, config.source_roots());
 
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
@@ -97,14 +99,17 @@ impl RunAnalysis {
         // needs every OTHER file's text before it can resolve even the
         // FIRST file's `using`s, not just the current one's, so every
         // source must be in hand before the per-file resolution pass
-        // below runs.
-        let file_sources = self.read_all_sources(&files, &mut unmeasurable);
+        // below runs. `Arc`-wrapped ONCE here (Security HIGH, retry #1) —
+        // every file's `DependencyContext` below attaches the SAME
+        // `Arc::clone` (O(1)), never a fresh deep copy of the whole
+        // project's text.
+        let file_sources = Arc::new(self.read_all_sources(&files, &mut unmeasurable)?);
 
         // Pass 2: analyze metrics and resolve dependencies per file,
         // sharing the SAME `file_sources`/`source_roots` context (adapter
         // owns the language's module/namespace semantics — US14 L1/L2,
         // US16 T5).
-        for (file, source) in &file_sources {
+        for (file, source) in file_sources.iter() {
             let parser = match self.registry.dispatch(file) {
                 Some(parser) => parser,
                 None => {
@@ -143,7 +148,7 @@ impl RunAnalysis {
             }
 
             let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.clone())
-                .with_file_sources(file_sources.clone())
+                .with_file_sources(Arc::clone(&file_sources))
                 .with_source_roots(source_roots.clone());
             match parser.resolve_dependencies(source, &ctx) {
                 Ok(resolved) => {
@@ -177,16 +182,27 @@ impl RunAnalysis {
     /// read (US16 T5) — pulled out because both project-level handlers
     /// (`handle_project`, `build_project_graph`) need the SAME full
     /// `file_sources` list before their own per-file pass runs.
+    ///
+    /// `Err` (Security HIGH, retry #1) when the RUNNING total of every
+    /// source read so far crosses `source_guard::MAX_PROJECT_SOURCE_BYTES`
+    /// — checked after EVERY file, so the scan stops as soon as the
+    /// ceiling is crossed rather than finishing an unbounded read first
+    /// (ADR-0010: an honest hard error, never a silent partial scan).
     fn read_all_sources(
         &self,
         files: &[PathBuf],
         unmeasurable: &mut Vec<UnmeasurableFile>,
-    ) -> Vec<(PathBuf, String)> {
+    ) -> Result<Vec<(PathBuf, String)>, AnalysisError> {
         let mut file_sources = Vec::with_capacity(files.len());
+        let mut total_bytes: usize = 0;
         for file in files {
             let file_target = AnalysisTarget::new(file.clone(), TargetType::File);
             match self.code_reader.read_source(&file_target) {
-                Ok(source) => file_sources.push((file.clone(), source)),
+                Ok(source) => {
+                    total_bytes = total_bytes.saturating_add(source.len());
+                    super::source_guard::check_project_admissible(total_bytes)?;
+                    file_sources.push((file.clone(), source));
+                }
                 Err(e) => {
                     eprintln!(
                         "Avertissement: impossible de lire {}: {}",
@@ -200,7 +216,7 @@ impl RunAnalysis {
                 }
             }
         }
-        file_sources
+        Ok(file_sources)
     }
 
     /// Evaluates the project's aggregate energy (kWh)/CO2 impact against
@@ -355,15 +371,16 @@ impl RunAnalysis {
             .code_reader
             .list_source_files(target.path(), &extensions, filter)?;
         let project_root = target.path().clone();
-        let source_roots = resolve_source_roots(&project_root, raw_source_roots);
+        let canonical_project_root = self.code_reader.canonical_root(&project_root);
+        let source_roots = resolve_source_roots(&canonical_project_root, raw_source_roots);
 
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
         let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
 
-        let file_sources = self.read_all_sources(&files, &mut unmeasurable);
+        let file_sources = Arc::new(self.read_all_sources(&files, &mut unmeasurable)?);
 
-        for (file, source) in &file_sources {
+        for (file, source) in file_sources.iter() {
             let parser = match self.registry.dispatch(file) {
                 Some(parser) => parser,
                 None => {
@@ -393,7 +410,7 @@ impl RunAnalysis {
             }
 
             let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.clone())
-                .with_file_sources(file_sources.clone())
+                .with_file_sources(Arc::clone(&file_sources))
                 .with_source_roots(source_roots.clone());
             if let Ok(resolved) = parser.resolve_dependencies(source, &ctx) {
                 for to in resolved {
@@ -416,21 +433,35 @@ impl RunAnalysis {
 }
 
 /// Resolves `.codeimpact.json`'s raw `sourceRoots` (relative strings)
-/// against `project_root` into absolute `PathBuf`s (US16 T5, Q2) — an
-/// empty/absent config list resolves to an EMPTY `Vec`, not to
+/// against `canonical_project_root` into absolute `PathBuf`s (US16 T5,
+/// Q2) — an empty/absent config list resolves to an EMPTY `Vec`, not to
 /// `vec![project_root]`: an adapter that cares about source roots treats
 /// empty as "unrestricted" (see `TreeSitterCodeParser::under_any_root`),
 /// which is exactly the "absent -> behaves like before T5" contract this
-/// function exists to keep. Materializing `project_root` itself here would
-/// risk comparing a raw CLI `--path` (frequently relative, e.g. `.`)
-/// against `available_files`' CANONICALIZED absolute paths — the same
-/// representation mismatch already documented in
-/// `html_report_writer_test.rs`'s `tree_ids_are_relative_when_target_
-/// resolves_to_the_files_common_root` — an empty list sidesteps that
-/// mismatch entirely instead of reproducing it.
-fn resolve_source_roots(project_root: &Path, raw_source_roots: &[String]) -> Vec<PathBuf> {
+/// function exists to keep.
+///
+/// A NON-empty list, on the other hand, is compared by the adapter
+/// against `available_files`/`file_sources` — `CodeReader::
+/// list_source_files`'s CANONICALIZED absolute paths for a real
+/// filesystem-backed reader — via `Path::starts_with`. The caller MUST
+/// pass an already-canonicalized root (`CodeReader::canonical_root`,
+/// Security CRITICAL retry #1): joining a configured root onto the RAW
+/// CLI `--path` (`main.rs` never canonicalizes it) would almost always
+/// fail to match a real file's canonical path, silently emptying the
+/// namespace index for the ONE configuration this slice exists to
+/// support. This function itself stays pure — no I/O, no port — the
+/// canonicalization is the caller's job, through the port (ADR
+/// ca-ports-adapters: the hexagon's use case never calls `std::fs`
+/// directly, only through `CodeReader`).
+fn resolve_source_roots(
+    canonical_project_root: &Path,
+    raw_source_roots: &[String],
+) -> Vec<PathBuf> {
+    if raw_source_roots.is_empty() {
+        return Vec::new();
+    }
     raw_source_roots
         .iter()
-        .map(|root| project_root.join(root))
+        .map(|root| canonical_project_root.join(root))
         .collect()
 }

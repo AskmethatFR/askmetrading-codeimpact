@@ -54,8 +54,12 @@ pub struct AnalysisConfig {
     /// `.codeimpact.json`'s `sourceRoots` (US16 T5, Q2), raw and relative
     /// to the project root — resolution to absolute `PathBuf`s is
     /// `run_analysis`'s job (the adapter never sees the raw string form).
-    /// Empty means "absent from config" — `run_analysis` falls back to
-    /// `[project_root]`, never to "nothing is in scope."
+    /// Empty means "absent from config" — `run_analysis::
+    /// resolve_source_roots` resolves this to an EMPTY `Vec<PathBuf>` on
+    /// the `DependencyContext` (an adapter that cares about source roots
+    /// treats empty as "unrestricted"), never to a materialized
+    /// `[project_root]` that could mismatch a canonicalized file path
+    /// (Security CRITICAL, retry #1).
     source_roots: Vec<String>,
 }
 

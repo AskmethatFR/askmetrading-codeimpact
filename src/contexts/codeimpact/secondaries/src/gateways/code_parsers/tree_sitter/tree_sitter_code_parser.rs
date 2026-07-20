@@ -63,24 +63,35 @@ const MAX_NESTING_DEPTH: u32 = 2_000;
 /// outright, independent of timing.
 const MAX_QUADRATIC_CAPTURES_PER_FUNCTION: usize = 2_000;
 
-/// `namespace -> declaring-files` (US16 T5) — named so
-/// `namespace_index_cache`'s type stays readable (clippy::type_complexity).
+/// `namespace -> declaring-files` (US16 T5) — named so `DepsIndex`'s field
+/// stays readable.
 type NamespaceIndex = HashMap<String, Vec<PathBuf>>;
+
+/// The project-global pre-pass's full output (US16 T5, Security MEDIUM
+/// retry #1): the `namespace -> declaring-files` index AND every file's
+/// own `using` targets, captured in the SAME pass over `file_sources` —
+/// `resolve_dependencies` looks its own file up in `file_usings` instead
+/// of re-parsing `source` a second time (once here, once in the pre-pass,
+/// for the SAME file, on every single call).
+struct DepsIndex {
+    namespace_declarers: NamespaceIndex,
+    file_usings: HashMap<PathBuf, Vec<String>>,
+}
 
 /// Parses C# via `tree-sitter` (US16 T2). `parse` runs a `.scm` query over
 /// the file and assigns each capture to its innermost enclosing function by
 /// byte range (`assign_captures_to_functions`). `resolve_dependencies`
 /// (US16 T5) resolves C#'s `using` directives through a project-global
-/// `namespace -> declaring-files` index, built once per run from
-/// `DependencyContext::file_sources` and memoized in
-/// `namespace_index_cache` (keyed on a file-set fingerprint) — every file
-/// in a project scan shares the SAME `file_sources`/`source_roots`, so the
-/// expensive tree-sitter pass over every OTHER project file runs once, not
-/// once per file.
+/// `DepsIndex`, built once per run from `DependencyContext::file_sources`
+/// and memoized in `deps_index_cache` (keyed on a file-set fingerprint) —
+/// every file in a project scan shares the SAME `file_sources`/
+/// `source_roots`, so the expensive tree-sitter pass over every project
+/// file (including `current_file` itself) runs exactly once per run, not
+/// once per file NOR twice for the same file (Security MEDIUM, retry #1).
 pub struct TreeSitterCodeParser {
     language: Language,
     profile: LanguageProfile,
-    namespace_index_cache: Mutex<Option<(u64, Arc<NamespaceIndex>)>>,
+    deps_index_cache: Mutex<Option<(u64, Arc<DepsIndex>)>>,
 }
 
 impl TreeSitterCodeParser {
@@ -102,30 +113,29 @@ impl TreeSitterCodeParser {
                 deps_scm: include_str!("queries/csharp_deps.scm"),
                 io_table,
             },
-            namespace_index_cache: Mutex::new(None),
+            deps_index_cache: Mutex::new(None),
         }
     }
 
-    /// The memoized `namespace -> declaring-files` index for `ctx`'s
-    /// project — rebuilt only when `ctx.file_sources` changes shape
-    /// (US16 T5). `Arc` keeps a cache hit's clone O(1) rather than O(index
-    /// size).
-    fn namespace_index(&self, ctx: &DependencyContext) -> Arc<NamespaceIndex> {
+    /// The memoized `DepsIndex` for `ctx`'s project — rebuilt only when
+    /// `ctx.file_sources` changes shape (US16 T5). `Arc` keeps a cache
+    /// hit's clone O(1) rather than O(index size).
+    fn deps_index(&self, ctx: &DependencyContext) -> Arc<DepsIndex> {
         let fingerprint = file_set_fingerprint(&ctx.file_sources);
         {
-            let cache = self.namespace_index_cache.lock().unwrap();
+            let cache = self.deps_index_cache.lock().unwrap();
             if let Some((cached_fingerprint, index)) = cache.as_ref() {
                 if *cached_fingerprint == fingerprint {
                     return Arc::clone(index);
                 }
             }
         }
-        let index = Arc::new(build_namespace_index(
+        let index = Arc::new(build_deps_index(
             &self.profile,
             &ctx.file_sources,
             &ctx.source_roots,
         ));
-        *self.namespace_index_cache.lock().unwrap() = Some((fingerprint, Arc::clone(&index)));
+        *self.deps_index_cache.lock().unwrap() = Some((fingerprint, Arc::clone(&index)));
         index
     }
 }
@@ -173,10 +183,20 @@ impl CodeParser for TreeSitterCodeParser {
     /// this adapter (ADR-0018). A `using` resolves to every project file
     /// that DECLARES the used namespace (namespace-granularity resolution,
     /// honestly reported as `Degraded` in `capabilities`) via the memoized
-    /// `namespace_index`; `current_file` is excluded from its own result
+    /// `deps_index`; `current_file` is excluded from its own result
     /// (never a self-edge) and the result is deduped. A `using` with no
     /// project declarer (e.g. `using System;`) contributes no edge — same
     /// "absent, never an error" contract as `SynCodeParser`.
+    ///
+    /// `current_file`'s OWN `using`s are looked up in `deps_index`'s
+    /// `file_usings` (Security MEDIUM, retry #1) — the pre-pass already
+    /// parsed `source` once while building the index (`current_file` is
+    /// itself one of `ctx.file_sources`), so a second `extract_deps_safe`
+    /// call on the SAME text is redundant. Falls back to extracting
+    /// `source` directly only when `current_file` is absent from
+    /// `file_usings` (not part of `ctx.file_sources` at all — e.g. a
+    /// hand-built `DependencyContext` in a test, or a real caller that
+    /// never populated it).
     fn resolve_dependencies(
         &self,
         source: &str,
@@ -184,14 +204,21 @@ impl CodeParser for TreeSitterCodeParser {
     ) -> Result<Vec<PathBuf>, AnalysisError> {
         source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
 
-        let extraction = extract_deps_safe(&self.profile, source).ok_or(
-            AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooComplex),
-        )?;
-        let index = self.namespace_index(ctx);
+        let index = self.deps_index(ctx);
+        let usings = match index.file_usings.get(&ctx.current_file) {
+            Some(usings) => usings.clone(),
+            None => {
+                extract_deps_safe(&self.profile, source)
+                    .ok_or(AnalysisError::Unmeasurable(
+                        UnmeasurableReason::SourceTooComplex,
+                    ))?
+                    .usings
+            }
+        };
 
         let mut resolved: Vec<PathBuf> = Vec::new();
-        for used_namespace in &extraction.usings {
-            let Some(declarers) = index.get(used_namespace) else {
+        for used_namespace in &usings {
+            let Some(declarers) = index.namespace_declarers.get(used_namespace) else {
                 continue;
             };
             for declarer in declarers {
@@ -223,29 +250,51 @@ fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
     roots.is_empty() || roots.iter().any(|root| path.starts_with(root))
 }
 
-/// Builds the `namespace -> declaring-files` index from every project
-/// file's source, scoped to `under_any_root` (US16 T5). Each file is
-/// guarded independently (`extract_deps_safe`) — a single hostile/
-/// oversized/pathological file is simply excluded from the index, never
-/// fatal to the whole project scan.
-fn build_namespace_index(
+/// Builds the full `DepsIndex` from every project file's source in ONE
+/// pass (US16 T5, Security MEDIUM retry #1 — this is also the ONLY place
+/// a given file's text is ever parsed for dependency purposes, see
+/// `resolve_dependencies`'s cache lookup). Each file is guarded
+/// independently (`extract_deps_safe`) — a single hostile/oversized/
+/// pathological file is simply excluded from the index, never fatal to
+/// the whole project scan.
+///
+/// `file_usings` is populated for EVERY successfully-extracted file,
+/// unconditionally — `current_file` must be able to resolve its OWN
+/// `using`s regardless of whether current_file itself sits inside or
+/// outside `source_roots` (identical to `resolve_dependencies`'s
+/// pre-Security-MEDIUM-fix behavior, which always parsed `source`
+/// directly with no `source_roots` gate at all). `namespace_declarers`,
+/// by contrast, is scoped to `under_any_root` — `source_roots` bounds
+/// which files may act as a namespace's DECLARER, not which files may
+/// REQUEST resolution.
+fn build_deps_index(
     profile: &LanguageProfile,
     file_sources: &[(PathBuf, String)],
     source_roots: &[PathBuf],
-) -> NamespaceIndex {
-    let mut index: NamespaceIndex = HashMap::new();
+) -> DepsIndex {
+    let mut namespace_declarers: NamespaceIndex = HashMap::new();
+    let mut file_usings: HashMap<PathBuf, Vec<String>> = HashMap::new();
+
     for (path, source) in file_sources {
-        if !under_any_root(path, source_roots) {
-            continue;
-        }
         let Some(extraction) = extract_deps_safe(profile, source) else {
             continue;
         };
-        for namespace in extraction.namespaces {
-            index.entry(namespace).or_default().push(path.clone());
+        file_usings.insert(path.clone(), extraction.usings);
+
+        if under_any_root(path, source_roots) {
+            for namespace in extraction.namespaces {
+                namespace_declarers
+                    .entry(namespace)
+                    .or_default()
+                    .push(path.clone());
+            }
         }
     }
-    index
+
+    DepsIndex {
+        namespace_declarers,
+        file_usings,
+    }
 }
 
 /// A cheap fingerprint of a file SET (US16 T5) — paths and source
@@ -960,12 +1009,12 @@ mod tests {
             PathBuf::from("."),
             available_files,
         )
-        .with_file_sources(
+        .with_file_sources(Arc::new(
             file_sources
                 .iter()
                 .map(|(p, s)| (PathBuf::from(*p), s.to_string()))
                 .collect(),
-        )
+        ))
         .with_source_roots(source_roots.iter().map(PathBuf::from).collect())
     }
 

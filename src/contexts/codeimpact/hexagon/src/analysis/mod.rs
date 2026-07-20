@@ -66,5 +66,8 @@ pub use reactive_analyzer::ReactiveAnalyzer;
 pub use report_writer::ReportWriter;
 pub use run_analysis::RunAnalysis;
 pub use run_stress_test::RunStressTest;
-pub use source_guard::{check_admissible, MAX_MEASURABLE_SOURCE_BYTES};
+pub use source_guard::{
+    check_admissible, check_project_admissible, MAX_MEASURABLE_SOURCE_BYTES,
+    MAX_PROJECT_SOURCE_BYTES,
+};
 pub use stress_test_run::{Measurement, StressTestRun, TestRunnerPort, UnmeasurableReason};
