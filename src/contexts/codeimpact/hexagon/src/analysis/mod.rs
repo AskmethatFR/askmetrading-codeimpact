@@ -1,4 +1,5 @@
 pub mod alert_thresholds;
+mod analysis_config;
 mod analysis_rule;
 mod analysis_target;
 pub mod call_graph;
@@ -12,6 +13,7 @@ pub mod ecological_impact;
 pub mod economic_impact;
 mod errors;
 pub mod file_consumption_graph;
+mod file_filter;
 pub mod gated_output;
 pub mod io_classification;
 pub mod io_in_loop_warning;
@@ -29,6 +31,7 @@ pub mod stress_test_run;
 pub use alert_thresholds::{
     AlertThresholds, BreachedMetric, ThresholdBreach, ThresholdError, ThresholdReport,
 };
+pub use analysis_config::AnalysisConfig;
 pub use analysis_rule::AnalysisRule;
 pub use analysis_target::{AnalysisTarget, TargetType};
 pub use call_graph::CallGraph;
@@ -46,6 +49,7 @@ pub use errors::AnalysisError;
 pub use file_consumption_graph::{
     FileConsumptionGraph, FileDependency, ProjectMetrics, UnmeasurableFile,
 };
+pub use file_filter::{FileFilter, FileFilterError};
 pub use gated_output::GatedOutput;
 pub use io_classification::IoClassification;
 pub use io_in_loop_warning::IoInLoopWarning;

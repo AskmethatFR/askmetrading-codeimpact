@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -1511,5 +1512,351 @@ fn e2e_analyze_path_strict_without_breach_exits_0() {
         "no breach: --strict must still exit 0 (AC6). stdout: {}, stderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+// ── US31 (#31) — include/exclude/respectGitignore in `.codeimpact.json` ──
+//
+// The console writer prints "Fichiers analysés: N" (aggregated.total_files)
+// — the cheapest, most direct user-observable signal of the analyzed-file
+// COUNT, which is exactly what each slice's acceptance criterion pins.
+
+fn isolated_us31_dir(test_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_us31_{}_{}",
+        test_name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated us31 dir");
+    dir
+}
+
+fn files_analyzed_count(binary: &Path, dir: &Path) -> (std::process::Output, String) {
+    let output = Command::new(binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    (output, stdout)
+}
+
+// Slice 1 (AC per tech spec) — a `.codeimpact.json` `exclude` glob prunes
+// files from the walk: the analyzed-file COUNT drops.
+//
+// Test List:
+// 1. exclude glob prunes a matching file -> count drops from 2 to 1
+// 2. non-regression: the SAME directory layout with NO config file at all
+//    analyzes every file exactly as before (D4)
+
+#[test]
+fn e2e_analyze_exclude_glob_in_config_drops_the_excluded_file_from_the_count() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("exclude_count_drop");
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("generated").join("drop.rs"), "fn drop_fn() {}").unwrap();
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"exclude":["generated/**"]}"#,
+    )
+    .unwrap();
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 1"),
+        "the excluded file must drop the count to 1, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_same_layout_without_any_config_file_analyzes_every_file_unchanged() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("exclude_count_drop_non_regression");
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("generated").join("drop.rs"), "fn drop_fn() {}").unwrap();
+    // No .codeimpact.json at all — D4: must reproduce today's behavior
+    // byte-for-byte (every file walked, nothing pruned).
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 2"),
+        "with no config file, every file must still be analyzed (D4 non-regression), got: {}",
+        stdout
+    );
+}
+
+// Slice 2 — `include` restricts the walk; a file matched by BOTH include
+// and exclude is excluded (exclude wins).
+
+#[test]
+fn e2e_analyze_include_glob_restricts_the_count() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("include_restricts");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.rs"), "fn keep() {}").unwrap();
+    std::fs::write(dir.join("other.rs"), "fn other() {}").unwrap();
+    std::fs::write(dir.join(".codeimpact.json"), r#"{"include":["src/**"]}"#).unwrap();
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 1"),
+        "only src/keep.rs is within include, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_file_matched_by_both_include_and_exclude_is_excluded() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("both_match_excluded");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("both.rs"), "fn both() {}").unwrap();
+    std::fs::write(dir.join("src").join("keep.rs"), "fn keep() {}").unwrap();
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"include":["src/**"],"exclude":["src/both.rs"]}"#,
+    )
+    .unwrap();
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 1"),
+        "both.rs matches both include and exclude (exclude wins), only keep.rs remains, got: {}",
+        stdout
+    );
+}
+
+// Slice 3 — `respectGitignore` (default true when the config file is
+// present) drops `.gitignore`d files; `false` reintegrates them; an absent
+// config file is unaffected by any `.gitignore` present in the tree (D4).
+
+#[test]
+fn e2e_analyze_respect_gitignore_default_true_drops_gitignored_file() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("gitignore_default_true");
+    std::fs::write(dir.join(".gitignore"), "ignored.rs\n").unwrap();
+    std::fs::write(dir.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("ignored.rs"), "fn ignored() {}").unwrap();
+    std::fs::write(dir.join(".codeimpact.json"), r#"{}"#).unwrap();
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 1"),
+        "a present config file defaults respectGitignore to true, dropping ignored.rs, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_respect_gitignore_false_reintegrates_the_file() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("gitignore_explicit_false");
+    std::fs::write(dir.join(".gitignore"), "ignored.rs\n").unwrap();
+    std::fs::write(dir.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("ignored.rs"), "fn ignored() {}").unwrap();
+    std::fs::write(
+        dir.join(".codeimpact.json"),
+        r#"{"respectGitignore":false}"#,
+    )
+    .unwrap();
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 2"),
+        "respectGitignore=false must reintegrate ignored.rs, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn e2e_analyze_gitignore_present_but_no_config_file_leaves_gitignored_file_included() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("gitignore_no_config");
+    std::fs::write(dir.join(".gitignore"), "ignored.rs\n").unwrap();
+    std::fs::write(dir.join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("ignored.rs"), "fn ignored() {}").unwrap();
+    // No .codeimpact.json at all (D4): unrestricted, .gitignore not honored.
+
+    let (output, stdout) = files_analyzed_count(&binary, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("Fichiers analysés: 2"),
+        "with no config file at all, .gitignore must not be honored (D4), got: {}",
+        stdout
+    );
+}
+
+// Slice 4 — hostile config: an explicit, actionable error naming the
+// offending JSON line/key/glob/pattern, exit 1, NEVER a crash/panic.
+
+#[test]
+fn e2e_analyze_malformed_config_json_names_the_line_and_exits_1() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("hostile_malformed_json");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    std::fs::write(dir.join(".codeimpact.json"), "not json at all @@@").unwrap();
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "malformed config JSON must exit 1 cleanly (never a crash/signal). stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur") && stderr.contains("line"),
+        "stderr must name the offending line, got: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains(dir.to_str().unwrap()),
+        "error message must not leak the absolute path (ADR-0006): {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_unknown_config_key_names_the_key_and_exits_1() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("hostile_unknown_key");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    // "includ" is a typo of "include" — deny_unknown_fields must reject it.
+    std::fs::write(dir.join(".codeimpact.json"), r#"{"includ":["src/**"]}"#).unwrap();
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unknown/typo'd config key must exit 1 cleanly. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("includ"),
+        "stderr must name the offending key, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_invalid_glob_in_config_errors_without_panicking() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("hostile_invalid_glob");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    std::fs::write(dir.join(".codeimpact.json"), r#"{"exclude":["src/["]}"#).unwrap();
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an invalid glob pattern must exit 1 cleanly (never a crash/signal). stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_path_traversal_include_pattern_is_rejected() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("hostile_traversal");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    std::fs::write(dir.join(".codeimpact.json"), r#"{"include":["../etc/**"]}"#).unwrap();
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a path-traversal include pattern must exit 1 cleanly. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("erreur"),
+        "stderr should contain a clear error message: {}",
+        stderr
     );
 }

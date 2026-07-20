@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codeimpact_hexagon::analysis::AlertThresholds;
+use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ParsedFunction;
@@ -48,7 +48,7 @@ fn handle_json_returns_string_for_valid_file() {
     let result = use_case.handle_json(
         &make_target("test.rs"),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     assert!(result.is_ok(), "handle_json should succeed");
@@ -68,7 +68,7 @@ fn handle_json_nonexistent_file_returns_error() {
     let result = use_case.handle_json(
         &make_target("nonexistent.rs"),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     match result {
@@ -100,7 +100,7 @@ fn handle_project_json_returns_string() {
     let result = use_case.handle_project_json(
         &make_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     assert!(result.is_ok(), "handle_project_json should succeed");
@@ -122,7 +122,7 @@ fn handle_project_json_empty_project_returns_error() {
     let result = use_case.handle_project_json(
         &make_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     match result {
@@ -163,7 +163,7 @@ fn handle_project_json_records_unreadable_file_as_unmeasurable_and_excludes_it_f
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 
@@ -216,7 +216,7 @@ fn handle_project_json_records_unparseable_file_as_unmeasurable_and_excludes_it_
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 

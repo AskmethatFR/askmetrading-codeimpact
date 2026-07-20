@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AlertThresholds;
+use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
+use codeimpact_hexagon::analysis::FileFilter;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::RunAnalysis;
 use codeimpact_hexagon::analysis::TargetType;
@@ -37,7 +39,7 @@ fn analyze_project_target_returns_ok() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "project target should return Ok(())");
 }
@@ -67,7 +69,7 @@ fn analyze_valid_file_writes_metrics() {
         .handle(
             &make_target("test.rs"),
             &[AnalysisRule::CyclomaticComplexity],
-            &AlertThresholds::none(),
+            &AnalysisConfig::defaults(),
         )
         .expect("analysis should succeed");
 
@@ -86,7 +88,7 @@ fn analyze_nonexistent_file_returns_error() {
     let result = use_case.handle(
         &make_target("nonexistent.rs"),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     match result {
         Err(AnalysisError::IoError(_)) => {}
@@ -100,7 +102,7 @@ fn list_source_files_returns_configured_files_from_stub() {
     reader.add_source_file(PathBuf::from("src/main.rs"));
     reader.add_source_file(PathBuf::from("src/lib.rs"));
     let files = reader
-        .list_source_files(&PathBuf::from("."), &["rs"])
+        .list_source_files(&PathBuf::from("."), &["rs"], &FileFilter::unrestricted())
         .expect("should list files");
     assert_eq!(files.len(), 2);
     assert!(files.contains(&PathBuf::from("src/main.rs")));
@@ -111,7 +113,7 @@ fn list_source_files_returns_configured_files_from_stub() {
 fn list_source_files_returns_empty_when_none_configured() {
     let reader = CodeReaderStub::new();
     let files = reader
-        .list_source_files(&PathBuf::from("."), &["rs"])
+        .list_source_files(&PathBuf::from("."), &["rs"], &FileFilter::unrestricted())
         .expect("should list files");
     assert!(files.is_empty());
 }
@@ -141,7 +143,7 @@ fn analyze_project_target_writes_per_file_report() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(
         result.is_ok(),
@@ -174,7 +176,7 @@ fn parser_error_propagates_through_use_case() {
     let result = use_case.handle(
         &make_target("bad.rs"),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     match result {
         Err(AnalysisError::AnalysisFailed(_)) => {}
@@ -206,7 +208,7 @@ fn handle_project_continues_on_read_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(
         result.is_ok(),
@@ -242,7 +244,7 @@ fn handle_project_continues_on_parse_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(
         result.is_ok(),
@@ -286,7 +288,7 @@ fn handle_project_continues_on_deps_parse_error() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(
         result.is_ok(),
@@ -337,7 +339,7 @@ fn handle_project_records_unreadable_file_as_unmeasurable() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok());
 
@@ -385,7 +387,7 @@ fn handle_project_records_unparseable_file_as_unmeasurable() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok());
 
@@ -445,7 +447,7 @@ fn project_with_oversized_file_marks_it_source_too_large() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok());
 
@@ -501,7 +503,7 @@ fn project_json_marks_oversized_file_source_too_large() {
     let result = use_case.handle_project_json(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "got {:?}", result);
 
@@ -542,7 +544,10 @@ fn handle_project_with_breached_energy_threshold_attaches_a_breaching_report() {
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(0.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -573,7 +578,10 @@ fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(1_000_000.0), None).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(1_000_000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -617,7 +625,10 @@ fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(0.001), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -654,7 +665,10 @@ fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_thr
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(0.0), Some(0.0)).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(0.0), Some(0.0)).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let result = use_case.handle(
         &make_project_target("."),
@@ -694,7 +708,10 @@ fn handle_project_return_value_carries_the_same_breach_outcome_as_the_graph() {
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(0.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let gated = use_case
         .handle(
@@ -720,7 +737,10 @@ fn handle_single_file_with_breached_threshold_returns_a_breaching_report() {
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(0.0), None).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(0.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let gated = use_case
         .handle(
@@ -759,7 +779,10 @@ fn handle_single_file_energy_threshold_discriminates_joules_from_kwh() {
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), Box::new(parser));
-    let thresholds = AlertThresholds::new(Some(0.001), None).unwrap();
+    let thresholds = AnalysisConfig::new(
+        AlertThresholds::new(Some(0.001), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
 
     let gated = use_case
         .handle(
@@ -788,7 +811,7 @@ fn handle_single_file_without_threshold_flags_shows_no_breach() {
         .handle(
             &make_target("test.rs"),
             &[AnalysisRule::CyclomaticComplexity],
-            &AlertThresholds::none(),
+            &AnalysisConfig::defaults(),
         )
         .expect("analysis should succeed");
 

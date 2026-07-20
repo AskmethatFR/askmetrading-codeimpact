@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AlertThresholds;
+use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ConfigReaderPort;
@@ -136,15 +137,18 @@ fn main() {
             };
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let config_reader = FileSystemConfigReader::new();
-            let file_thresholds =
-                match config_reader.read_thresholds(config.as_deref(), &[&target_dir, &cwd]) {
-                    Ok(found) => found.unwrap_or_else(AlertThresholds::none),
+            let file_config =
+                match config_reader.read_config(config.as_deref(), &[&target_dir, &cwd]) {
+                    Ok(found) => found.unwrap_or_else(AnalysisConfig::defaults),
                     Err(e) => {
                         eprintln!("erreur: {}", e);
                         std::process::exit(1);
                     }
                 };
-            let thresholds = AlertThresholds::from_sources(file_thresholds, cli_thresholds);
+            let thresholds =
+                AlertThresholds::from_sources(*file_config.thresholds(), cli_thresholds);
+            let analysis_config =
+                AnalysisConfig::new(thresholds, file_config.file_filter().clone());
 
             let target = AnalysisTarget::new(file_path, target_type);
             let is_project = *target.target_type() == TargetType::Project;
@@ -163,7 +167,7 @@ fn main() {
                     let writer = ConsoleReportWriter::new();
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-                    match use_case.handle(&target, rules, &thresholds) {
+                    match use_case.handle(&target, rules, &analysis_config) {
                         Ok(gated) => {
                             std::process::exit(gated_exit_code(*strict, gated.thresholds()))
                         }
@@ -178,9 +182,9 @@ fn main() {
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
                     let result = if is_project {
-                        use_case.handle_project_json(&target, rules, &thresholds)
+                        use_case.handle_project_json(&target, rules, &analysis_config)
                     } else {
-                        use_case.handle_json(&target, rules, &thresholds)
+                        use_case.handle_json(&target, rules, &analysis_config)
                     };
                     match result {
                         Ok(gated) => {
@@ -219,7 +223,7 @@ fn main() {
                     let writer = HtmlReportWriter::new();
                     let use_case =
                         RunAnalysis::new(Box::new(reader), Box::new(writer), Box::new(parser));
-                    match use_case.handle_project_html(&target, rules, &thresholds) {
+                    match use_case.handle_project_html(&target, rules, &analysis_config) {
                         Ok(gated) => {
                             let exit_code = gated_exit_code(*strict, gated.thresholds());
                             let html = gated.into_payload();
@@ -265,15 +269,15 @@ fn main() {
                 }
             };
             let config_reader = FileSystemConfigReader::new();
-            let file_thresholds =
-                match config_reader.read_thresholds(config.as_deref(), &[&project_dir]) {
-                    Ok(found) => found.unwrap_or_else(AlertThresholds::none),
-                    Err(e) => {
-                        eprintln!("erreur: {}", e);
-                        std::process::exit(1);
-                    }
-                };
-            let thresholds = AlertThresholds::from_sources(file_thresholds, cli_thresholds);
+            let file_config = match config_reader.read_config(config.as_deref(), &[&project_dir]) {
+                Ok(found) => found.unwrap_or_else(AnalysisConfig::defaults),
+                Err(e) => {
+                    eprintln!("erreur: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let thresholds =
+                AlertThresholds::from_sources(*file_config.thresholds(), cli_thresholds);
 
             let runner = CargoTestRunner::new(project_dir);
             let writer = ConsoleReportWriter::new();
