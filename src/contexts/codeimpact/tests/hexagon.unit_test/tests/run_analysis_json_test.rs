@@ -316,3 +316,51 @@ fn handle_project_json_records_unparseable_file_as_unmeasurable_and_excludes_it_
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
     assert_eq!(pm.unmeasurable_files, 1);
 }
+
+// Security HIGH (Dev-B/Security, retry #1) — `read_all_sources` used to
+// accumulate every project file's FULL source text into one `Vec` with
+// only a per-file cap (`source_guard::MAX_MEASURABLE_SOURCE_BYTES`, 1 MB)
+// and no ceiling on the SUM — hundreds of near-cap files could still OOM
+// the scan (Security reproduced a multi-GB aggregate on a 4000-file C#
+// project). `check_project_admissible` must stop the scan with a
+// diagnostic, not silently truncate the file list or let the process
+// exhaust memory.
+//
+// Test List:
+// 1. two 60 MB fake sources (120 MB total, over the 100 MB
+//    MAX_PROJECT_SOURCE_BYTES ceiling) -> handle_project_json returns
+//    Err(AnalysisFailed(_)) naming the aggregate limit, not Ok/panic
+
+#[test]
+fn handle_project_json_aborts_when_aggregate_source_exceeds_the_project_ceiling() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("a.rs"), "a".repeat(60 * 1024 * 1024));
+    reader.add_source_file(PathBuf::from("a.rs"));
+    reader.add_source(PathBuf::from("b.rs"), "a".repeat(60 * 1024 * 1024));
+    reader.add_source_file(PathBuf::from("b.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+
+    let result = use_case.handle_project_json(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    match result {
+        Err(codeimpact_hexagon::analysis::AnalysisError::AnalysisFailed(msg)) => {
+            assert!(
+                msg.contains("Mo"),
+                "expected a diagnostic naming the aggregate ceiling, got: {}",
+                msg
+            );
+        }
+        other => panic!("expected Err(AnalysisFailed(_)), got {:?}", other),
+    }
+}

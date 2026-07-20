@@ -1,5 +1,7 @@
+use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::{
-    check_admissible, UnmeasurableReason, MAX_MEASURABLE_SOURCE_BYTES,
+    check_admissible, check_project_admissible, UnmeasurableReason, MAX_MEASURABLE_SOURCE_BYTES,
+    MAX_PROJECT_SOURCE_BYTES,
 };
 
 // ── Test List ──────────────────────────────────────────────────────────
@@ -9,6 +11,12 @@ use codeimpact_hexagon::analysis::{
 //      Err(SourceTooLarge)
 //   3. realistic_multi_function_source_is_admissible — normal file → Ok
 //      (false-positive guard)
+//
+// check_project_admissible (US16 T5, Security HIGH retry #1 — an
+// aggregate ceiling on `read_all_sources`'s accumulated project text,
+// distinct from the per-FILE `check_admissible` above):
+//   4. total_at_project_size_bound_is_admissible — boundary
+//   5. total_one_byte_over_project_size_bound_is_refused — MAX+1 → Err
 
 #[test]
 fn source_at_size_bound_is_admissible() {
@@ -48,4 +56,17 @@ impl Calculator {
 }
 "#;
     assert_eq!(check_admissible(source), Ok(()));
+}
+
+#[test]
+fn total_at_project_size_bound_is_admissible() {
+    assert!(check_project_admissible(MAX_PROJECT_SOURCE_BYTES).is_ok());
+}
+
+#[test]
+fn total_one_byte_over_project_size_bound_is_refused() {
+    match check_project_admissible(MAX_PROJECT_SOURCE_BYTES + 1) {
+        Err(AnalysisError::AnalysisFailed(_)) => {}
+        other => panic!("expected Err(AnalysisFailed(_)), got {:?}", other),
+    }
 }
