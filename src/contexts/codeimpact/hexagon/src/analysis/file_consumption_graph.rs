@@ -633,4 +633,67 @@ mod tests {
         let pm = graph.aggregated_metrics();
         assert_eq!(pm.total_unclassifiable_io_in_loops, 3);
     }
+
+    // ── Security HIGH (US16 T5 retry #2) — compute_depth was an
+    // unmemoized recursive walk: on a DAG with overlapping/diamond paths
+    // it recomputes the SAME subtree's depth once per incoming path,
+    // exponential in the worst case (the textbook "count paths without
+    // memoization" blowup — Security's isolated proof: 162ms at 30 nodes,
+    // ~1.6x/golden-ratio growth per node, extrapolating to tens of
+    // minutes by n~45-50). T5's namespace-granularity resolution ("a
+    // `using` links to EVERY file declaring the used namespace")
+    // routinely produces exactly this dense many-to-many shape for an
+    // ORDINARY C# project — no adversary needed. `detect_cycles` in this
+    // SAME file already tracks visited state (`color`); `compute_depth`
+    // must too.
+    //
+    // Test List:
+    // 1. a Fibonacci-shaped DAG (node i -> {i-1, i-2}) mirrors naive
+    //    recursive Fibonacci's own exponential blowup at N=40 nodes —
+    //    completes in well under a second ONLY when memoized (unmemoized:
+    //    ~fib(40) ≈ 102M recursive calls, tens of seconds+). Also pins the
+    //    exact depth VALUE (this fix must be behavior-preserving, never
+    //    change what depth is reported, only its cost).
+    #[test]
+    fn diamond_dag_depth_computation_is_memoized_not_exponential() {
+        const N: usize = 40;
+        let mut files = Vec::new();
+        for i in 0..N {
+            files.push((path(&format!("f{}.rs", i)), make_metrics(1, 1)));
+        }
+        let mut deps = Vec::new();
+        for i in 2..N {
+            deps.push(FileDependency {
+                from: path(&format!("f{}.rs", i)),
+                to: path(&format!("f{}.rs", i - 1)),
+            });
+            deps.push(FileDependency {
+                from: path(&format!("f{}.rs", i)),
+                to: path(&format!("f{}.rs", i - 2)),
+            });
+        }
+
+        let start = std::time::Instant::now();
+        let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+        let elapsed = start.elapsed();
+
+        // Behavior-preserving: depth(i) = i for i >= 2, since
+        // depth(i) = 1 + max(depth(i-1), depth(i-2)) = 1 + depth(i-1)
+        // (depth is non-decreasing in i) — the deepest chain is the
+        // last node's, length N-1.
+        assert_eq!(
+            graph.max_depth(),
+            N - 1,
+            "memoization must not change the computed depth VALUE"
+        );
+        assert!(
+            elapsed.as_secs() < 5,
+            "compute_depth must be memoized (O(V+E)) — took {:?} for a \
+             {}-node Fibonacci-shaped DAG; unmemoized this mirrors naive \
+             recursive fib({}) ≈ 100M+ calls (tens of seconds or more)",
+            elapsed,
+            N,
+            N
+        );
+    }
 }

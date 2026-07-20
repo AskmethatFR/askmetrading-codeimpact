@@ -373,3 +373,45 @@ fn invalid_glob_syntax_in_filter_errors_instead_of_panicking() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// QA MEDIUM (US16 T5 retry #2) — `canonical_root` (introduced retry #1
+// to fix the sourceRoots canonicalization mismatch, Security CRITICAL)
+// had zero direct test coverage of its own: the Ok path was only
+// exercised INDIRECTLY through other tests that happen to pass an
+// existing dir, and the Err/fallback path was never exercised at all.
+//
+// Test List:
+// 1. an existing directory -> canonical_root returns the SAME value as
+//    std::fs::canonicalize (the Ok path)
+// 2. a path that does not exist on disk -> canonical_root falls back to
+//    the input UNCHANGED (identity) rather than propagating the error or
+//    panicking — a mutation from `.unwrap_or_else(...)` to `.unwrap()`
+//    must fail this test with a panic, not silently pass
+
+#[test]
+fn canonical_root_of_an_existing_dir_matches_std_fs_canonicalize() {
+    let dir = isolated_walk_dir("canonical_root_existing");
+
+    let reader = FileSystemCodeReader::new();
+    let result = reader.canonical_root(&dir);
+
+    assert_eq!(
+        result,
+        std::fs::canonicalize(&dir).expect("the temp dir must exist on disk")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn canonical_root_of_a_nonexistent_path_falls_back_to_identity() {
+    let missing = PathBuf::from("/this/path/definitely/does/not/exist/__codeimpact_t5__");
+
+    let reader = FileSystemCodeReader::new();
+    let result = reader.canonical_root(&missing);
+
+    assert_eq!(
+        result, missing,
+        "canonicalize must fail for a nonexistent path — the fallback must \
+         return the input unchanged, not panic or propagate the error"
+    );
+}
