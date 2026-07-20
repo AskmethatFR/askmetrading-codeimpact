@@ -8,7 +8,6 @@ use codeimpact_hexagon::analysis::source_guard;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeParser;
 use codeimpact_hexagon::analysis::DependencyContext;
-use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::LanguageCapabilities;
 use codeimpact_hexagon::analysis::LoopCall;
@@ -25,6 +24,7 @@ use tree_sitter::QueryCursorOptions;
 use tree_sitter::StreamingIterator;
 
 use super::io_signatures;
+use super::io_signatures::classifier::classify_csharp_call;
 use super::language_profile::LanguageProfile;
 
 /// Wall-clock budget for BOTH the parse and the query stage (US16 T2, Q2
@@ -100,14 +100,18 @@ impl CodeParser for TreeSitterCodeParser {
     }
 
     fn capabilities(&self) -> LanguageCapabilities {
-        // T3 (US16, #33, Q1 human-approved): C# honestly degrades two
-        // metrics rather than claiming full support — io_in_loops is
-        // Unsupported (nothing measured until T4's real I/O detection),
-        // call_graph is Degraded (`assign_captures_to_functions` resolves
+        // T4.2 (US16, #33, Q1 human-approved): io_in_loops flips from T3's
+        // Unsupported to Degraded — `classify_csharp_call` now measures
+        // real (syntactic) I/O for static-qualified calls, but instance/EF
+        // receivers still abstain (Unknown) rather than assert, so the
+        // metric is honestly partial, never fully Supported. call_graph
+        // stays Degraded from T3 (`assign_captures_to_functions` resolves
         // calls by NAME only, so recursive/overloaded/shadowed calls can
         // produce ambiguous or dropped edges).
         LanguageCapabilities::all_supported(self.language)
-            .with_io_in_loops(MetricSupport::Unsupported)
+            .with_io_in_loops(MetricSupport::Degraded(
+                "syntactic only; instance/EF receivers abstained, not asserted".to_string(),
+            ))
             .with_call_graph(MetricSupport::Degraded(
                 "name-based resolution; ambiguous edges dropped".to_string(),
             ))
@@ -147,9 +151,10 @@ fn parse_source(
     let grammar = profile.grammar.clone();
     let query_source = profile.scm;
     let owned_source = source.to_string();
+    let io_table = profile.io_table.clone();
 
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
-        run_pipeline(&grammar, query_source, &owned_source)
+        run_pipeline(&grammar, query_source, &owned_source, &io_table)
     }));
 
     match outcome {
@@ -167,6 +172,7 @@ fn run_pipeline(
     grammar: &tree_sitter::Language,
     query_source: &str,
     source: &str,
+    confident_io_prefixes: &[String],
 ) -> Option<Vec<ParsedFunction>> {
     let deadline = Instant::now() + PARSE_QUERY_BUDGET;
     let cancelled = Cell::new(false);
@@ -218,7 +224,7 @@ fn run_pipeline(
         return None;
     }
 
-    assign_captures_to_functions(bytes, captures, deadline)
+    assign_captures_to_functions(bytes, captures, deadline, confident_io_prefixes)
 }
 
 /// The generic range-containment post-processor (US16 T2): assigns every
@@ -247,6 +253,7 @@ fn assign_captures_to_functions(
     source: &[u8],
     captures: Vec<(&str, Node)>,
     deadline: Instant,
+    confident_io_prefixes: &[String],
 ) -> Option<Vec<ParsedFunction>> {
     let mut function_nodes: Vec<Node> = captures
         .iter()
@@ -344,10 +351,9 @@ fn assign_captures_to_functions(
                     name: name.clone(),
                     line: point.row + 1,
                     col: point.column,
-                    // T2 scope note (io_signatures/csharp.rs doc comment):
-                    // real I/O classification for C# is T4 — an honest
-                    // abstention here, never a fabricated NotIo (ADR-0010).
-                    io: IoClassification::Unknown,
+                    // US16 T4.1: real classification, replacing T2's
+                    // hardcoded IoClassification::Unknown seam.
+                    io: classify_csharp_call(&name, confident_io_prefixes),
                 });
             }
             results[i].calls.push(name);

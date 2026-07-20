@@ -55,8 +55,14 @@ struct CodeImpactConfig {
     _extensions: Option<serde_json::Value>,
     #[serde(default, rename = "parser")]
     _parser: Option<serde_json::Value>,
+    /// C# confident I/O prefixes (US16 T4.3) — additive to
+    /// `TreeSitterCodeParser`'s base `File.`/`Directory.` table. Typed as
+    /// `Vec<String>` (not `serde_json::Value` like the other reserved
+    /// keys above): a non-string element is a shape error, not a silently
+    /// tolerated forward-compat key, so serde's own type mismatch is the
+    /// error surfaced below — no extra validation code needed.
     #[serde(default, rename = "ioSignatures")]
-    _io_signatures: Option<serde_json::Value>,
+    io_signatures: Vec<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -130,7 +136,10 @@ impl FileSystemConfigReader {
         let filter = FileFilter::new(config.include, config.exclude, config.respect_gitignore)
             .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
 
-        Ok(AnalysisConfig::new(thresholds, filter))
+        Ok(
+            AnalysisConfig::new(thresholds, filter)
+                .with_io_signature_prefixes(config.io_signatures),
+        )
     }
 }
 

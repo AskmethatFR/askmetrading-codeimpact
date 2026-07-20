@@ -45,8 +45,8 @@ impl AnalysisConfig {
 
     /// Builder-style override (mirrors `with_call_graph`/
     /// `with_economic_impact` elsewhere in this codebase) — additive, T4.3.
-    pub fn with_io_signature_prefixes(self, _prefixes: Vec<String>) -> Self {
-        // T4.3 scaffold: wired in the next step.
+    pub fn with_io_signature_prefixes(mut self, prefixes: Vec<String>) -> Self {
+        self.io_signature_prefixes = prefixes;
         self
     }
 
