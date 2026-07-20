@@ -93,9 +93,15 @@ impl FileConsumptionGraph {
         let max_depth = if file_list.is_empty() {
             0
         } else {
+            // Memoized across every top-level call (Security HIGH, US16
+            // T5 retry #2) — one shared cache for the whole `file_list`
+            // loop, mirroring the DFS-with-state discipline `detect_cycles`
+            // already uses in this same file. See `compute_depth`'s own
+            // doc for why this is load-bearing, not just an optimization.
             let mut max = 0usize;
+            let mut depth_memo: HashMap<PathBuf, usize> = HashMap::new();
             for path in &file_list {
-                let depth = Self::compute_depth(path, &adjacency, &cycle_nodes);
+                let depth = Self::compute_depth(path, &adjacency, &cycle_nodes, &mut depth_memo);
                 max = max.max(depth);
             }
             max
@@ -364,13 +370,33 @@ impl FileConsumptionGraph {
     }
 
     /// Compute the depth of the longest chain starting from this node.
+    ///
+    /// Memoized in `memo` (Security HIGH, US16 T5 retry #2) — `compute_depth`
+    /// is a pure function of `node` alone given fixed `adjacency`/
+    /// `cycle_nodes`, so caching its result per node changes NOTHING about
+    /// the computed VALUE, only the cost. Without this, a DAG where two
+    /// paths reconverge on a shared descendant (a diamond) recomputes that
+    /// descendant's whole subtree once per incoming path — exponential in
+    /// the worst case, the textbook "count paths without memoization"
+    /// blowup. Dormant under Rust's low-fan-out `mod`/`use` edges, but
+    /// reachable by an ORDINARY C# project once namespace-granularity
+    /// resolution (US16 T5: a `using` links to every declarer of a used
+    /// namespace) produces dense many-to-many edges — no adversary needed.
+    /// `detect_cycles` above already tracks visited state this same way
+    /// (`color`); this closes the one traversal in this file that didn't.
     fn compute_depth(
         node: &Path,
         adjacency: &HashMap<PathBuf, Vec<PathBuf>>,
         cycle_nodes: &HashSet<PathBuf>,
+        memo: &mut HashMap<PathBuf, usize>,
     ) -> usize {
+        if let Some(&cached) = memo.get(node) {
+            return cached;
+        }
+
         // If in cycle, depth stops at this node
         if cycle_nodes.contains(node) {
+            memo.insert(node.to_path_buf(), 1);
             return 1;
         }
 
@@ -379,13 +405,15 @@ impl FileConsumptionGraph {
             .map(|callees| {
                 callees
                     .iter()
-                    .map(|c| Self::compute_depth(c.as_path(), adjacency, cycle_nodes))
+                    .map(|c| Self::compute_depth(c.as_path(), adjacency, cycle_nodes, memo))
                     .max()
                     .unwrap_or(0)
             })
             .unwrap_or(0);
 
-        1 + max_child
+        let depth = 1 + max_child;
+        memo.insert(node.to_path_buf(), depth);
+        depth
     }
 }
 

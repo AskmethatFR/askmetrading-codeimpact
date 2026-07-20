@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -216,13 +217,18 @@ impl CodeParser for TreeSitterCodeParser {
             }
         };
 
+        // `seen` dedupes in O(1) per candidate (MINOR, US16 T5 retry #2)
+        // — a linear `resolved.contains(..)` scan was O(len(resolved)) per
+        // candidate; `resolved` itself stays a plain `Vec` for its
+        // caller-visible insertion order.
         let mut resolved: Vec<PathBuf> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
         for used_namespace in &usings {
             let Some(declarers) = index.namespace_declarers.get(used_namespace) else {
                 continue;
             };
             for declarer in declarers {
-                if declarer != &ctx.current_file && !resolved.contains(declarer) {
+                if declarer != &ctx.current_file && seen.insert(declarer.clone()) {
                     resolved.push(declarer.clone());
                 }
             }
