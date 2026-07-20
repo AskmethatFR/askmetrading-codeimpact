@@ -9,6 +9,9 @@ use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::Language;
+use codeimpact_hexagon::analysis::LanguageCapabilities;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::UnmeasurableFile;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
@@ -316,6 +319,122 @@ fn file_json_reports_zero_unclassifiable_io_in_loops_by_default() {
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
 
     assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 0);
+}
+
+// T3 (US16, #33, amends ADR-0007): a language whose io_in_loops capability
+// is Unsupported (C#, Q1 human-approved) must serialize `io_in_loops` and
+// `unclassifiable_io_in_loops_count` as JSON `null`, never `[]`/`0` — those
+// values would read as "measured, nothing found" when nothing was measured
+// at all. `metric_support` carries the per-metric honesty signal.
+#[test]
+fn file_json_serializes_unsupported_io_capability_as_null_never_zero_or_empty_array() {
+    let writer = JsonReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_io_in_loops(MetricSupport::Unsupported);
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+
+    let json_str = writer.write_json(&metrics, "test.cs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert!(
+        json["metrics"]["io_in_loops"].is_null(),
+        "expected io_in_loops to be JSON null, got: {}",
+        json_str
+    );
+    assert!(
+        json["metrics"]["unclassifiable_io_in_loops_count"].is_null(),
+        "expected unclassifiable_io_in_loops_count to be JSON null, got: {}",
+        json_str
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["io_in_loops"],
+        "unsupported"
+    );
+
+    // DISCRIMINATING: a naive implementation that keeps serializing the
+    // (empty/zero) default values would pass the `is_null()` assertions
+    // above only if it happened to render null anyway — these substring
+    // checks pin the literal wire format the AC forbids.
+    assert!(
+        !json_str.contains("\"io_in_loops\": []"),
+        "unsupported io must never render as an empty-but-measured array, got: {}",
+        json_str
+    );
+    assert!(
+        !json_str.contains("\"unclassifiable_io_in_loops_count\": 0"),
+        "unsupported io must never render as a measured zero count, got: {}",
+        json_str
+    );
+}
+
+#[test]
+fn file_json_supported_capabilities_report_metric_support_object() {
+    let writer = JsonReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp).with_call_graph(
+        MetricSupport::Degraded("name-based resolution; ambiguous edges dropped".to_string()),
+    );
+    let metrics = make_metrics_with_impacts().with_capabilities(capabilities);
+
+    let json_str = writer.write_json(&metrics, "test.cs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(
+        json["metrics"]["metric_support"]["cyclomatic_complexity"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["economic_impact"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["ecological_impact"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["io_in_loops"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["call_graph"],
+        "degraded: name-based resolution; ambiguous edges dropped"
+    );
+    // io_in_loops is Supported here and make_metrics_with_impacts() attaches
+    // one real IoInLoopWarning, so the array must still render as real
+    // (measured) data, not null.
+    assert!(json["metrics"]["io_in_loops"].is_array());
+    assert_eq!(json["metrics"]["io_in_loops"][0]["function"], "read_file");
+    assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 0);
+}
+
+#[test]
+fn file_json_no_capabilities_reports_metric_support_all_supported() {
+    // Zero behavior change for Rust (no capabilities attached at all, the
+    // pre-T3 default): metric_support reads as fully Supported and
+    // io_in_loops/unclassifiable_io_in_loops_count behave exactly as
+    // before (existing golden tests already pin their shape/values).
+    let writer = JsonReportWriter::new();
+    let metrics = make_metrics_with_impacts();
+
+    let json_str = writer.write_json(&metrics, "test.rs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(
+        json["metrics"]["metric_support"]["cyclomatic_complexity"],
+        "supported"
+    );
+    assert_eq!(json["metrics"]["metric_support"]["call_graph"], "supported");
+    assert_eq!(
+        json["metrics"]["metric_support"]["economic_impact"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["ecological_impact"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["io_in_loops"],
+        "supported"
+    );
 }
 
 #[test]
