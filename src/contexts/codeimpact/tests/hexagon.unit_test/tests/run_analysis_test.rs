@@ -934,7 +934,7 @@ fn handle_project_dispatches_each_file_to_its_own_language_parser() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
@@ -958,7 +958,7 @@ fn handle_single_file_with_unsupported_extension_is_refused_non_fatally() {
     let result = use_case.handle(
         &make_target("notes.md"),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     match result {
@@ -1000,7 +1000,7 @@ fn handle_project_with_one_unsupported_file_still_measures_the_rest() {
     let result = use_case.handle(
         &make_project_target("."),
         &[AnalysisRule::CyclomaticComplexity],
-        &AlertThresholds::none(),
+        &AnalysisConfig::defaults(),
     );
 
     assert!(
