@@ -7,6 +7,9 @@ use codeimpact_hexagon::analysis::EcologicalImpact;
 use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::Language;
+use codeimpact_hexagon::analysis::LanguageCapabilities;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ThresholdBreach;
 use codeimpact_hexagon::analysis::ThresholdReport;
 use codeimpact_hexagon::analysis::WarningPattern;
@@ -86,6 +89,12 @@ pub struct NodeVm {
     pub functions: Vec<FunctionVm>,
     pub warnings: Vec<WarningVm>,
     pub ios: Vec<IoVm>,
+    /// Honest n/a note for the io-in-loops detail list (T3, #33, amends
+    /// ADR-0008) — empty when io_in_loops is Supported/Degraded/unknown
+    /// (folders/project never carry one, Q2: aggregate honesty is out of
+    /// scope), set to "n/a — not supported for <language>" when Unsupported
+    /// so the detail pane never silently renders an empty io section.
+    pub io_note: String,
     pub economic: Option<EconomicVm>,
     pub ecological: Option<EcologicalVm>,
 }
@@ -95,6 +104,12 @@ pub struct MetricVm {
     pub label: String,
     pub value: String,
     pub pct: u8,
+    /// Per-metric honesty signal (T3, #33, amends ADR-0008): "supported"
+    /// (default — untouched by capability narrowing, or no capabilities
+    /// attached at all), "degraded", or "unsupported".
+    pub support: String,
+    /// The `Degraded` reason, empty for every other support state.
+    pub note: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -189,6 +204,50 @@ fn to_io_vm(io: &IoInLoopWarning) -> IoVm {
     }
 }
 
+/// Q3 (human-approved): HTML's n/a text is English, distinct from the
+/// console's French wording.
+fn na_text(language: Language) -> String {
+    format!("n/a — not supported for {}", language.display_name())
+}
+
+/// Builds a capability-aware `MetricVm` (T3, #33): `Unsupported` hides the
+/// real value behind the honest n/a text and zeroes the bar (never a
+/// fabricated 0 that would read as "measured, nothing found"); `Degraded`
+/// keeps the real value/pct but carries the reason as a note; `Supported`
+/// (the pre-T3 default, including no capabilities attached at all) is the
+/// unchanged real value with no note.
+fn capability_metric_vm(
+    label: &str,
+    real_value: String,
+    real_pct: u8,
+    support: &MetricSupport,
+    language: Option<Language>,
+) -> MetricVm {
+    match support {
+        MetricSupport::Unsupported => MetricVm {
+            label: label.to_string(),
+            value: language.map(na_text).unwrap_or_else(|| "n/a".to_string()),
+            pct: 0,
+            support: "unsupported".to_string(),
+            note: String::new(),
+        },
+        MetricSupport::Degraded(reason) => MetricVm {
+            label: label.to_string(),
+            value: real_value,
+            pct: real_pct,
+            support: "degraded".to_string(),
+            note: reason.clone(),
+        },
+        MetricSupport::Supported => MetricVm {
+            label: label.to_string(),
+            value: real_value,
+            pct: real_pct,
+            support: "supported".to_string(),
+            note: String::new(),
+        },
+    }
+}
+
 /// Builds the project-view model: banner, 8 aggregated stat tiles (S1), and
 /// the project/folder/file tree with postorder-aggregated metrics (S2).
 pub fn build_report_vm(graph: &FileConsumptionGraph, target: &str) -> ReportVm {
@@ -266,6 +325,10 @@ struct RawNode {
     functions: Vec<FunctionVm>,
     warnings: Vec<WarningVm>,
     ios: Vec<IoVm>,
+    /// This file's declared capabilities (T3, #33) — `None` for a folder or
+    /// the project root (Q2, human-approved: aggregate honesty is out of
+    /// scope for T3) and for a file whose parser never attached one.
+    capabilities: Option<LanguageCapabilities>,
     economic: Option<EconomicImpact>,
     ecological: Option<EcologicalImpact>,
 }
@@ -287,6 +350,7 @@ impl RawNode {
             functions: Vec::new(),
             warnings: Vec::new(),
             ios: Vec::new(),
+            capabilities: None,
             economic: None,
             ecological: None,
         }
@@ -571,6 +635,7 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                     .collect(),
                 warnings: metrics.warnings().iter().map(to_warning_vm).collect(),
                 ios: metrics.io_in_loops().iter().map(to_io_vm).collect(),
+                capabilities: metrics.capabilities().cloned(),
                 economic: metrics.economic_impact().cloned(),
                 ecological: metrics.ecological_impact().cloned(),
             },
@@ -614,6 +679,49 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
             };
             let scale_depth = scale_files.3;
 
+            // T3 (US16, #33, amends ADR-0008): capability-narrowed tiles.
+            // `supported` is the shared fallback for both "no capabilities
+            // attached" (folders/project, Q2 out of scope) and any metric a
+            // capability set leaves untouched.
+            let supported = MetricSupport::Supported;
+            let language = n.capabilities.as_ref().map(|c| c.language());
+            let call_graph_support = n
+                .capabilities
+                .as_ref()
+                .map(|c| c.call_graph())
+                .unwrap_or(&supported);
+            let io_support = n
+                .capabilities
+                .as_ref()
+                .map(|c| c.io_in_loops())
+                .unwrap_or(&supported);
+
+            let transitive_metric = capability_metric_vm(
+                "Transitive complexity",
+                n.transitive.to_string(),
+                pct(n.transitive as u64, scale_transitive as u64),
+                call_graph_support,
+                language,
+            );
+            // Deliberately no proportional bar for the real-value case
+            // (#56 T2): abstention is a NUMBER, never a per-line
+            // pseudo-warning — a filled bar would visually read as a
+            // severity signal the count is not.
+            let unclassifiable_metric = capability_metric_vm(
+                "Unclassifiable I/O calls",
+                n.unclassifiable.to_string(),
+                0,
+                io_support,
+                language,
+            );
+            // The detail pane's io-in-loops list must carry the same
+            // honest n/a note so it never silently renders as an empty
+            // (zero-instances-found) section (assets.rs `renderIo`).
+            let io_note = match io_support {
+                MetricSupport::Unsupported => language.map(na_text).unwrap_or_default(),
+                MetricSupport::Supported | MetricSupport::Degraded(_) => String::new(),
+            };
+
             NodeVm {
                 id: id.clone(),
                 name: n.name.clone(),
@@ -627,35 +735,30 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
                         label: "Direct complexity".to_string(),
                         value: n.direct.to_string(),
                         pct: pct(n.direct as u64, scale_direct as u64),
+                        support: "supported".to_string(),
+                        note: String::new(),
                     },
-                    MetricVm {
-                        label: "Transitive complexity".to_string(),
-                        value: n.transitive.to_string(),
-                        pct: pct(n.transitive as u64, scale_transitive as u64),
-                    },
+                    transitive_metric,
                     MetricVm {
                         label: "Hidden complexity".to_string(),
                         value: n.hidden.to_string(),
                         pct: pct(n.hidden as u64, scale_hidden as u64),
+                        support: "supported".to_string(),
+                        note: String::new(),
                     },
                     MetricVm {
                         label: "Max call depth".to_string(),
                         value: n.depth.to_string(),
                         pct: pct(n.depth as u64, scale_depth as u64),
+                        support: "supported".to_string(),
+                        note: String::new(),
                     },
-                    MetricVm {
-                        label: "Unclassifiable I/O calls".to_string(),
-                        value: n.unclassifiable.to_string(),
-                        // Deliberately no proportional bar (#56 T2):
-                        // abstention is a NUMBER, never a per-line
-                        // pseudo-warning — a filled bar would visually
-                        // read as a severity signal the count is not.
-                        pct: 0,
-                    },
+                    unclassifiable_metric,
                 ],
                 functions: n.functions.clone(),
                 warnings: n.warnings.clone(),
                 ios: n.ios.clone(),
+                io_note,
                 economic: n.economic.as_ref().map(|e| EconomicVm {
                     cpu: format_dollars(e.cpu_cost_microdollars()),
                     memory: format_memory(e.memory_bytes()),
