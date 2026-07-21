@@ -2,13 +2,13 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-20 (US16 / #33 — ADR-0021, dégradation honnête T3 ; ADR-0020, C#/tree-sitter)
+> **Updated:** 2026-07-20 (US14-T4 / #33 — ADR-0022, classification I/O-en-boucle C# ; sur ADR-0021 dégradation honnête T3, ADR-0020 tree-sitter)
 
 ## Nodes
 
 | ID | Type | Title | Status | Updated | Links | Path |
 |---|---|---|---|---|---|---|
-| architecture-overview | technical | Architecture — CodeImpact | Applied | 2026-07-20 | [[ADR-0001]], [[ADR-0002]], [[ADR-0003]], [[ADR-0004]], [[ADR-0005]], [[ADR-0006]], [[ADR-0007]], [[ADR-0008]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[economic-impact-estimator]], [[json-report-schema]], [[html-report]], [[alert-thresholds]] | docs/architecture.md |
+| architecture-overview | technical | Architecture — CodeImpact | Applied | 2026-07-20 | [[ADR-0001]], [[ADR-0002]], [[ADR-0003]], [[ADR-0004]], [[ADR-0005]], [[ADR-0006]], [[ADR-0007]], [[ADR-0008]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[economic-impact-estimator]], [[json-report-schema]], [[html-report]], [[alert-thresholds]] | docs/architecture.md |
 | console-report-enriched | technical | Console Report Format — CodeImpact (Enriched) | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[html-report]], [[ADR-0021]] | docs/technical/console-report-enriched.md |
 | economic-impact-estimator | technical | Economic Impact Estimator — Technical Rationale | Applied | 2026-07-08 | [[ADR-0004]], [[architecture-overview]] | docs/technical/economic-impact.md |
 | json-report-schema | technical | JSON Report Schema — CodeImpact | Applied | 2026-07-20 | [[ADR-0007]], [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/technical/json-report-schema.md |
@@ -29,17 +29,18 @@
 | ADR-0013 | technical | Contrat parser ↔ hexagone — le domaine nomme le concept, l'adaptateur nomme la syntaxe | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0012]], [[ADR-0001]], [[glossary]], [[ADR-0016]], [[ADR-0018]] | docs/ADR-0013-parser-hexagon-loop-call-contract.md |
 | ADR-0014 | technical | Le parseur voit enfin les méthodes — nom qualifié, résolution intra-type, trois états de mesure | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0013]], [[ADR-0007]], [[ADR-0008]], [[glossary]], [[json-report-schema]], [[console-report-enriched]], [[html-report]], [[ADR-0016]], [[ADR-0018]] | docs/ADR-0014-parser-impl-methods-qualified-names.md |
 | ADR-0015 | technical | Isolation du parsing par sous-processus canari — contenir un débordement de pile sans le prédire | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0006]], [[ADR-0010]], [[ADR-0020]] | docs/ADR-0015-subprocess-canary-parse-isolation.md |
-| ADR-0016 | technical | Classification des I/O en boucle — le type affirme, le nom s'abstient, trois états, calibration mesurée | Applied | 2026-07-16 | [[architecture-overview]], [[ADR-0004]], [[ADR-0010]], [[ADR-0013]], [[ADR-0014]], [[ADR-0015]], [[glossary]] | docs/ADR-0016-io-in-loops-type-asserts-name-abstains.md |
+| ADR-0016 | technical | Classification des I/O en boucle — le type affirme, le nom s'abstient, trois états, calibration mesurée | Applied | 2026-07-16 | [[architecture-overview]], [[ADR-0004]], [[ADR-0010]], [[ADR-0013]], [[ADR-0014]], [[ADR-0015]], [[ADR-0022]], [[glossary]] | docs/ADR-0016-io-in-loops-type-asserts-name-abstains.md |
 | ADR-0017 | technical | Seuils d'alerte — porte domaine pure, `.codeimpact.json` partagé, exit 3 CI | Applied | 2026-07-17 | [[architecture-overview]], [[alert-thresholds]], [[ADR-0001]], [[ADR-0004]], [[ADR-0006]], [[ADR-0009]], [[ADR-0010]], [[ADR-0019]], [[json-report-schema]], [[html-report]], [[glossary]] | docs/ADR-0017-alert-thresholds-config-schema.md |
 | ADR-0018 | technical | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0001]], [[ADR-0013]], [[ADR-0014]], [[ADR-0019]], [[ADR-0020]], [[glossary]] | docs/ADR-0018-de-rustified-hexagon-language-agnostic.md |
-| ADR-0019 | technical | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0017]], [[ADR-0006]], [[ADR-0001]], [[ADR-0018]], [[alert-thresholds]], [[glossary]] | docs/ADR-0019-configuration-file-analysis-config.md |
-| ADR-0020 | technical | Parsing multi-langage tree-sitter — adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0018]], [[ADR-0001]], [[ADR-0015]], [[ADR-0006]], [[glossary]] | docs/ADR-0020-multi-language-parsing-tree-sitter.md |
+| ADR-0019 | technical | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0017]], [[ADR-0006]], [[ADR-0001]], [[ADR-0018]], [[ADR-0022]], [[alert-thresholds]], [[glossary]] | docs/ADR-0019-configuration-file-analysis-config.md |
+| ADR-0020 | technical | Parsing multi-langage tree-sitter — adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0018]], [[ADR-0001]], [[ADR-0015]], [[ADR-0006]], [[ADR-0022]], [[glossary]] | docs/ADR-0020-multi-language-parsing-tree-sitter.md |
 | ADR-0021 | technical | Dégradation honnête — `MetricSupport` circule jusqu'aux writers, `n/a` jamais `0` (US14-T3) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]], [[console-report-enriched]], [[glossary]] | docs/ADR-0021-honest-degradation-metric-support-flows-to-writers.md |
-| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]] | docs/glossary.md |
+| ADR-0022 | technical | Classification I/O-en-boucle C# — le qualificatif statique affirme, le récepteur s'abstient (US14-T4) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0016]], [[ADR-0020]], [[ADR-0019]], [[ADR-0021]], [[ADR-0010]], [[glossary]] | docs/ADR-0022-csharp-io-in-loops-static-asserts-receiver-abstains.md |
+| glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]] | docs/glossary.md |
 
 ## Graph Health
 
-- **Total nodes:** 28
+- **Total nodes:** 29
 - **Dangling [[id]]:** 0
 - **Orphan nodes:** 0
 - **All rows map to existing files:** ✅

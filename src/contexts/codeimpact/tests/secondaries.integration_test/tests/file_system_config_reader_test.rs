@@ -23,7 +23,8 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 // 9. a genuinely unknown/typo top-level key is now REJECTED
 //    (deny_unknown_fields, US31 — a change from US8's tolerant schema)
 // 10. reserved forward-compat keys (languages, sourceRoots, extensions,
-//     parser, ioSignatures) are tolerated (parsed, not wired)
+//     parser) are tolerated (parsed, not wired) — ioSignatures is now WIRED
+//     (US16 T4.3, see 18-20 below), an empty array still round-trips fine
 // 11. auto-discovery: target dir is tried before cwd
 // 12. error messages never leak the absolute path (ADR-0006)
 // 13. explicit --config pointing to a FIFO -> Err, without hanging
@@ -34,6 +35,16 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 // 16. an include pattern attempting path traversal ("../etc/**") is
 //     rejected at the FileFilter boundary (AC4/D1)
 // 17. an invalid glob syntax in include/exclude is rejected
+//
+// US16 T4.3 — ioSignatures wiring:
+// 18. ioSignatures: ["MyIoWrapper."] -> AnalysisConfig::io_signature_
+//     prefixes() carries exactly that value
+// 19. ioSignatures absent -> io_signature_prefixes() is empty (byte-
+//     identical to no config at all)
+// 20. ioSignatures with a non-string element (malformed shape) -> Err
+// 21. (retry #1, Security MEDIUM) ioSignatures with 257 entries (over
+//     AnalysisConfig::MAX_IO_SIGNATURE_COUNT) -> a clean config Err, not a
+//     per-file wall-clock/complexity blowup downstream
 
 fn isolated_dir(test_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -390,6 +401,88 @@ fn include_pattern_attempting_path_traversal_is_rejected() {
 // full CLI path (config read -> walk) is pinned end-to-end in
 // main_test.rs. A syntactically odd but shape-valid pattern like `src/[`
 // must therefore still parse successfully here.
+#[test]
+fn io_signatures_array_is_parsed_into_analysis_config_prefixes() {
+    let dir = isolated_dir("io_signatures_valid");
+    let config_path = dir.join(".codeimpact.json");
+    std::fs::write(
+        &config_path,
+        r#"{"ioSignatures":["MyIoWrapper.","AnotherWrapper."]}"#,
+    )
+    .unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    let config = result
+        .expect("read should succeed")
+        .expect("file was present");
+    assert_eq!(
+        config.io_signature_prefixes(),
+        &["MyIoWrapper.".to_string(), "AnotherWrapper.".to_string()]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn io_signatures_absent_yields_empty_prefixes() {
+    let dir = isolated_dir("io_signatures_absent");
+    let config_path = dir.join(".codeimpact.json");
+    std::fs::write(&config_path, r#"{}"#).unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    let config = result
+        .expect("read should succeed")
+        .expect("file was present");
+    assert!(config.io_signature_prefixes().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn io_signatures_with_a_non_string_element_is_rejected() {
+    let dir = isolated_dir("io_signatures_malformed");
+    let config_path = dir.join(".codeimpact.json");
+    std::fs::write(&config_path, r#"{"ioSignatures":[123]}"#).unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    assert!(
+        result.is_err(),
+        "a malformed (non-string) ioSignatures element must be rejected, got {:?}",
+        result
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Retry #1 (Security MEDIUM, #33 T4): an unbounded ioSignatures list (still
+// under the 1 MiB config-size cap) let a 90,000-entry array inflate
+// per-file wall-clock 6x and trip a false SourceTooComplex downstream. The
+// cap must reject it here, at config-load time, before any file is parsed.
+#[test]
+fn oversized_io_signatures_list_is_rejected_with_a_clean_error() {
+    let dir = isolated_dir("io_signatures_oversized");
+    let config_path = dir.join(".codeimpact.json");
+    let prefixes: Vec<String> = (0..257).map(|i| format!("\"P{}.\"", i)).collect();
+    std::fs::write(
+        &config_path,
+        format!(r#"{{"ioSignatures":[{}]}}"#, prefixes.join(",")),
+    )
+    .unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    assert!(
+        result.is_err(),
+        "an over-cap ioSignatures list must be rejected, got {:?}",
+        result
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn syntactically_odd_but_shape_valid_glob_parses_successfully_here() {
     let dir = isolated_dir("odd_glob_shape");

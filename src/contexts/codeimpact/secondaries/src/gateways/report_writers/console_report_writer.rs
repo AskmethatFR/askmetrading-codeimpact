@@ -47,6 +47,14 @@ impl ConsoleReportWriter {
             Some(MetricSupport::Degraded(reason)) => format!(" [dégradé: {}]", reason),
             _ => String::new(),
         };
+        // T4.2 (US16, #33) — coordination fix: io_in_loops can now be
+        // Degraded (not just Unsupported), so the unclassifiable-count line
+        // needs the same "[dégradé: <reason>]" append the transitive-
+        // complexity line already carries for call_graph.
+        let io_degraded_note = match metrics.capabilities().map(|c| c.io_in_loops()) {
+            Some(MetricSupport::Degraded(reason)) => format!(" [dégradé: {}]", reason),
+            _ => String::new(),
+        };
         writeln!(
             writer,
             "Complexité transitive: {} (dont {} cachée dans les appels){}",
@@ -79,8 +87,9 @@ impl ConsoleReportWriter {
             .unwrap(),
             None => writeln!(
                 writer,
-                "Appels en boucle non classifiables: {}",
-                metrics.unclassifiable_io_in_loops_count()
+                "Appels en boucle non classifiables: {}{}",
+                metrics.unclassifiable_io_in_loops_count(),
+                io_degraded_note,
             )
             .unwrap(),
         }

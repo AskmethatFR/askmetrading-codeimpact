@@ -34,7 +34,7 @@ pub mod stress_test_run;
 pub use alert_thresholds::{
     AlertThresholds, BreachedMetric, ThresholdBreach, ThresholdError, ThresholdReport,
 };
-pub use analysis_config::AnalysisConfig;
+pub use analysis_config::{AnalysisConfig, AnalysisConfigError};
 pub use analysis_rule::AnalysisRule;
 pub use analysis_target::{AnalysisTarget, TargetType};
 pub use call_graph::CallGraph;
