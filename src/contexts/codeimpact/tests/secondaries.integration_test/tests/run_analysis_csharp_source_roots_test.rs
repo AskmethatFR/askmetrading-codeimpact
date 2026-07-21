@@ -62,7 +62,10 @@ fn source_roots_configured_and_declarer_inside_root_still_resolves_the_edge() {
     let use_case = RunAnalysis::new(
         Box::new(FileSystemCodeReader::new()),
         Box::new(JsonReportWriter::new()),
-        ParserRegistry::new().register(Language::CSharp, Box::new(TreeSitterCodeParser::csharp())),
+        ParserRegistry::new().register(
+            Language::CSharp,
+            Box::new(TreeSitterCodeParser::csharp(Vec::new())),
+        ),
     );
 
     let result =

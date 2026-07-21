@@ -156,7 +156,10 @@ fn csharp_project_with_mutual_using_reports_a_dependency_cycle() {
     let use_case = RunAnalysis::new(
         Box::new(reader),
         Box::new(JsonReportWriter::new()),
-        ParserRegistry::new().register(Language::CSharp, Box::new(TreeSitterCodeParser::csharp())),
+        ParserRegistry::new().register(
+            Language::CSharp,
+            Box::new(TreeSitterCodeParser::csharp(Vec::new())),
+        ),
     );
 
     let result = use_case.handle_project_json(
