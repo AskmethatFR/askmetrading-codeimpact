@@ -52,6 +52,8 @@ hexagon → rien
 
 > **Deux modèles de menace de parsing, deux remèdes.** `syn` (descente récursive) peut **déborder la pile → `abort` process-level** : isolé dans un sous-processus canari dédié (`codeimpact-parse-probe`, [[ADR-0015]]). tree-sitter (table-driven, pile sur le tas) **n'abandonne pas le processus** même à 500 000 d'imbrication : la menace est une **DoS wall-clock**, fermée par des **gardes in-process** (budget partagé 5 s parse+requête+post-traitement, plafonds de captures, balayage d'appartenance O(n log n)). Voir [[ADR-0020]] § D5 et l'amendement d'[[ADR-0015]].
 
+> **Canal de dégradation honnête jusqu'aux writers ([[ADR-0021]]).** La capacité par-métrique par-langage déclarée par un parseur (`CodeParser::capabilities() -> LanguageCapabilities`, carte `métrique -> MetricSupport ∈ Supported/Degraded/Unsupported`) **circule de bout en bout** : `RunAnalysis` l'interroge une fois et la pose dans un nouveau champ `CodeMetrics.capabilities: Option<LanguageCapabilities>`, que les **trois writers** lisent. Chaque writer branche **dynamiquement sur `MetricSupport`, jamais sur l'identité du langage** — une métrique non-`Supported` est rendue `n/a`, **jamais `0`** (le principe d'[[ADR-0010]] étendu de la *mesure* à la *capacité d'un langage*). Console → `n/a — non supporté` (fr) + `[dégradé: reason]` ; JSON → `null` (jamais `[]`/`0`) + objet `metric_support` (valeurs anglaises, [[ADR-0007]] §7.9) ; HTML → `MetricVm.support`/`note` via whitelist fermée `SUP` (classes `sup-ok`/`sup-degraded`/`sup-na`, discipline [[ADR-0008]] §8.10, [[ADR-0008]] §8.12). Le branchement par état (non par langage) fait **composer** T4 (`io_in_loops` C# : `Unsupported`→`Degraded`) et T5 (`cross_file_dependencies`) **sans rouvrir les writers**. Sortie Rust byte-inchangée (`None`/tout-`Supported` → aucune annotation). Agrégat projet (tuile top-level) différé en **T3b**. Voir [[ADR-0021]].
+
 ### Naming conventions
 
 | Élément | Convention | Exemple |
@@ -205,3 +207,4 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | 0018 | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | ✅ Appliqué dans #32 |
 | 0019 | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | ✅ Appliqué dans #31 |
 | 0020 | Parsing multi-langage tree-sitter — un adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | ✅ Appliqué dans #33 |
+| 0021 | Dégradation honnête — `MetricSupport` circule jusqu'aux writers, `n/a` jamais `0` (US14-T3) | ✅ Appliqué dans #33 |

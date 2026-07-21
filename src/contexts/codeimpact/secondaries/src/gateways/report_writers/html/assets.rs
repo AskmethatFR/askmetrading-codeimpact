@@ -202,6 +202,11 @@ h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-headi
 .io-verb { font-size: 12px; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
 .io-loc { margin-left: auto; font-size: 11px; font-family: ui-monospace, Menlo, monospace; color: color-mix(in srgb, var(--color-text) 52%, transparent); }
 
+.sup-ok { background: var(--color-neutral-100); color: var(--color-neutral-800); }
+.sup-degraded { background: var(--color-accent-200); color: var(--color-accent-800); }
+.sup-na { background: var(--color-neutral-100); color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.metric-note { font-size: 11px; color: color-mix(in srgb, var(--color-text) 55%, transparent); margin-top: 3px; }
+
 .unmeasurable-section { padding: 12px 14px; margin-bottom: var(--space-6); }
 .unmeasurable-list { display: flex; flex-direction: column; gap: 6px; }
 .unmeasurable-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
@@ -256,6 +261,7 @@ pub const JS: &str = r#"
   var LVL = { none: "lvl-none", low: "lvl-low", moderate: "lvl-moderate", high: "lvl-high", critical: "lvl-critical" };
   var SEV = { warning: "sev-warning", critical: "sev-critical" };
   var ENV = { A: "env-a", B: "env-b", C: "env-c", D: "env-d", E: "env-e", F: "env-f", G: "env-g" };
+  var SUP = { supported: "sup-ok", degraded: "sup-degraded", unsupported: "sup-na" };
   function cls(map, key, fallback) {
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback;
   }
@@ -392,6 +398,9 @@ pub const JS: &str = r#"
       var row = el("div");
       var top = el("div", "metric-top");
       top.appendChild(el("span", "metric-label", m.label));
+      if (m.support && m.support !== "supported") {
+        top.appendChild(el("span", "tag " + cls(SUP, m.support, "sup-ok"), m.support.toUpperCase()));
+      }
       top.appendChild(el("span", "metric-value", m.value));
       row.appendChild(top);
       var track = el("div", "metric-track");
@@ -399,6 +408,7 @@ pub const JS: &str = r#"
       setPct(fill, m.pct);
       track.appendChild(fill);
       row.appendChild(track);
+      if (m.note) row.appendChild(el("div", "metric-note", m.note));
       grid.appendChild(row);
     });
     return grid;
@@ -474,6 +484,21 @@ pub const JS: &str = r#"
   }
 
   function renderIo(node) {
+    // T3 (US16, #33, amends ADR-0008): an Unsupported io_in_loops capability
+    // carries a non-empty io_note — render an honest n/a badge row instead
+    // of silently returning null, which would read as "measured, zero
+    // instances found" rather than "not supported for this language".
+    if (node.io_note) {
+      var naSection = el("div", "section");
+      naSection.appendChild(el("div", "section-heading", "I/O in loops"));
+      var naList = el("div", "io-list");
+      var naCard = el("div", "blueprint io-card");
+      naCard.appendChild(el("span", "tag " + cls(SUP, "unsupported", "sup-na"), "N/A"));
+      naCard.appendChild(el("span", "io-verb", node.io_note));
+      naList.appendChild(naCard);
+      naSection.appendChild(naList);
+      return naSection;
+    }
     if (node.ios.length === 0) return null;
     var section = el("div", "section");
     section.appendChild(el("div", "section-heading", "I/O in loops · " + node.ios.length));

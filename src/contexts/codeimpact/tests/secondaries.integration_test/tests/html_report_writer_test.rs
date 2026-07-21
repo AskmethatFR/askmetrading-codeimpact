@@ -10,6 +10,9 @@ use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
+use codeimpact_hexagon::analysis::Language;
+use codeimpact_hexagon::analysis::LanguageCapabilities;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::UnmeasurableFile;
 use codeimpact_hexagon::analysis::UnmeasurableReason;
@@ -480,6 +483,117 @@ fn node_metrics_include_unclassifiable_io_calls_aggregated_to_root() {
     );
 }
 
+// T3 (US16, #33, amends ADR-0008): a C# file's Unsupported io_in_loops and
+// Degraded call_graph capabilities must render as honest n/a / degraded-note
+// signals on the per-node detail, never a fabricated `0` or a silent-omit.
+#[test]
+fn node_metrics_show_na_and_degraded_support_for_csharp_capabilities() {
+    let writer = HtmlReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_call_graph(MetricSupport::Degraded(
+            "name-based resolution; ambiguous edges dropped".to_string(),
+        ))
+        .with_io_in_loops(MetricSupport::Unsupported);
+    let file_metrics = make_metrics(5, 8).with_capabilities(capabilities);
+    let graph = graph_from(vec![("a.cs", file_metrics)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+
+    let file_node = data["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .find(|n| n["kind"] == "file")
+        .expect("file node");
+    let node_metrics = file_node["metrics"].as_array().expect("metrics array");
+
+    let unclassifiable = node_metrics
+        .iter()
+        .find(|m| m["label"] == "Unclassifiable I/O calls")
+        .expect("Unclassifiable I/O calls metric");
+    assert_eq!(unclassifiable["support"], "unsupported");
+    assert_eq!(unclassifiable["pct"], 0);
+    assert_eq!(
+        unclassifiable["value"], "n/a — not supported for C#",
+        "an Unsupported io_in_loops capability must render the honest n/a value, \
+         never a fabricated 0: {}",
+        html
+    );
+
+    let transitive = node_metrics
+        .iter()
+        .find(|m| m["label"] == "Transitive complexity")
+        .expect("Transitive complexity metric");
+    assert_eq!(transitive["support"], "degraded");
+    assert!(
+        transitive["note"]
+            .as_str()
+            .unwrap()
+            .contains("name-based resolution"),
+        "expected the degraded reason in the note field, got: {}",
+        transitive["note"]
+    );
+    assert_eq!(
+        transitive["value"], "8",
+        "a Degraded call_graph still measured a real value — it must not be hidden"
+    );
+
+    let direct = node_metrics
+        .iter()
+        .find(|m| m["label"] == "Direct complexity")
+        .expect("Direct complexity metric");
+    assert_eq!(
+        direct["support"], "supported",
+        "a metric untouched by T3's capability narrowing stays Supported"
+    );
+
+    assert_eq!(
+        file_node["io_note"], "n/a — not supported for C#",
+        "the per-node io list must carry the same honest n/a note so the detail \
+         pane never silently renders an empty io section"
+    );
+}
+
+// Mirrors zero_function_file_renders_level_none_and_js_maps_it_to_its_own_class
+// (ADR-8.5/8.6 pattern): the emitted JS's SUP lookup map and its 3 CSS
+// classes are static boilerplate, always present regardless of node data —
+// this is the wiring guard for the metric-support badge (assets.rs).
+#[test]
+fn rendered_js_defines_sup_whitelist_and_its_css_classes() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(
+            r#"SUP = { supported: "sup-ok", degraded: "sup-degraded", unsupported: "sup-na""#
+        ),
+        "the JS SUP map must explicitly map all three support states: {}",
+        html
+    );
+    assert!(
+        html.contains(".sup-ok {"),
+        "missing .sup-ok CSS rule: {}",
+        html
+    );
+    assert!(
+        html.contains(".sup-degraded {"),
+        "missing .sup-degraded CSS rule: {}",
+        html
+    );
+    assert!(
+        html.contains(".sup-na {"),
+        "missing .sup-na CSS rule: {}",
+        html
+    );
+}
+
 #[test]
 fn every_stat_tile_matches_the_tree_root() {
     let writer = HtmlReportWriter::new();
@@ -753,10 +867,11 @@ fn metric_pct_is_zero_when_scale_is_zero() {
 
     assert!(
         html.contains(
-            r#""metrics":[{"label":"Direct complexity","value":"0","pct":0},{"label":"Transitive complexity","value":"0","pct":0},{"label":"Hidden complexity","value":"0","pct":0},{"label":"Max call depth","value":"0","pct":0},{"label":"Unclassifiable I/O calls","value":"0","pct":0}]"#
+            r#""metrics":[{"label":"Direct complexity","value":"0","pct":0,"support":"supported","note":""},{"label":"Transitive complexity","value":"0","pct":0,"support":"supported","note":""},{"label":"Hidden complexity","value":"0","pct":0,"support":"supported","note":""},{"label":"Max call depth","value":"0","pct":0,"support":"supported","note":""},{"label":"Unclassifiable I/O calls","value":"0","pct":0,"support":"supported","note":""}]"#
         ),
         "all-zero metrics (scale == 0) must yield pct 0 for every metric, not divide by zero \
-         (#56 T2 adds the Unclassifiable I/O calls metric, always pct 0 by design): {}",
+         (#56 T2 adds the Unclassifiable I/O calls metric, always pct 0 by design; T3 #33 adds \
+         support/note, \"supported\"/\"\" here since no capabilities are attached): {}",
         html
     );
 }
@@ -779,14 +894,14 @@ fn metric_pct_floors_at_five_and_caps_at_hundred() {
     // level string and is unaffected.
     assert!(
         html.contains(
-            r#""id":"tiny.rs","name":"tiny.rs","kind":"file","path":"tiny.rs","child_ids":[],"score":1,"level":"none","metrics":[{"label":"Direct complexity","value":"1","pct":5}"#
+            r#""id":"tiny.rs","name":"tiny.rs","kind":"file","path":"tiny.rs","child_ids":[],"score":1,"level":"none","metrics":[{"label":"Direct complexity","value":"1","pct":5,"support":"supported","note":""}"#
         ),
         "a small nonzero value (1/100=1%) must floor at 5%, not round down to 0: {}",
         html
     );
     assert!(
         html.contains(
-            r#""id":"huge.rs","name":"huge.rs","kind":"file","path":"huge.rs","child_ids":[],"score":100,"level":"none","metrics":[{"label":"Direct complexity","value":"100","pct":100}"#
+            r#""id":"huge.rs","name":"huge.rs","kind":"file","path":"huge.rs","child_ids":[],"score":100,"level":"none","metrics":[{"label":"Direct complexity","value":"100","pct":100,"support":"supported","note":""}"#
         ),
         "the max value itself must cap at 100%: {}",
         html
@@ -1034,6 +1149,42 @@ fn write_html_neutralizes_payload_in_io_call_name() {
         html.matches("<script").count(),
         2,
         "io_call payload must not add a third <script> tag: {}",
+        html
+    );
+}
+
+// Security review (#33 T3 retry #1, LOW): regression hygiene alongside the
+// write_html_neutralizes_payload_in_* family above — pins that a
+// MetricSupport::Degraded reason (T3, rendered into MetricVm.note) is
+// injection-safe by the same construction (textContent via el(), no new
+// style-from-data sink, closed SUP whitelist).
+#[test]
+fn write_html_neutralizes_script_breakout_payload_in_degraded_note() {
+    let writer = HtmlReportWriter::new();
+    let payload = "</script><script>alert(1)</script>\"><img src=x onerror=alert(2)>";
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_call_graph(MetricSupport::Degraded(payload.to_string()));
+    let metrics = make_metrics(1, 1).with_capabilities(capabilities);
+    let graph = graph_from(vec![("f.cs", metrics)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        !html.contains("</script><script>alert(1)</script>"),
+        "Degraded-note payload must not appear as a literal script breakout: {}",
+        html
+    );
+    assert!(
+        !html.contains("<img"),
+        "Degraded-note payload must not inject a literal <img> tag: {}",
+        html
+    );
+    assert_eq!(
+        html.matches("<script").count(),
+        2,
+        "Degraded-note payload must not add a third <script> tag: {}",
         html
     );
 }

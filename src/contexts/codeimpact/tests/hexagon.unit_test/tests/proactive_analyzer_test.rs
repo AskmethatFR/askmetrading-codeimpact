@@ -2,8 +2,10 @@ use codeimpact_hexagon::analysis::proactive_analyzer;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::IoClassification;
 use codeimpact_hexagon::analysis::LoopCall;
+use codeimpact_hexagon::analysis::MetricSupport;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_secondaries::gateways::code_parsers::code_parser_stub::CodeParserStub;
+use codeimpact_secondaries::gateways::code_parsers::tree_sitter::tree_sitter_code_parser::TreeSitterCodeParser;
 
 fn make_parser(decision_points: u32) -> CodeParserStub {
     CodeParserStub::with_functions(vec![ParsedFunction {
@@ -385,6 +387,27 @@ fn io_in_loops_rule_counts_unclassifiable_calls() {
         1,
         "the Unknown call must never surface as a per-line warning"
     );
+}
+
+// T3 (US16, #33): analyze() must attach the parser's own declared
+// capabilities to the metrics it builds — this is the calling use case for
+// CodeMetrics::with_capabilities (a real C# adapter, not a stub, so the
+// wiring is proven end-to-end from a parser that actually degrades a
+// metric).
+#[test]
+fn analyze_through_csharp_parser_attaches_its_declared_capabilities() {
+    let parser = TreeSitterCodeParser::csharp();
+    let metrics = proactive_analyzer::analyze(
+        "class C { void M() { } }",
+        &[AnalysisRule::CyclomaticComplexity],
+        &parser,
+    )
+    .expect("analysis should succeed");
+
+    let capabilities = metrics
+        .capabilities()
+        .expect("analyze() should attach the parser's capabilities");
+    assert_eq!(*capabilities.io_in_loops(), MetricSupport::Unsupported);
 }
 
 #[test]

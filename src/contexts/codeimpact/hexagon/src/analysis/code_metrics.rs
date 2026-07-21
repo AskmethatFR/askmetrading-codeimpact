@@ -4,6 +4,7 @@ use super::complexity_detector::ComplexityWarning;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
 use super::io_in_loop_warning::IoInLoopWarning;
+use super::language_capabilities::LanguageCapabilities;
 
 /// A single function's complexity measurement (#46/#49 arbitration §2):
 /// `hidden` is MEASURED directly (`CallGraph::hidden_of`, the direct
@@ -118,6 +119,11 @@ pub struct CodeMetrics {
     /// calling use case ever evaluated thresholds against it, mirroring
     /// `FileConsumptionGraph::threshold_report`.
     threshold_report: Option<ThresholdReport>,
+    /// What the parser that produced this file's metrics can honestly
+    /// measure (US16 T3, #33) — `None` when no calling use case ever
+    /// attached one (mirrors `economic_impact`/`ecological_impact`
+    /// /`threshold_report`'s "no evaluation ran" convention).
+    capabilities: Option<LanguageCapabilities>,
 }
 
 impl CodeMetrics {
@@ -134,6 +140,7 @@ impl CodeMetrics {
             io_in_loops: Vec::new(),
             unclassifiable_io_in_loops_count: 0,
             threshold_report: None,
+            capabilities: None,
         }
     }
 
@@ -156,6 +163,7 @@ impl CodeMetrics {
             io_in_loops: Vec::new(),
             unclassifiable_io_in_loops_count: 0,
             threshold_report: None,
+            capabilities: None,
         }
     }
 
@@ -277,5 +285,17 @@ impl CodeMetrics {
 
     pub fn threshold_report(&self) -> Option<&ThresholdReport> {
         self.threshold_report.as_ref()
+    }
+
+    /// Attaches the parser's declared `LanguageCapabilities` (US16 T3,
+    /// #33) — builder style, mirroring `with_economic_impact`/
+    /// `with_ecological_impact`.
+    pub fn with_capabilities(mut self, capabilities: LanguageCapabilities) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
+
+    pub fn capabilities(&self) -> Option<&LanguageCapabilities> {
+        self.capabilities.as_ref()
     }
 }

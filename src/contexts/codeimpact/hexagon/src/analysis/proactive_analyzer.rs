@@ -63,7 +63,8 @@ pub fn analyze(
         functions_with_cycles,
         function_details,
     )
-    .with_warnings(warnings);
+    .with_warnings(warnings)
+    .with_capabilities(parser.capabilities());
 
     if rules.contains(&AnalysisRule::IoInLoops) {
         let io_warnings = IoInLoopsDetector::detect(&functions);

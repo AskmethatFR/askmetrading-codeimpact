@@ -14,9 +14,9 @@ pub enum MetricSupport {
     Unsupported,
 }
 
-/// What a language adapter can measure, per metric (US16 T2 seam). Plain
-/// data — no rendering, no behavior beyond construction; covered
-/// transitively through each adapter's own test (`SynCodeParser`,
+/// What a language adapter can measure, per metric (US16 T2 seam, `call_graph`
+/// added T3). Plain data — no rendering, no behavior beyond construction;
+/// covered transitively through each adapter's own test (`SynCodeParser`,
 /// `TreeSitterCodeParser`), never given a standalone test of its own (Test
 /// Surface Map: a record-shaped type is not a unit).
 #[derive(Clone, Debug, PartialEq)]
@@ -26,12 +26,18 @@ pub struct LanguageCapabilities {
     io_in_loops: MetricSupport,
     economic_impact: MetricSupport,
     ecological_impact: MetricSupport,
+    /// Whether the call graph (transitive/hidden complexity, call depth,
+    /// cycles) is built from real resolution or a weaker heuristic — T3's
+    /// C# adapter reports `Degraded` here (name-based resolution, ambiguous
+    /// edges dropped), never a fabricated `Supported`.
+    call_graph: MetricSupport,
 }
 
 impl LanguageCapabilities {
     /// The only constructor T2 needs (human-approved Q1: minimal until
     /// T3) — every metric `Supported`, for whichever `language` the caller
-    /// names.
+    /// names. T3 adapters narrow individual metrics via the `with_*`
+    /// builders below.
     pub fn all_supported(language: Language) -> Self {
         Self {
             language,
@@ -39,6 +45,7 @@ impl LanguageCapabilities {
             io_in_loops: MetricSupport::Supported,
             economic_impact: MetricSupport::Supported,
             ecological_impact: MetricSupport::Supported,
+            call_graph: MetricSupport::Supported,
         }
     }
 
@@ -60,5 +67,22 @@ impl LanguageCapabilities {
 
     pub fn ecological_impact(&self) -> &MetricSupport {
         &self.ecological_impact
+    }
+
+    pub fn call_graph(&self) -> &MetricSupport {
+        &self.call_graph
+    }
+
+    /// Builder-style override (mirrors `CodeMetrics::with_economic_impact`)
+    /// — an adapter starts from `all_supported` and narrows only the
+    /// metrics it cannot honestly claim.
+    pub fn with_io_in_loops(mut self, support: MetricSupport) -> Self {
+        self.io_in_loops = support;
+        self
+    }
+
+    pub fn with_call_graph(mut self, support: MetricSupport) -> Self {
+        self.call_graph = support;
+        self
     }
 }
