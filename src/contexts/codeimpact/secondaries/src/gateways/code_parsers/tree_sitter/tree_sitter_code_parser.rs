@@ -147,7 +147,8 @@ impl TreeSitterCodeParser {
         *self
             .deps_index_cache
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((fingerprint, Arc::clone(&index)));
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((fingerprint, Arc::clone(&index)));
         index
     }
 }
