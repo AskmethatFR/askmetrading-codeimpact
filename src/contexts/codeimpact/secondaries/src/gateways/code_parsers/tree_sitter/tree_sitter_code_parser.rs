@@ -1397,4 +1397,92 @@ mod tests {
 
         // Reaching this line is the proof: the process survived the Drop.
     }
+
+    // ── Security hardening (#90 T5, two LOW items deferred from #33 T5) ──
+    // Both must be closed before an LSP primary reuses a single
+    // TreeSitterCodeParser instance across scans:
+    //   1. file_set_fingerprint must hash CONTENT, not just per-file
+    //      lengths — a length-only fingerprint lets two file sets with the
+    //      same paths/lengths but different content collide, silently
+    //      stale-reusing the memoized DepsIndex.
+    //   2. deps_index_cache's two lock sites must recover from mutex
+    //      poisoning instead of propagating the panic.
+
+    #[test]
+    fn stale_deps_index_is_not_reused_when_file_content_changes_but_lengths_match() {
+        let file1 = "namespace AAAA { class Foo {} }";
+        let file2_v1 = "using AAAA;\nclass Bar {}";
+        // Same length as file2_v1, but no `using` directive at all — built
+        // by padding, not hand-counted, so the length-equality precondition
+        // can never silently drift out of sync with file2_v1 above.
+        let padding = " ".repeat(file2_v1.len() - "class Bar {}".len());
+        let file2_v2 = format!("{padding}class Bar {{}}");
+        assert_eq!(
+            file2_v1.len(),
+            file2_v2.len(),
+            "precondition: same length, different content"
+        );
+
+        let parser = parser();
+
+        let ctx1 = deps_ctx(
+            "file2.cs",
+            &[("file1.cs", file1), ("file2.cs", file2_v1)],
+            &[],
+        );
+        let resolved1 = parser.resolve_dependencies(file2_v1, &ctx1).unwrap();
+        assert_eq!(
+            resolved1,
+            vec![PathBuf::from("file1.cs")],
+            "sanity: the first call resolves through the real `using AAAA;`"
+        );
+
+        let ctx2 = deps_ctx(
+            "file2.cs",
+            &[("file1.cs", file1), ("file2.cs", file2_v2.as_str())],
+            &[],
+        );
+        let resolved2 = parser
+            .resolve_dependencies(file2_v2.as_str(), &ctx2)
+            .unwrap();
+
+        assert!(
+            resolved2.is_empty(),
+            "the second file set has the SAME paths and SAME per-file \
+             lengths as the first, but file2.cs no longer contains a \
+             `using` directive — a length-only fingerprint collides with \
+             the first file set and stale-reuses its cached DepsIndex, \
+             wrongly resolving to {:?}",
+            resolved2
+        );
+    }
+
+    #[test]
+    fn deps_index_lookup_recovers_from_a_poisoned_cache_mutex_instead_of_panicking() {
+        let parser = parser();
+
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _guard = parser.deps_index_cache.lock().unwrap();
+                    panic!("deliberately poisoning the cache mutex");
+                })
+                .join()
+                .expect_err("the spawned thread must panic to poison the mutex");
+        });
+        assert!(parser.deps_index_cache.is_poisoned());
+
+        let source = "namespace A { class Foo {} }";
+        let ctx = deps_ctx("file1.cs", &[("file1.cs", source)], &[]);
+
+        let resolved = parser.resolve_dependencies(source, &ctx);
+
+        assert!(
+            resolved.is_ok(),
+            "resolve_dependencies must recover from a poisoned \
+             deps_index_cache mutex instead of panicking on \
+             .lock().unwrap(), got {:?}",
+            resolved
+        );
+    }
 }
