@@ -1475,6 +1475,61 @@ mod tests {
         );
     }
 
+    // Retry #1 (#90 T5 — Dev-B changes-requested, Security MEDIUM CWE-400,
+    // QA convergent): the content-hash fingerprint above closed the stale-
+    // reuse bug but introduced a NEW cost — hashing every file's full
+    // content on EVERY `resolve_dependencies` call, in production TODAY
+    // (`run_analysis` calls it once per project file, all sharing the SAME
+    // `file_sources` `Arc`). Keying the cache on `Arc` pointer identity
+    // instead is O(1) per call and never rehashes; the trade is that two
+    // distinct, byte-identical `Arc` allocations no longer share a cache
+    // entry (rare, harmless — just an extra rebuild, not a correctness
+    // issue, and `Vec<(PathBuf,String)>` has no interior mutability so
+    // "same Arc" already guarantees "same content").
+    #[test]
+    fn deps_index_reuses_the_same_arc_but_rebuilds_for_a_different_arc_with_identical_content() {
+        let file_sources = Arc::new(vec![(
+            PathBuf::from("file1.cs"),
+            "namespace A { class Foo {} }".to_string(),
+        )]);
+        let ctx1 = DependencyContext::new(
+            PathBuf::from("file1.cs"),
+            PathBuf::from("."),
+            vec![PathBuf::from("file1.cs")],
+        )
+        .with_file_sources(Arc::clone(&file_sources));
+
+        let parser = parser();
+        let index1 = parser.deps_index(&ctx1);
+        let index2 = parser.deps_index(&ctx1);
+        assert!(
+            Arc::ptr_eq(&index1, &index2),
+            "sanity: the SAME file_sources Arc across two calls must reuse the memoized \
+             DepsIndex (cache hit, O(1)) — a per-call rebuild would defeat the whole point \
+             of memoization"
+        );
+
+        // A second, DISTINCT Arc allocation with byte-identical content.
+        let identical_content_sources = Arc::new((*file_sources).clone());
+        let ctx2 = DependencyContext::new(
+            PathBuf::from("file1.cs"),
+            PathBuf::from("."),
+            vec![PathBuf::from("file1.cs")],
+        )
+        .with_file_sources(Arc::clone(&identical_content_sources));
+
+        let index3 = parser.deps_index(&ctx2);
+
+        assert!(
+            !Arc::ptr_eq(&index1, &index3),
+            "a DIFFERENT file_sources Arc — even with byte-identical content — must NOT be \
+             treated as a cache hit against the first Arc's memoized index: a fingerprint \
+             keyed by content (rather than Arc identity) would incorrectly reuse it here, \
+             and computing that content fingerprint on every call is exactly the \
+             O(total project bytes) per-call cost this fix removes"
+        );
+    }
+
     #[test]
     fn deps_index_lookup_recovers_from_a_poisoned_cache_mutex_instead_of_panicking() {
         let parser = parser();
