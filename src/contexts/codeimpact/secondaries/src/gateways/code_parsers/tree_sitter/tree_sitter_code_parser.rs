@@ -124,7 +124,15 @@ impl TreeSitterCodeParser {
     fn deps_index(&self, ctx: &DependencyContext) -> Arc<DepsIndex> {
         let fingerprint = file_set_fingerprint(&ctx.file_sources);
         {
-            let cache = self.deps_index_cache.lock().unwrap();
+            // Poison hardening (#90 T5, Security LOW retry from #33 T5):
+            // unreachable today (this parser is only ever driven
+            // single-threaded), but a poisoned guard must never turn into a
+            // hard panic once a future caller shares one instance across
+            // threads (roadmapped LSP primary) — recover the guard instead.
+            let cache = self
+                .deps_index_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some((cached_fingerprint, index)) = cache.as_ref() {
                 if *cached_fingerprint == fingerprint {
                     return Arc::clone(index);
@@ -136,7 +144,10 @@ impl TreeSitterCodeParser {
             &ctx.file_sources,
             &ctx.source_roots,
         ));
-        *self.deps_index_cache.lock().unwrap() = Some((fingerprint, Arc::clone(&index)));
+        *self
+            .deps_index_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((fingerprint, Arc::clone(&index)));
         index
     }
 }
@@ -303,11 +314,17 @@ fn build_deps_index(
     }
 }
 
-/// A cheap fingerprint of a file SET (US16 T5) — paths and source
-/// LENGTHS, not full content: enough to detect "this is the same project
-/// scan's file list as last time" (memoization's actual purpose — a
-/// `TreeSitterCodeParser` instance lives for one project scan) without
-/// hashing every byte of every file on every one of a project's N calls.
+/// A cheap fingerprint of a file SET (US16 T5, hardened #90 T5 — Security
+/// LOW retry from #33 T5): hashes every file's actual CONTENT, not just its
+/// length. A length-only fingerprint lets two file sets with identical
+/// paths and identical per-file lengths but DIFFERENT content collide,
+/// stale-reusing the memoized `DepsIndex` and silently resolving
+/// cross-file dependencies against the wrong namespace index. Safe today
+/// (a `TreeSitterCodeParser` instance lives for one one-shot CLI scan, so
+/// `file_sources` never actually changes underneath a single instance) but
+/// load-bearing the moment the parser is reused across scans (roadmapped
+/// LSP primary). `DefaultHasher` stays a plain non-cryptographic hash —
+/// still cheap, now correct.
 fn file_set_fingerprint(file_sources: &[(PathBuf, String)]) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -316,7 +333,7 @@ fn file_set_fingerprint(file_sources: &[(PathBuf, String)]) -> u64 {
     file_sources.len().hash(&mut hasher);
     for (path, source) in file_sources {
         path.hash(&mut hasher);
-        source.len().hash(&mut hasher);
+        source.hash(&mut hasher);
     }
     hasher.finish()
 }
