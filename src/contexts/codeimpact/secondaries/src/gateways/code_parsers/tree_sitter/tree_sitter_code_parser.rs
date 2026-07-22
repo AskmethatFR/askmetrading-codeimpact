@@ -79,6 +79,13 @@ struct DepsIndex {
     file_usings: HashMap<PathBuf, Vec<String>>,
 }
 
+/// The `deps_index_cache`'s memoized entry (#90 T5 retry #1): the exact
+/// `file_sources` `Arc` the cached `DepsIndex` was built from, kept
+/// alongside it so a later call can compare by pointer IDENTITY
+/// (`Arc::ptr_eq`) rather than recomputing a content fingerprint — see
+/// `TreeSitterCodeParser::deps_index`'s doc for the full rationale.
+type DepsIndexCacheEntry = (Arc<Vec<(PathBuf, String)>>, Arc<DepsIndex>);
+
 /// Parses C# via `tree-sitter` (US16 T2). `parse` runs a `.scm` query over
 /// the file and assigns each capture to its innermost enclosing function by
 /// byte range (`assign_captures_to_functions`). `resolve_dependencies`
@@ -93,7 +100,7 @@ struct DepsIndex {
 pub struct TreeSitterCodeParser {
     language: Language,
     profile: LanguageProfile,
-    deps_index_cache: Mutex<Option<(Arc<Vec<(PathBuf, String)>>, Arc<DepsIndex>)>>,
+    deps_index_cache: Mutex<Option<DepsIndexCacheEntry>>,
 }
 
 impl TreeSitterCodeParser {
