@@ -28,9 +28,17 @@ pub struct LanguageCapabilities {
     ecological_impact: MetricSupport,
     /// Whether the call graph (transitive/hidden complexity, call depth,
     /// cycles) is built from real resolution or a weaker heuristic — T3's
-    /// C# adapter reports `Degraded` here (name-based resolution, ambiguous
-    /// edges dropped), never a fabricated `Supported`.
+    /// C# adapter reports `Degraded` here (name-based resolution;
+    /// unresolved-receiver calls may merge — T5 corrected this message to
+    /// describe what happens TODAY, the precise dropping of ambiguous
+    /// edges is deferred to T5.3), never a fabricated `Supported`.
     call_graph: MetricSupport,
+    /// Whether the cross-file dependency graph (`resolve_dependencies`) is
+    /// built from exact resolution or a coarser heuristic (US16 T5) — T5's
+    /// C# adapter reports `Degraded` here (namespace-level resolution: a
+    /// file links to every declarer of a used namespace, not necessarily
+    /// the one it actually needed), never a fabricated `Supported`.
+    cross_file_dependencies: MetricSupport,
 }
 
 impl LanguageCapabilities {
@@ -46,6 +54,7 @@ impl LanguageCapabilities {
             economic_impact: MetricSupport::Supported,
             ecological_impact: MetricSupport::Supported,
             call_graph: MetricSupport::Supported,
+            cross_file_dependencies: MetricSupport::Supported,
         }
     }
 
@@ -73,6 +82,10 @@ impl LanguageCapabilities {
         &self.call_graph
     }
 
+    pub fn cross_file_dependencies(&self) -> &MetricSupport {
+        &self.cross_file_dependencies
+    }
+
     /// Builder-style override (mirrors `CodeMetrics::with_economic_impact`)
     /// — an adapter starts from `all_supported` and narrows only the
     /// metrics it cannot honestly claim.
@@ -83,6 +96,11 @@ impl LanguageCapabilities {
 
     pub fn with_call_graph(mut self, support: MetricSupport) -> Self {
         self.call_graph = support;
+        self
+    }
+
+    pub fn with_cross_file_dependencies(mut self, support: MetricSupport) -> Self {
+        self.cross_file_dependencies = support;
         self
     }
 }

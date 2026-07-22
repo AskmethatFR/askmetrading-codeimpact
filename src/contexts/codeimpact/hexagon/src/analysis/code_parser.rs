@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::errors::AnalysisError;
 use super::io_classification::IoClassification;
@@ -42,6 +43,26 @@ pub struct DependencyContext {
     pub current_file: PathBuf,
     pub project_root: PathBuf,
     pub available_files: Vec<PathBuf>,
+    /// Every project file's own path + source text (US16 T5, C# L1) — the
+    /// project-global pre-pass a namespace-based resolver needs (a file's
+    /// declared namespace can only be known by looking at every OTHER
+    /// file, not just `current_file`'s own text). `SynCodeParser` ignores
+    /// this field entirely (Rust's `mod`/`use` resolve from `current_file`
+    /// and `available_files` alone) — additive, non-breaking (ADR-0018).
+    ///
+    /// `Arc`-wrapped (Security HIGH, retry #1): the composition root
+    /// builds ONE `DependencyContext` per file in the project, and the
+    /// SAME full project text is attached to every one of them — a plain
+    /// `Vec` would deep-clone the entire project's source on every
+    /// iteration (O(files × total source bytes)); `Arc::clone` is O(1).
+    pub file_sources: Arc<Vec<(PathBuf, String)>>,
+    /// The configured source roots (US16 T5, absolute, `.codeimpact.json`'s
+    /// `sourceRoots` resolved against `project_root` by the composition
+    /// root) a language adapter may use to scope which of `file_sources`
+    /// contributes to a project-global index. Empty means "unset" — an
+    /// adapter that cares about this field treats empty as "no
+    /// restriction," never as "nothing is in scope."
+    pub source_roots: Vec<PathBuf>,
 }
 
 impl DependencyContext {
@@ -54,7 +75,26 @@ impl DependencyContext {
             current_file,
             project_root,
             available_files,
+            file_sources: Arc::new(Vec::new()),
+            source_roots: Vec::new(),
         }
+    }
+
+    /// Builder-style attachment (mirrors `LanguageCapabilities::with_*`) —
+    /// every project file's own source text, for an adapter whose
+    /// resolution needs more than `current_file` alone (US16 T5). Takes an
+    /// `Arc` the caller already built ONCE — see `file_sources`'s own doc
+    /// for why a plain owned `Vec` here would be an O(files × total
+    /// bytes) foot-gun.
+    pub fn with_file_sources(mut self, file_sources: Arc<Vec<(PathBuf, String)>>) -> Self {
+        self.file_sources = file_sources;
+        self
+    }
+
+    /// Builder-style attachment — the configured source roots (US16 T5).
+    pub fn with_source_roots(mut self, source_roots: Vec<PathBuf>) -> Self {
+        self.source_roots = source_roots;
+        self
     }
 }
 

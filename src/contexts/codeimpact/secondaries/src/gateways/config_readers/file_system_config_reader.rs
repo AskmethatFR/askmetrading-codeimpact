@@ -22,10 +22,10 @@ fn default_respect_gitignore() -> bool {
 }
 
 /// Full `.codeimpact.json` schema (US8 `thresholds` + US31
-/// `include`/`exclude`/`respectGitignore`, plus reserved forward-compat
-/// keys). `deny_unknown_fields` (US31, D-none — a change from US8's
-/// tolerant schema): every reserved key is declared, even the ones this
-/// reader does not yet wire up (`languages`, `sourceRoots`, `extensions`,
+/// `include`/`exclude`/`respectGitignore` + US16 T5 `sourceRoots`, plus
+/// reserved forward-compat keys). `deny_unknown_fields` (US31, D-none — a
+/// change from US8's tolerant schema): every reserved key is declared, even
+/// the ones this reader does not yet wire up (`languages`, `extensions`,
 /// `parser`, `ioSignatures` — typed as loose `serde_json::Value`, parsed
 /// then discarded) — a real future key therefore does not break the
 /// schema, but a typo in ANY key now surfaces as an actionable error
@@ -47,10 +47,13 @@ struct CodeImpactConfig {
     respect_gitignore: bool,
     #[serde(default)]
     thresholds: Option<ThresholdsSection>,
+    /// US16 T5 (Q2): typed and wired — raw strings relative to the project
+    /// root, resolved to absolute `PathBuf`s later by `run_analysis` (the
+    /// adapter boundary never sees the raw string form).
+    #[serde(default, rename = "sourceRoots")]
+    source_roots: Vec<String>,
     #[serde(default, rename = "languages")]
     _languages: Option<serde_json::Value>,
-    #[serde(default, rename = "sourceRoots")]
-    _source_roots: Option<serde_json::Value>,
     #[serde(default, rename = "extensions")]
     _extensions: Option<serde_json::Value>,
     #[serde(default, rename = "parser")]
@@ -138,7 +141,8 @@ impl FileSystemConfigReader {
 
         let analysis_config = AnalysisConfig::new(thresholds, filter)
             .with_io_signature_prefixes(config.io_signatures)
-            .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
+            .map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?
+            .with_source_roots(config.source_roots);
 
         Ok(analysis_config)
     }

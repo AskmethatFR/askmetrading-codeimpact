@@ -18,6 +18,11 @@ use codeimpact_hexagon::analysis::{
 // 5. over MAX_IO_SIGNATURE_COUNT prefixes -> Err(TooManyIoSignaturePrefixes)
 // 6. one prefix over MAX_IO_SIGNATURE_LENGTH chars -> Err(IoSignaturePrefixTooLong)
 // 7. exactly at both caps -> Ok (boundary, not off-by-one)
+//
+// Test List (US16 T5, Q2 — sourceRoots wiring):
+// 8. defaults() -> source_roots() is empty (absent -> defer to run_analysis's
+//    own project_root fallback, D4-style byte-for-byte with pre-T5 behavior)
+// 9. with_source_roots() overrides the default, new() itself still starts empty
 
 #[test]
 fn defaults_has_no_thresholds_and_unrestricted_filter() {
@@ -101,4 +106,21 @@ fn new_exposes_the_given_thresholds_and_filter() {
 
     assert_eq!(config.thresholds(), &thresholds);
     assert_eq!(config.file_filter(), &filter);
+}
+
+#[test]
+fn defaults_has_empty_source_roots() {
+    let config = AnalysisConfig::defaults();
+
+    assert!(config.source_roots().is_empty());
+}
+
+#[test]
+fn with_source_roots_overrides_the_default_empty_list() {
+    let thresholds = AlertThresholds::none();
+    let filter = FileFilter::unrestricted();
+
+    let config = AnalysisConfig::new(thresholds, filter).with_source_roots(vec!["src".to_string()]);
+
+    assert_eq!(config.source_roots(), &["src".to_string()]);
 }

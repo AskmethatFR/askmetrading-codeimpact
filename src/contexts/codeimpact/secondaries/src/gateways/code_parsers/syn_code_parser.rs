@@ -1271,6 +1271,13 @@ mod tests {
         // all-Supported, zero behavior change (same-shape sweep, this test's
         // own assertions already prove the other 4 fields untouched).
         assert_eq!(*capabilities.call_graph(), MetricSupport::Supported);
+        // T5 (US16, #33): cross_file_dependencies joined the capability set
+        // — same-shape sweep as T3's call_graph addition above, Rust stays
+        // all-Supported.
+        assert_eq!(
+            *capabilities.cross_file_dependencies(),
+            MetricSupport::Supported
+        );
     }
 
     // ── Test List (source_guard wiring, #62) ──────────────────────────

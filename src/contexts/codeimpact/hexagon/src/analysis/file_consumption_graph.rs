@@ -93,9 +93,15 @@ impl FileConsumptionGraph {
         let max_depth = if file_list.is_empty() {
             0
         } else {
+            // Memoized across every top-level call (Security HIGH, US16
+            // T5 retry #2) — one shared cache for the whole `file_list`
+            // loop, mirroring the DFS-with-state discipline `detect_cycles`
+            // already uses in this same file. See `compute_depth`'s own
+            // doc for why this is load-bearing, not just an optimization.
             let mut max = 0usize;
+            let mut depth_memo: HashMap<PathBuf, usize> = HashMap::new();
             for path in &file_list {
-                let depth = Self::compute_depth(path, &adjacency, &cycle_nodes);
+                let depth = Self::compute_depth(path, &adjacency, &cycle_nodes, &mut depth_memo);
                 max = max.max(depth);
             }
             max
@@ -364,13 +370,33 @@ impl FileConsumptionGraph {
     }
 
     /// Compute the depth of the longest chain starting from this node.
+    ///
+    /// Memoized in `memo` (Security HIGH, US16 T5 retry #2) — `compute_depth`
+    /// is a pure function of `node` alone given fixed `adjacency`/
+    /// `cycle_nodes`, so caching its result per node changes NOTHING about
+    /// the computed VALUE, only the cost. Without this, a DAG where two
+    /// paths reconverge on a shared descendant (a diamond) recomputes that
+    /// descendant's whole subtree once per incoming path — exponential in
+    /// the worst case, the textbook "count paths without memoization"
+    /// blowup. Dormant under Rust's low-fan-out `mod`/`use` edges, but
+    /// reachable by an ORDINARY C# project once namespace-granularity
+    /// resolution (US16 T5: a `using` links to every declarer of a used
+    /// namespace) produces dense many-to-many edges — no adversary needed.
+    /// `detect_cycles` above already tracks visited state this same way
+    /// (`color`); this closes the one traversal in this file that didn't.
     fn compute_depth(
         node: &Path,
         adjacency: &HashMap<PathBuf, Vec<PathBuf>>,
         cycle_nodes: &HashSet<PathBuf>,
+        memo: &mut HashMap<PathBuf, usize>,
     ) -> usize {
+        if let Some(&cached) = memo.get(node) {
+            return cached;
+        }
+
         // If in cycle, depth stops at this node
         if cycle_nodes.contains(node) {
+            memo.insert(node.to_path_buf(), 1);
             return 1;
         }
 
@@ -379,13 +405,15 @@ impl FileConsumptionGraph {
             .map(|callees| {
                 callees
                     .iter()
-                    .map(|c| Self::compute_depth(c.as_path(), adjacency, cycle_nodes))
+                    .map(|c| Self::compute_depth(c.as_path(), adjacency, cycle_nodes, memo))
                     .max()
                     .unwrap_or(0)
             })
             .unwrap_or(0);
 
-        1 + max_child
+        let depth = 1 + max_child;
+        memo.insert(node.to_path_buf(), depth);
+        depth
     }
 }
 
@@ -632,5 +660,68 @@ mod tests {
         let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
         let pm = graph.aggregated_metrics();
         assert_eq!(pm.total_unclassifiable_io_in_loops, 3);
+    }
+
+    // ── Security HIGH (US16 T5 retry #2) — compute_depth was an
+    // unmemoized recursive walk: on a DAG with overlapping/diamond paths
+    // it recomputes the SAME subtree's depth once per incoming path,
+    // exponential in the worst case (the textbook "count paths without
+    // memoization" blowup — Security's isolated proof: 162ms at 30 nodes,
+    // ~1.6x/golden-ratio growth per node, extrapolating to tens of
+    // minutes by n~45-50). T5's namespace-granularity resolution ("a
+    // `using` links to EVERY file declaring the used namespace")
+    // routinely produces exactly this dense many-to-many shape for an
+    // ORDINARY C# project — no adversary needed. `detect_cycles` in this
+    // SAME file already tracks visited state (`color`); `compute_depth`
+    // must too.
+    //
+    // Test List:
+    // 1. a Fibonacci-shaped DAG (node i -> {i-1, i-2}) mirrors naive
+    //    recursive Fibonacci's own exponential blowup at N=40 nodes —
+    //    completes in well under a second ONLY when memoized (unmemoized:
+    //    ~fib(40) ≈ 102M recursive calls, tens of seconds+). Also pins the
+    //    exact depth VALUE (this fix must be behavior-preserving, never
+    //    change what depth is reported, only its cost).
+    #[test]
+    fn diamond_dag_depth_computation_is_memoized_not_exponential() {
+        const N: usize = 40;
+        let mut files = Vec::new();
+        for i in 0..N {
+            files.push((path(&format!("f{}.rs", i)), make_metrics(1, 1)));
+        }
+        let mut deps = Vec::new();
+        for i in 2..N {
+            deps.push(FileDependency {
+                from: path(&format!("f{}.rs", i)),
+                to: path(&format!("f{}.rs", i - 1)),
+            });
+            deps.push(FileDependency {
+                from: path(&format!("f{}.rs", i)),
+                to: path(&format!("f{}.rs", i - 2)),
+            });
+        }
+
+        let start = std::time::Instant::now();
+        let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+        let elapsed = start.elapsed();
+
+        // Behavior-preserving: depth(i) = i for i >= 2, since
+        // depth(i) = 1 + max(depth(i-1), depth(i-2)) = 1 + depth(i-1)
+        // (depth is non-decreasing in i) — the deepest chain is the
+        // last node's, length N-1.
+        assert_eq!(
+            graph.max_depth(),
+            N - 1,
+            "memoization must not change the computed depth VALUE"
+        );
+        assert!(
+            elapsed.as_secs() < 5,
+            "compute_depth must be memoized (O(V+E)) — took {:?} for a \
+             {}-node Fibonacci-shaped DAG; unmemoized this mirrors naive \
+             recursive fib({}) ≈ 100M+ calls (tens of seconds or more)",
+            elapsed,
+            N,
+            N
+        );
     }
 }
