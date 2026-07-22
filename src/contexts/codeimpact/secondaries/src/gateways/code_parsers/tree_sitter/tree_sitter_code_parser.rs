@@ -84,7 +84,8 @@ struct DepsIndex {
 /// byte range (`assign_captures_to_functions`). `resolve_dependencies`
 /// (US16 T5) resolves C#'s `using` directives through a project-global
 /// `DepsIndex`, built once per run from `DependencyContext::file_sources`
-/// and memoized in `deps_index_cache` (keyed on a file-set fingerprint) —
+/// and memoized in `deps_index_cache` (keyed on the `file_sources` `Arc`'s
+/// pointer IDENTITY, #90 T5 retry #1 — see `deps_index`'s doc for why) —
 /// every file in a project scan shares the SAME `file_sources`/
 /// `source_roots`, so the expensive tree-sitter pass over every project
 /// file (including `current_file` itself) runs exactly once per run, not
@@ -92,7 +93,7 @@ struct DepsIndex {
 pub struct TreeSitterCodeParser {
     language: Language,
     profile: LanguageProfile,
-    deps_index_cache: Mutex<Option<(u64, Arc<DepsIndex>)>>,
+    deps_index_cache: Mutex<Option<(Arc<Vec<(PathBuf, String)>>, Arc<DepsIndex>)>>,
 }
 
 impl TreeSitterCodeParser {
@@ -119,10 +120,25 @@ impl TreeSitterCodeParser {
     }
 
     /// The memoized `DepsIndex` for `ctx`'s project — rebuilt only when
-    /// `ctx.file_sources` changes shape (US16 T5). `Arc` keeps a cache
-    /// hit's clone O(1) rather than O(index size).
+    /// `ctx.file_sources` is a DIFFERENT `Arc` allocation than the one the
+    /// cache was last built from (US16 T5, keying rule hardened #90 T5
+    /// retry #1 — Dev-B changes-requested, Security MEDIUM CWE-400, QA
+    /// convergent). `run_analysis` builds ONE `file_sources` `Arc` per scan
+    /// and clones the SAME `Arc` into every file's `DependencyContext`
+    /// (`Arc::clone(&file_sources)` in the project loop), so `Arc::ptr_eq`
+    /// is a correct, O(1), never-rehashing cache key: `Vec<(PathBuf,
+    /// String)>` has no interior mutability, so "same Arc" already implies
+    /// "same content" — no hash needed to prove it. A prior content-hash
+    /// fingerprint fixed a stale-reuse bug but reintroduced the cost it was
+    /// meant to avoid: hashing every file's full text on EVERY call, which
+    /// `resolve_dependencies` makes once PER PROJECT FILE — O(N_files x
+    /// total_source_bytes) per scan, in production today, not just under a
+    /// future LSP reuse. The trade Arc-identity makes: two distinct,
+    /// byte-identical `Arc` allocations no longer share a cache entry and
+    /// rebuild instead — rare (would need two independently-constructed
+    /// `file_sources` vectors with identical content) and harmless (an
+    /// extra rebuild, never a correctness issue).
     fn deps_index(&self, ctx: &DependencyContext) -> Arc<DepsIndex> {
-        let fingerprint = file_set_fingerprint(&ctx.file_sources);
         {
             // Poison hardening (#90 T5, Security LOW retry from #33 T5):
             // unreachable today (this parser is only ever driven
@@ -133,8 +149,8 @@ impl TreeSitterCodeParser {
                 .deps_index_cache
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some((cached_fingerprint, index)) = cache.as_ref() {
-                if *cached_fingerprint == fingerprint {
+            if let Some((cached_sources, index)) = cache.as_ref() {
+                if Arc::ptr_eq(cached_sources, &ctx.file_sources) {
                     return Arc::clone(index);
                 }
             }
@@ -148,7 +164,7 @@ impl TreeSitterCodeParser {
             .deps_index_cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            Some((fingerprint, Arc::clone(&index)));
+            Some((Arc::clone(&ctx.file_sources), Arc::clone(&index)));
         index
     }
 }
@@ -313,30 +329,6 @@ fn build_deps_index(
         namespace_declarers,
         file_usings,
     }
-}
-
-/// A cheap fingerprint of a file SET (US16 T5, hardened #90 T5 — Security
-/// LOW retry from #33 T5): hashes every file's actual CONTENT, not just its
-/// length. A length-only fingerprint lets two file sets with identical
-/// paths and identical per-file lengths but DIFFERENT content collide,
-/// stale-reusing the memoized `DepsIndex` and silently resolving
-/// cross-file dependencies against the wrong namespace index. Safe today
-/// (a `TreeSitterCodeParser` instance lives for one one-shot CLI scan, so
-/// `file_sources` never actually changes underneath a single instance) but
-/// load-bearing the moment the parser is reused across scans (roadmapped
-/// LSP primary). `DefaultHasher` stays a plain non-cryptographic hash —
-/// still cheap, now correct.
-fn file_set_fingerprint(file_sources: &[(PathBuf, String)]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    file_sources.len().hash(&mut hasher);
-    for (path, source) in file_sources {
-        path.hash(&mut hasher);
-        source.hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 /// Runs `guard_admissible`-style checks then `extract_deps` inside
