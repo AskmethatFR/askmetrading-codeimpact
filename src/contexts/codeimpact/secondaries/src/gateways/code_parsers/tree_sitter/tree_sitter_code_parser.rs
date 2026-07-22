@@ -1418,10 +1418,10 @@ mod tests {
     // ── Security hardening (#90 T5, two LOW items deferred from #33 T5) ──
     // Both must be closed before an LSP primary reuses a single
     // TreeSitterCodeParser instance across scans:
-    //   1. file_set_fingerprint must hash CONTENT, not just per-file
-    //      lengths — a length-only fingerprint lets two file sets with the
-    //      same paths/lengths but different content collide, silently
-    //      stale-reusing the memoized DepsIndex.
+    //   1. deps_index_cache must not stale-reuse a memoized DepsIndex for a
+    //      different file set — keyed on Arc pointer identity so a changed
+    //      file set (a fresh Arc) always rebuilds (retry #1 replaced the
+    //      earlier content fingerprint; see `deps_index`).
     //   2. deps_index_cache's two lock sites must recover from mutex
     //      poisoning instead of propagating the panic.
 
