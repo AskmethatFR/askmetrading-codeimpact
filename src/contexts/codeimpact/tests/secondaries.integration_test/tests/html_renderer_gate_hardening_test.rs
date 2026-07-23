@@ -26,6 +26,9 @@
 //    banned literal
 // 5. style_sink gate catches a bare `el.style = value` reassignment, no
 //    banned literal
+// 6. html_sink gate catches `Object.assign(el, { [prop]: hostileMarkup })`
+//    bulk-set, no banned literal — the gate's own `Object.assign(` check
+//    (rendering_gate.rs) had no covering test (QA #28 retry #1)
 
 use codeimpact_secondaries::gateways::report_writers::html::assets;
 use codeimpact_secondaries_integration_test::rendering_gate::{
@@ -127,5 +130,29 @@ fn style_sink_gate_catches_bare_style_reassignment() {
     assert!(
         !style_sink_violations(&bypassed_js).is_empty(),
         "expected the style-sink gate to catch a bare `.style =` reassignment"
+    );
+}
+
+#[test]
+fn html_sink_gate_catches_object_assign_bulk_property_set_with_no_banned_literal_present() {
+    let bypass =
+        "\nObject.assign(document.getElementById(\"x\"), { [dynamicSinkProp]: hostileMarkup });\n";
+    let bypassed_js = format!("{}{}", assets::JS, bypass);
+
+    assert!(
+        html_sink_violations(assets::JS).is_empty(),
+        "the real emitted JS must stay clean before the bypass is appended"
+    );
+
+    let violations = html_sink_violations(&bypassed_js);
+    assert!(
+        !violations.is_empty(),
+        "expected the html-sink gate to catch Object.assign( bulk-setting an arbitrary \
+         property, got no violations"
+    );
+    assert!(
+        violations.iter().any(|v| v.contains("Object.assign(")),
+        "expected a violation mentioning Object.assign(, got: {:?}",
+        violations
     );
 }
