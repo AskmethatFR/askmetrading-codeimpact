@@ -2,7 +2,7 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-23 (dette Batch 1 — #73 appartenance boucle `for` résolue (ADR-0016), #86 porte `cargo-deny` RUSTSEC en CI (ADR-0009) ; sur #90 T5 ADR-0024, ADR-0023 index dépendances C#, ADR-0022 I/O-en-boucle T4, ADR-0021 dégradation honnête T3)
+> **Updated:** 2026-07-23 (dette Batch 2 — #87 recette couverture, sonde hors `llvm-cov-target` + parallélisme plafonné (ADR-0025) ; Batch 1 — #73 appartenance boucle `for` résolue (ADR-0016), #86 porte `cargo-deny` RUSTSEC en CI (ADR-0009) ; sur #90 T5 ADR-0024, ADR-0023 index dépendances C#, ADR-0022 I/O-en-boucle T4)
 
 ## Nodes
 
@@ -38,6 +38,7 @@
 | ADR-0022 | technical | Classification I/O-en-boucle C# — le qualificatif statique affirme, le récepteur s'abstient (US14-T4) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0016]], [[ADR-0020]], [[ADR-0019]], [[ADR-0021]], [[ADR-0010]], [[glossary]] | docs/ADR-0022-csharp-io-in-loops-static-asserts-receiver-abstains.md |
 | ADR-0023 | technical | Résolution des dépendances inter-fichiers C# — index namespace→fichiers, arêtes N:M, `sourceRoots` câblé, dégradation honnête (US14-T5) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[ADR-0024]], [[glossary]] | docs/ADR-0023-csharp-cross-file-dependency-namespace-index.md |
 | ADR-0024 | technical | Cache du `DepsIndex` mémoïsé — clé sur identité de pointeur `Arc` (`Arc::ptr_eq`), empreinte de contenu supprimée, durcissement poison mutex (#90 T5) | Applied | 2026-07-22 | [[architecture-overview]], [[ADR-0023]], [[ADR-0020]], [[ADR-0006]], [[ADR-0015]], [[glossary]] | docs/ADR-0024-deps-index-cache-arc-identity-keying.md |
+| ADR-0025 | technical | Recette de couverture — sonde construite hors `llvm-cov-target`, `--test-threads=4`, source unique CI+local (#87) | Applied | 2026-07-23 | [[architecture-overview]], [[ADR-0009]], [[ADR-0010]], [[ADR-0015]] | docs/ADR-0025-coverage-tooling-recipe.md |
 | glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]] | docs/glossary.md |
 
 ## Graph Health
