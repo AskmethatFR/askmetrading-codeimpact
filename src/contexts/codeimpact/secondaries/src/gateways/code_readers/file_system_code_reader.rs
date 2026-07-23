@@ -5,8 +5,8 @@ use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use ignore::WalkBuilder;
 use ignore::overrides::{Override, OverrideBuilder};
+use ignore::WalkBuilder;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 128;
