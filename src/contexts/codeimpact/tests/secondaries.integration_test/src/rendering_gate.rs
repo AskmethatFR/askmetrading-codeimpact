@@ -93,8 +93,7 @@ pub fn style_sink_violations(source: &str) -> Vec<String> {
 
     if bare_style_assignment(source) {
         violations.push(
-            "banned bare `.style =` reassignment found (bypasses the two-sink budget)"
-                .to_string(),
+            "banned bare `.style =` reassignment found (bypasses the two-sink budget)".to_string(),
         );
     }
 
@@ -112,8 +111,7 @@ fn bare_style_assignment(source: &str) -> bool {
         let match_start = search_from + offset;
         let after = source[match_start + needle.len()..].trim_start();
         let continues_as_property_or_index = after.starts_with('.') || after.starts_with('[');
-        if !continues_as_property_or_index && after.starts_with('=') && !after.starts_with("==")
-        {
+        if !continues_as_property_or_index && after.starts_with('=') && !after.starts_with("==") {
             return true;
         }
         search_from = match_start + needle.len();
