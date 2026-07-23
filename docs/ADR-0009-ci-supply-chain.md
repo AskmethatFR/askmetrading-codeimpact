@@ -67,6 +67,16 @@ Or le déclencheur `pull_request` exécute **le workflow tel qu'il est défini d
 
 `.gitignore` ne couvre que `target/` et `Cargo.lock`. `.DS_Store`, `report.html` et `reports/` ne sont pas ignorés — le premier contributeur macOS commitera un `.DS_Store`. À corriger avant d'annoncer l'ouverture du dépôt.
 
+## Addendum #86 (PR #99) — porte `cargo-deny` : advisories RUSTSEC en CI
+
+La posture supply-chain de la §2 imposait l'épinglage SHA/version des actions et outils, mais **rien n'automatisait la garantie « aucune CVE connue » sur les dépendances elles-mêmes** — elle reposait sur la mémoire du relecteur. #86 ferme ce trou.
+
+- **`deny.toml`** (racine) — sections `[advisories]` / `[licenses]` / `[bans]` / `[sources]`. Les advisories RUSTSEC échouent le build (fail-closed, `ignore = []`) ; vérifié empiriquement en injectant `time =0.1.42` (RUSTSEC-2020-0071) → `advisories FAILED`, exit 1.
+- **Job CI `cargo-deny`** (`.github/workflows/ci.yml`, après `clippy`) — action `EmbarkStudios/cargo-deny-action` épinglée au **SHA de commit** de `v2.1.1` (§2 respectée), `arguments: ""` pour ne pas forcer `--all-features` (cohérent avec `[graph] all-features = false`). C'est le **5ᵉ check requis** de la protection de branche, aux côtés de `fmt`/`clippy`/`test`/`coverage`/`slow-tests`.
+- **Effet de bord assumé** : `cargo deny check licenses` a révélé qu'**aucun crate du workspace ne déclarait de `license`** alors que le dépôt porte un `LICENSE` Apache-2.0. Corrigé en déclarant `license = "Apache-2.0"` au niveau `[workspace.package]` + `license.workspace = true` sur les 6 membres — la licence était déjà tranchée par le fichier `LICENSE`, aucune décision nouvelle. Choix de **corriger, pas masquer** (`[licenses.private] ignore = false`), conformément à l'interdiction de supprimer un finding réel.
+
+La dette « recompilation de `cargo-llvm-cov` à chaque run » (§Conséquences) reste ouverte ; `cargo-deny` est installé via l'action épinglée, pas recompilé.
+
 ## Note de numérotation
 
 Ce cycle occupe **ADR-0009**. Les études #30 (multi-langage) et #35 (modèle d'impact unifié) proposent chacune des ADR encore non écrits : ils prendront **ADR-0010 et suivants** au moment de leur phase Documentation. Les numéros cités dans le corps de ces deux études sont des brouillons et doivent être réalloués.
