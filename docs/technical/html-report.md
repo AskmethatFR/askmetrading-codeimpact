@@ -205,6 +205,33 @@ branch entirely. CI's `test` and `coverage` jobs pin Node 22 via
 `actions/setup-node` (`.github/workflows/ci.yml`) so the loud-skip path is a
 local-dev-only concern, never a CI ambiguity.
 
+**Why Node/jsdom over an in-Rust engine (boa/quickjs)?** A hand-rolled DOM shim
+wrapped around boa/quickjs could only validate its own assumptions about HTML
+parsing — "no markup was parsed" is a claim only falsifiable against a real,
+spec-conformant HTML parser, which jsdom genuinely is and a hand-rolled shim is
+not. The dev-only Node dependency (never on the `Cargo.toml`/hexagon/secondaries
+graph) buys that independence.
+
+**Known residuals**, recorded here so a future maintainer inherits them instead
+of rediscovering them:
+
+1. The STATIC gate (`rendering_gate`) is a text scanner — a dynamically
+   constructed sink identifier (e.g.
+   `node[String.fromCharCode(105,110,110,101,114,72,84,77,76)]`, which spells
+   `innerHTML` at runtime) structurally evades it. Accepted: diminishing
+   returns — nobody writes that unobfuscated by accident, and a Dev-B review
+   would flag it.
+2. The RUNTIME jsdom test's adversarial data path is **scoped**: it patches the
+   root node's `level`/`metrics` and the tree's `name`/`path` (via the crafted
+   file paths fed into the real Rust pipeline), but does **not** feed hostile
+   data through `renderWarnings`/`renderIo`/`renderFunctions`/`renderImpact`/
+   `renderThresholds`/`renderUnmeasurable`. A future sink hidden in one of
+   those under-exercised rendering paths could evade both layers
+   simultaneously. Mitigant: all text funnels through the shared `el()`/`cls()`
+   helpers (rules 1/3/4 above), so the verified mechanism is common code
+   shared by every render function, not something proven per-callsite —
+   residual risk is low, not absent.
+
 ## Security — XSS defense (the load-bearing decision)
 
 Two layers (ADR-8.5 / ADR-8.6):
