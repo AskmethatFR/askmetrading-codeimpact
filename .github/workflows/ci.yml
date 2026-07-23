@@ -33,6 +33,21 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # Supply-chain gate (#86): fails the build on any RUSTSEC advisory
+      # against the resolved dependency graph (tree-sitter, ignore, globset,
+      # etc.), plus license/bans/sources per deny.toml at the repo root.
+      # `arguments: ""` overrides the action's default `--all-features` so
+      # CI resolves the same default-feature graph verified locally.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: ""
+
   test:
     name: test
     runs-on: ubuntu-latest
