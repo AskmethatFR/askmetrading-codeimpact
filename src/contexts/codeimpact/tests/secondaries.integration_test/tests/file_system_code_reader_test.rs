@@ -567,13 +567,22 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     // dramatically cheaper than fully enumerating it — if it is only
     // filtered post-walk (the pre-#96 bug), both walks pay the same
     // directory-descent cost and the ratio collapses to ~1.
+    // Nested two levels deep (target/dN/eM/), not flat: the walk-time win
+    // comes from PRUNING descent past the first excluded level, so the
+    // fixture must have enough sub-levels below that first match for a
+    // regression (full recursive descent) to actually cost extra directory
+    // reads. A flat "target/<20000 single-file dirs>" shape under-measures
+    // this, since both walks pay the same single readdir into `target`
+    // either way.
     let dir = isolated_walk_dir("exclude_perf_smoke");
     std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
     let excluded_root = dir.join("target");
-    for i in 0..20_000 {
-        let sub = excluded_root.join(format!("d{i}"));
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(sub.join("f.rs"), "fn f() {}").unwrap();
+    for i in 0..50 {
+        for j in 0..50 {
+            let sub = excluded_root.join(format!("d{i}")).join(format!("e{j}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("f.rs"), "fn f() {}").unwrap();
+        }
     }
 
     let reader = FileSystemCodeReader::new();
@@ -604,18 +613,19 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     );
     assert_eq!(
         full_files.len(),
-        20_001,
+        2_501,
         "the unrestricted walk must still enumerate every file (sanity check \
          on the fixture itself), got {} files",
         full_files.len()
     );
     assert!(
         excluded_elapsed * 3 < full_elapsed,
-        "excluding a subtree with 20 000 nested directories must be pruned \
-         during descent, not fully enumerated then filtered — excluded walk \
-         took {:?}, full walk took {:?} (expected the excluded walk to be \
-         well under a third of the full walk, generous margin below the \
-         reported 34x, regression alarm for the reported slowdown)",
+        "excluding a subtree nested two levels deep (50x50 directories) must \
+         be pruned during descent, not fully enumerated then filtered — \
+         excluded walk took {:?}, full walk took {:?} (expected the excluded \
+         walk to be well under a third of the full walk, generous margin \
+         below the reported 34x, regression alarm for the reported \
+         slowdown)",
         excluded_elapsed,
         full_elapsed
     );
