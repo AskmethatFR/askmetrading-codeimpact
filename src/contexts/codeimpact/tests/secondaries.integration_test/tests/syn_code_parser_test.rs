@@ -1022,3 +1022,46 @@ fn self_field_method_call_stays_bare_not_resolved_to_enclosing_type() {
         "no fabricated edge means no hidden complexity from S::m"
     );
 }
+
+// #73 — a `for` loop's iterator-producing expression (`expr_for.expr`) runs
+// exactly ONCE per loop entry, not once per iteration (e.g. `rdr.lines()` in
+// `for (i, line) in rdr.lines().enumerate() { .. }`). Calls reached while
+// visiting it must NOT be recorded as inside the loop. `Expr::While`'s `cond`
+// is untouched — it IS re-evaluated every iteration, so it stays in scope.
+//
+// Test List:
+// 1. io_call_in_for_loop_iterator_expression_not_tracked_as_in_loop — a call
+//    reached only through the iterator expression is not in calls_in_loops.
+// 2. call_in_for_loop_body_still_tracked_when_iterator_expression_also_has_a_call
+//    — the discriminating case: iterator AND body both carry calls; only the
+//    body's call must survive in calls_in_loops.
+
+#[test]
+fn io_call_in_for_loop_iterator_expression_not_tracked_as_in_loop() {
+    let parser = parser();
+    let source = "fn test() {\n    for _ in std::fs::read_to_string(\"f\") {\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert!(
+        functions[0].calls_in_loops.is_empty(),
+        "the for-loop's iterator expression runs once per loop entry, not once per iteration — \
+         its calls must not be recorded as inside the loop, got {:?}",
+        functions[0].calls_in_loops
+    );
+}
+
+#[test]
+fn call_in_for_loop_body_still_tracked_when_iterator_expression_also_has_a_call() {
+    let parser = parser();
+    let source = "fn test() {\n    for _ in std::fs::read_to_string(\"f\").lines() {\n        std::net::TcpStream::connect(\"b\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(
+        functions[0].calls_in_loops.len(),
+        1,
+        "only the body's call must be tracked as in-loop, got {:?}",
+        functions[0].calls_in_loops
+    );
+    assert_eq!(
+        functions[0].calls_in_loops[0].name,
+        "std::net::TcpStream::connect"
+    );
+}
