@@ -1,0 +1,58 @@
+# cargo-deny configuration — supply-chain gate for the CodeImpact workspace.
+# https://embarkstudios.github.io/cargo-deny/
+#
+# Scope: `[advisories]` is the reason this file exists (#86 — RUSTSEC gate).
+# `[licenses]`, `[bans]`, `[sources]` are kept minimal-but-complete so
+# `cargo deny check` (all lints) is green on the current tree without
+# suppressing anything real.
+
+[graph]
+all-features = false
+no-default-features = false
+
+# ---------------------------------------------------------------------------
+# advisories — the actual gate this ticket asks for.
+# A known RUSTSEC vulnerability fails the build (cargo-deny's default lint
+# level for `vulnerability` is already `deny`; `unmaintained` stays at its
+# default `warn` — visibility without blocking merges on advisories the team
+# doesn't control the fix for). `ignore` is empty on purpose: there is
+# nothing to suppress on the current tree, and any future entry here must
+# carry a reason.
+# ---------------------------------------------------------------------------
+[advisories]
+ignore = []
+yanked = "deny"
+
+# ---------------------------------------------------------------------------
+# licenses — permissive-only allow list, matching every license actually
+# present in the resolved dependency graph (verified via `cargo deny check
+# licenses` against this tree). Unicode-3.0 is required alongside MIT/
+# Apache-2.0 because unicode-ident's expression is an AND, not an OR.
+# ---------------------------------------------------------------------------
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unlicense",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+# ---------------------------------------------------------------------------
+# bans — no crate is banned today; multiple-versions and wildcards stay
+# non-fatal warnings so this file doesn't spuriously fail as the tree grows.
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+# ---------------------------------------------------------------------------
+# sources — only the crates.io registry is trusted; no git dependencies.
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
