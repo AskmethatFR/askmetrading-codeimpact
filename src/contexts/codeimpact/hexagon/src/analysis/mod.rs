@@ -58,7 +58,7 @@ pub use io_classification::IoClassification;
 pub use io_in_loop_warning::IoInLoopWarning;
 pub use io_in_loops_detector::IoInLoopsDetector;
 pub use language::Language;
-pub use language_capabilities::{LanguageCapabilities, MetricSupport};
+pub use language_capabilities::{AggregateMetricSupport, LanguageCapabilities, MetricSupport};
 pub use output_format::OutputFormat;
 pub use parser_registry::ParserRegistry;
 pub use proactive_analyzer::analyze;

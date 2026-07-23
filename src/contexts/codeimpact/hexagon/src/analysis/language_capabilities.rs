@@ -104,3 +104,50 @@ impl LanguageCapabilities {
         self
     }
 }
+
+/// A project-level `MetricSupport`, one per metric axis, folded from every
+/// analyzed file's `LanguageCapabilities` (#89 S1, ADR-0021 "dette connue"
+/// T3b follow-up). ADR-0021 rendered the honest `n/a`/`Degraded` signal
+/// per-file; this VO extends the same honesty to the project aggregate
+/// (banner stat tiles) — a purely-C# project must read "n/a" for
+/// `io_in_loops`, never a fabricated "0".
+///
+/// Four axes only (human-approved Q3: wire ALL tiles to their axis) — the
+/// ones an S1 calling use case (`build_stats`, HTML writer) actually
+/// consumes. `call_graph`/`cross_file_dependencies` have no stat tile yet,
+/// so they are not folded here (YAGNI: no calling use case, no VO field).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggregateMetricSupport {
+    cyclomatic_complexity: MetricSupport,
+    io_in_loops: MetricSupport,
+    economic_impact: MetricSupport,
+    ecological_impact: MetricSupport,
+}
+
+impl AggregateMetricSupport {
+    /// Folds one project-level `MetricSupport` per axis from every file's
+    /// declared capabilities. A `None` (no capabilities attached — the Rust
+    /// case, ADR-0021 D1) contributes `Supported` to every axis, so a
+    /// Rust-only project folds to all-`Supported` and its tiles stay
+    /// unchanged.
+    pub fn fold<'a>(capabilities: impl Iterator<Item = Option<&'a LanguageCapabilities>>) -> Self {
+        let _ = capabilities;
+        todo!("lattice fold — scaffold only, see #89 tech spec")
+    }
+
+    pub fn cyclomatic_complexity(&self) -> &MetricSupport {
+        &self.cyclomatic_complexity
+    }
+
+    pub fn io_in_loops(&self) -> &MetricSupport {
+        &self.io_in_loops
+    }
+
+    pub fn economic_impact(&self) -> &MetricSupport {
+        &self.economic_impact
+    }
+
+    pub fn ecological_impact(&self) -> &MetricSupport {
+        &self.ecological_impact
+    }
+}
