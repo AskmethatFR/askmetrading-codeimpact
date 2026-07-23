@@ -64,10 +64,6 @@ fn detect_node() -> NodeStatus {
     }
 }
 
-pub fn node_available() -> bool {
-    matches!(detect_node(), NodeStatus::Ready)
-}
-
 /// Call at the top of every test that needs Node.js. Panics with a loud,
 /// unmistakable banner (visible in default `cargo test` failure output, no
 /// `--nocapture` needed) rather than returning quietly — see the module
