@@ -131,8 +131,35 @@ impl AggregateMetricSupport {
     /// Rust-only project folds to all-`Supported` and its tiles stay
     /// unchanged.
     pub fn fold<'a>(capabilities: impl Iterator<Item = Option<&'a LanguageCapabilities>>) -> Self {
-        let _ = capabilities;
-        todo!("lattice fold — scaffold only, see #89 tech spec")
+        let mut cyclomatic_complexity = AxisTally::default();
+        let mut io_in_loops = AxisTally::default();
+        let mut economic_impact = AxisTally::default();
+        let mut ecological_impact = AxisTally::default();
+        let all_supported = MetricSupport::Supported;
+
+        for file_capabilities in capabilities {
+            match file_capabilities {
+                Some(caps) => {
+                    cyclomatic_complexity.record(caps.cyclomatic_complexity());
+                    io_in_loops.record(caps.io_in_loops());
+                    economic_impact.record(caps.economic_impact());
+                    ecological_impact.record(caps.ecological_impact());
+                }
+                None => {
+                    cyclomatic_complexity.record(&all_supported);
+                    io_in_loops.record(&all_supported);
+                    economic_impact.record(&all_supported);
+                    ecological_impact.record(&all_supported);
+                }
+            }
+        }
+
+        Self {
+            cyclomatic_complexity: cyclomatic_complexity.resolve(),
+            io_in_loops: io_in_loops.resolve(),
+            economic_impact: economic_impact.resolve(),
+            ecological_impact: ecological_impact.resolve(),
+        }
     }
 
     pub fn cyclomatic_complexity(&self) -> &MetricSupport {
@@ -149,5 +176,47 @@ impl AggregateMetricSupport {
 
     pub fn ecological_impact(&self) -> &MetricSupport {
         &self.ecological_impact
+    }
+}
+
+/// One axis' running tally across the files folded so far — private, `fold`
+/// runs one per axis. Resolves to the approved lattice: `Degraded` wins over
+/// everything (a single per-file `Degraded`, OR a mix of `Supported` and
+/// `Unsupported` files with no per-file `Degraded` at all); `Unsupported`
+/// only when nothing at all was measured; `Supported` otherwise, including
+/// the empty/vacuous case. The `Degraded` reason is always the precise
+/// coverage count (human-approved Q2), never a concatenation of individual
+/// per-file reasons — `supported` counts only fully-`Supported` files, so it
+/// reads as "how many files gave a clean measurement" regardless of whether
+/// the rest were `Degraded` or `Unsupported`.
+#[derive(Default)]
+struct AxisTally {
+    total: usize,
+    supported: usize,
+    any_degraded: bool,
+    any_unsupported: bool,
+}
+
+impl AxisTally {
+    fn record(&mut self, support: &MetricSupport) {
+        self.total += 1;
+        match support {
+            MetricSupport::Supported => self.supported += 1,
+            MetricSupport::Degraded(_) => self.any_degraded = true,
+            MetricSupport::Unsupported => self.any_unsupported = true,
+        }
+    }
+
+    fn resolve(&self) -> MetricSupport {
+        if self.any_degraded || (self.supported > 0 && self.any_unsupported) {
+            MetricSupport::Degraded(format!(
+                "partial: {}/{} files measured this metric",
+                self.supported, self.total
+            ))
+        } else if self.any_unsupported {
+            MetricSupport::Unsupported
+        } else {
+            MetricSupport::Supported
+        }
     }
 }
