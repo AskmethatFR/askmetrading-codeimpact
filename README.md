@@ -207,6 +207,15 @@ Niveau: low
 | **DeepConditional** | Imbrication conditionnelle trop profonde | > 5 niveaux de `if` |
 | **I/O dans boucles** | Appel I/O dans une boucle | `std::fs::read` dans `for` |
 
+## Développement
+
+```bash
+cargo test --workspace       # suite complète
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
+./scripts/coverage.sh        # coverage (`cargo llvm-cov`) — mêmes étapes que la CI, voir le script pour le détail (#87)
+```
+
 ## Licence
 
 MIT
