@@ -49,6 +49,14 @@ use codeimpact_secondaries::gateways::config_readers::file_system_config_reader:
 // US16 T5 — sourceRoots wiring:
 // 22. sourceRoots is parsed AND wired into AnalysisConfig::source_roots()
 //     (Q2 — no longer inert)
+//
+// #85 — deny_unknown_fields on the NESTED thresholds section:
+// 23. a typo'd/unknown key INSIDE "thresholds" (e.g. "max_energy_kw" instead
+//     of "max_energy_kwh") is now REJECTED — closes the gap left by #31's
+//     top-level-only enforcement, where a nested typo was silently dropped
+//     instead of surfacing as an actionable error. (Guard against
+//     over-rejection: test 1, valid_config_with_thresholds_section_is_read,
+//     already pins that a well-formed thresholds section keeps parsing Ok.)
 
 fn isolated_dir(test_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -500,6 +508,32 @@ fn syntactically_odd_but_shape_valid_glob_parses_successfully_here() {
         .expect("read should succeed — glob syntax is validated at walk time, not here")
         .expect("file was present");
     assert_eq!(config.file_filter().exclude(), &["src/[".to_string()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn nested_thresholds_unknown_key_is_rejected() {
+    let dir = isolated_dir("nested_unknown_key");
+    let config_path = dir.join(".codeimpact.json");
+    // "max_energy_kw" is a typo of "max_energy_kwh" — must be REJECTED
+    // (deny_unknown_fields on ThresholdsSection, #85), not silently dropped
+    // the way an un-annotated nested struct tolerates it.
+    std::fs::write(
+        &config_path,
+        r#"{"thresholds":{"max_energy_kw":12.5,"max_co2_grams":7.0}}"#,
+    )
+    .unwrap();
+
+    let reader = FileSystemConfigReader::new();
+    let result = reader.read_config(Some(&config_path), &[]);
+
+    let err = result.expect_err("a typo'd/unknown key nested inside thresholds must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("max_energy_kw"),
+        "the error should name the offending nested key: {}",
+        message
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
