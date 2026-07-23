@@ -8,3 +8,9 @@ members = [
     "src/contexts/codeimpact/tests/secondaries.integration_test",
     "src/contexts/codeimpact/tests/primaries.e2e_test",
 ]
+
+# Matches the Apache-2.0 LICENSE file at the repo root. Declared once here so
+# `cargo deny check licenses` (#86) can resolve every workspace member's
+# license instead of reporting it unlicensed.
+[workspace.package]
+license = "Apache-2.0"
