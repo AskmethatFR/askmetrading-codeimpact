@@ -80,9 +80,16 @@ Discipline *freeze-then-measure* d'[[ADR-0014]] §5 : les listes ont été gelé
 - **(−)** L'abstention laisse passer des I/O réelles non prouvées (les `write_all` de ripgrep en sont probablement) — **prix assumé** du zéro-faux-positif ; le compteur en rend le volume visible.
 - **(−)** Un champ additif de plus sur chaque surface ([[ADR-0007]] respecté, rien de retiré ni renommé).
 
+## #73 — appartenance à la boucle du `for` : **résolu** (PR #100)
+
+Cette dette, ouverte par la calibration T3 ci-dessus, est **fermée**. `Expr::ForLoop` incrémentait `loop_depth` **avant** de visiter l'expression d'itérateur (`expr_for.expr`) — or celle-ci s'exécute **une fois par entrée de boucle**, pas par itération. Dans ripgrep `gitignore.rs:412`, `rdr.lines()` était donc compté comme appel *en boucle* : faux positif d'**appartenance** (membership), la **classification** `Io` elle-même restant correcte.
+
+**Correctif** (`syn_code_parser.rs`, bras `Expr::ForLoop`) : visiter `expr_for.expr` à la profondeur **extérieure**, puis n'incrémenter `loop_depth` que pour le corps. `Expr::While` (dont le `cond` est ré-évalué à chaque itération, donc légitimement *dans* la boucle) et `Expr::Loop` (sans expression d'entrée) sont inchangés — la correction est spécifique au `for`.
+
+**Pinné par 5 tests** (`syn_code_parser_test.rs`) : appel dans l'expression d'itérateur exclu / appel du corps inclus ; cas `for`-dans-`for` imbriqué dans l'itérateur (bookkeeping `max_depth`/`has_nested_loop`) ; régression `while`-cond (garde-fou de l'invariant non touché) ; fixture forme-ripgrep `.lines().enumerate()`. Discrimination vérifiée par revert pré-fix (membership 3-vs-1, `max_depth` divergent).
+
 ## Dette connue, explicitement non traitée
 
-- **#73 — appartenance à la boucle du `for` : l'expression d'itérateur est comptée *dans* la boucle.** Découvert pendant la calibration T3, hors scope de #56. `Expr::ForLoop` visite l'expression d'itérateur avec `loop_depth` déjà incrémenté : dans ripgrep `gitignore.rs:412`, `rdr.lines()` — évalué **une fois**, avant l'itération — est compté comme appel en boucle. La **classification** est correcte, l'**appartenance** est fausse (faux positif de membership, pas de classification). → **Issue #73**.
 - **Récepteurs `self` / accès de champ non résolus — par conception.** `self.file.read(…)` s'abstient : suivre les types des champs exigerait une résolution inter-item que la §1 refuse. L'abstention est le comportement voulu, pas un manque.
 - **Résolution inter-fonction / inter-fichier hors scope** — un type qui traverse une frontière de fonction n'est pas suivi. P2, conformément à la trajectoire heuristiques-d'abord d'[[ADR-0004]].
 - **Les closures héritent du `type_env` englobant** — incidemment, non spécifié : le comportement est correct sur les corpus mesurés mais n'est pas une garantie du contrat.
