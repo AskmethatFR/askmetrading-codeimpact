@@ -1022,3 +1022,145 @@ fn self_field_method_call_stays_bare_not_resolved_to_enclosing_type() {
         "no fabricated edge means no hidden complexity from S::m"
     );
 }
+
+// #73 — a `for` loop's iterator-producing expression (`expr_for.expr`) runs
+// exactly ONCE per loop entry, not once per iteration (e.g. `rdr.lines()` in
+// `for (i, line) in rdr.lines().enumerate() { .. }`). Calls reached while
+// visiting it must NOT be recorded as inside the loop. `Expr::While`'s `cond`
+// is untouched — it IS re-evaluated every iteration, so it stays in scope.
+//
+// Test List:
+// 1. io_call_in_for_loop_iterator_expression_not_tracked_as_in_loop — a call
+//    reached only through the iterator expression is not in calls_in_loops.
+// 2. call_in_for_loop_body_still_tracked_when_iterator_expression_also_has_a_call
+//    — the discriminating case: iterator AND body both carry calls; only the
+//    body's call must survive in calls_in_loops.
+
+#[test]
+fn io_call_in_for_loop_iterator_expression_not_tracked_as_in_loop() {
+    let parser = parser();
+    let source = "fn test() {\n    for _ in std::fs::read_to_string(\"f\") {\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert!(
+        functions[0].calls_in_loops.is_empty(),
+        "the for-loop's iterator expression runs once per loop entry, not once per iteration — \
+         its calls must not be recorded as inside the loop, got {:?}",
+        functions[0].calls_in_loops
+    );
+}
+
+#[test]
+fn call_in_for_loop_body_still_tracked_when_iterator_expression_also_has_a_call() {
+    let parser = parser();
+    let source = "fn test() {\n    for _ in std::fs::read_to_string(\"f\").lines() {\n        std::net::TcpStream::connect(\"b\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(
+        functions[0].calls_in_loops.len(),
+        1,
+        "only the body's call must be tracked as in-loop, got {:?}",
+        functions[0].calls_in_loops
+    );
+    assert_eq!(
+        functions[0].calls_in_loops[0].name,
+        "std::net::TcpStream::connect"
+    );
+}
+
+// #73 retry #1 — QA coverage gap: the fix (2df3b82) and its two discriminating
+// tests above were verified correct by both reviewers, but three stated ACs
+// shipped with no committed test. These three close that gap.
+//
+// Test List:
+// 3. nested_for_loop_inside_outer_iterator_expression_both_calls_tracked_not_nested (AC3)
+//    — a `for` loop nested INSIDE the outer for-loop's iterator-producing
+//    expression. Both the inner loop's call and the outer body's call are
+//    genuinely inside a loop (the inner loop runs to completion producing
+//    the outer iterator — sequential, not nested at any instant). The count
+//    alone does not discriminate the fix (both pre- and post-fix record 2
+//    calls here); `depth` and `has_nested_loop` do — pre-fix the outer
+//    for-loop's `loop_depth` is already 1 when the nested inner loop is
+//    entered, driving `loop_depth` to 2 and `has_nested_loop` to true.
+// 4. while_cond_call_is_tracked_as_in_loop_regression_pin (AC4) — guard-rail
+//    pinning that `Expr::While`'s `cond` was NOT touched by the fix: it is
+//    re-evaluated every iteration, so a call in it stays in `calls_in_loops`.
+//    Passes both pre- and post-fix — a regression pin, not a discriminator.
+// 5. iterator_chain_calls_excluded_body_call_included_ripgrep_shaped (AC5)
+//    — the motivating real-world shape (`rdr.lines().enumerate()` in a
+//    destructured `for (i, line) in ..` loop): the chained iterator calls
+//    must be excluded from `calls_in_loops`, the body call included.
+
+#[test]
+fn nested_for_loop_inside_outer_iterator_expression_both_calls_tracked_not_nested() {
+    let parser = parser();
+    let source = "fn test() {\n    for _ in {\n        for _ in 0..2 {\n            connect(\"inner\");\n        }\n        vec![1]\n    } {\n        read_to_string(\"outer_body\");\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    let f = &functions[0];
+
+    assert_eq!(
+        f.calls_in_loops.len(),
+        2,
+        "both the inner loop's call and the outer body's call are genuinely inside a loop, got {:?}",
+        f.calls_in_loops
+    );
+    assert!(
+        f.calls_in_loops.iter().any(|c| c.name == "connect"),
+        "the inner loop's own call must be tracked as in-loop, got {:?}",
+        f.calls_in_loops
+    );
+    assert!(
+        f.calls_in_loops.iter().any(|c| c.name == "read_to_string"),
+        "the outer loop's body call must be tracked as in-loop, got {:?}",
+        f.calls_in_loops
+    );
+    assert_eq!(
+        f.depth, 1,
+        "the inner loop (inside the outer iterator expr) and the outer loop body \
+         never run at the same instant — max nesting depth is 1, not 2"
+    );
+    assert!(
+        !f.has_nested_loop,
+        "the inner loop runs to completion producing the outer iterator before the \
+         outer loop's own body ever starts — sequential, not nested"
+    );
+}
+
+#[test]
+fn while_cond_call_is_tracked_as_in_loop_regression_pin() {
+    let parser = parser();
+    let source = "fn test() {\n    while std::fs::read_to_string(\"cond_file\") {\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    assert_eq!(
+        functions[0].calls_in_loops.len(),
+        1,
+        "a while-loop's cond is re-evaluated every iteration — unlike a for-loop's \
+         iterator expression (#73), it stays inside the loop, got {:?}",
+        functions[0].calls_in_loops
+    );
+    assert_eq!(
+        functions[0].calls_in_loops[0].name,
+        "std::fs::read_to_string"
+    );
+}
+
+#[test]
+fn iterator_chain_calls_excluded_body_call_included_ripgrep_shaped() {
+    let parser = parser();
+    let source = "fn test() {\n    for (i, line) in rdr.lines().enumerate() {\n        process(line);\n    }\n}\n";
+    let functions = parser.parse(source).unwrap();
+    let f = &functions[0];
+
+    assert_eq!(
+        f.calls_in_loops.len(),
+        1,
+        "the iterator chain (.lines(), .enumerate()) runs once per loop entry, not once \
+         per iteration — only the body's call must be tracked as in-loop, got {:?}",
+        f.calls_in_loops
+    );
+    assert_eq!(f.calls_in_loops[0].name, "process");
+    assert!(
+        f.calls.contains(&"lines".to_string()) && f.calls.contains(&"enumerate".to_string()),
+        "the iterator-chain calls are still recorded unconditionally in `calls`, \
+         just excluded from `calls_in_loops`, got {:?}",
+        f.calls
+    );
+}
