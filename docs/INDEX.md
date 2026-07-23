@@ -2,7 +2,7 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-22 (#90 T5 — ADR-0024, cache `DepsIndex` clé sur identité `Arc` ; sur ADR-0023 index dépendances C#, ADR-0022 I/O-en-boucle T4, ADR-0021 dégradation honnête T3)
+> **Updated:** 2026-07-23 (dette Batch 1 — #73 appartenance boucle `for` résolue (ADR-0016), #86 porte `cargo-deny` RUSTSEC en CI (ADR-0009) ; sur #90 T5 ADR-0024, ADR-0023 index dépendances C#, ADR-0022 I/O-en-boucle T4, ADR-0021 dégradation honnête T3)
 
 ## Nodes
 
@@ -22,14 +22,14 @@
 | ADR-0006 | technical | Sécurité — Canonicalize, Limite Taille, Pas de Fuite de Path | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0015]], [[ADR-0017]], [[ADR-0019]], [[ADR-0020]], [[ADR-0023]] | docs/ADR-0006-security-measures.md |
 | ADR-0007 | technical | JSON Report Format — Output Format & Schema | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[ADR-0021]] | docs/ADR-0007-json-report-format.md |
 | ADR-0008 | technical | HTML Report Format — Self-Contained Output & XSS Defense | Applied | 2026-07-20 | [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/ADR-0008-html-report-format.md |
-| ADR-0009 | technical | CI GitHub Actions & posture supply-chain (dépôt public) | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0006]] | docs/ADR-0009-ci-supply-chain.md |
+| ADR-0009 | technical | CI GitHub Actions & posture supply-chain (dépôt public) — +porte `cargo-deny` RUSTSEC (#86) | Applied | 2026-07-23 | [[architecture-overview]], [[ADR-0006]] | docs/ADR-0009-ci-supply-chain.md |
 | ADR-0010 | technical | Honnêteté de la mesure — `Unmeasurable` plutôt que `0` | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0004]], [[ADR-0006]], [[economic-impact-estimator]], [[ADR-0015]], [[ADR-0016]], [[ADR-0017]], [[ADR-0021]] | docs/ADR-0010-measurement-honesty.md |
 | ADR-0011 | technical | Stress test — portée workspace, agrégation, 0-test honnête | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0010]], [[ADR-0006]], [[ADR-0009]] | docs/ADR-0011-stress-test-workspace-scope.md |
 | ADR-0012 | technical | `hidden_complexity` — mesurée à l'atome, jamais dérivée d'agrégats | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0007]], [[glossary]], [[json-report-schema]], [[console-report-enriched]] | docs/ADR-0012-hidden-complexity-single-source.md |
 | ADR-0013 | technical | Contrat parser ↔ hexagone — le domaine nomme le concept, l'adaptateur nomme la syntaxe | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0012]], [[ADR-0001]], [[glossary]], [[ADR-0016]], [[ADR-0018]] | docs/ADR-0013-parser-hexagon-loop-call-contract.md |
 | ADR-0014 | technical | Le parseur voit enfin les méthodes — nom qualifié, résolution intra-type, trois états de mesure | Applied | 2026-07-14 | [[architecture-overview]], [[ADR-0010]], [[ADR-0013]], [[ADR-0007]], [[ADR-0008]], [[glossary]], [[json-report-schema]], [[console-report-enriched]], [[html-report]], [[ADR-0016]], [[ADR-0018]] | docs/ADR-0014-parser-impl-methods-qualified-names.md |
 | ADR-0015 | technical | Isolation du parsing par sous-processus canari — contenir un débordement de pile sans le prédire | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0006]], [[ADR-0010]], [[ADR-0020]] | docs/ADR-0015-subprocess-canary-parse-isolation.md |
-| ADR-0016 | technical | Classification des I/O en boucle — le type affirme, le nom s'abstient, trois états, calibration mesurée | Applied | 2026-07-16 | [[architecture-overview]], [[ADR-0004]], [[ADR-0010]], [[ADR-0013]], [[ADR-0014]], [[ADR-0015]], [[ADR-0022]], [[glossary]] | docs/ADR-0016-io-in-loops-type-asserts-name-abstains.md |
+| ADR-0016 | technical | Classification des I/O en boucle — le type affirme, le nom s'abstient, trois états, calibration mesurée (#73 appartenance `for` résolue) | Applied | 2026-07-23 | [[architecture-overview]], [[ADR-0004]], [[ADR-0010]], [[ADR-0013]], [[ADR-0014]], [[ADR-0015]], [[ADR-0022]], [[glossary]] | docs/ADR-0016-io-in-loops-type-asserts-name-abstains.md |
 | ADR-0017 | technical | Seuils d'alerte — porte domaine pure, `.codeimpact.json` partagé, exit 3 CI | Applied | 2026-07-17 | [[architecture-overview]], [[alert-thresholds]], [[ADR-0001]], [[ADR-0004]], [[ADR-0006]], [[ADR-0009]], [[ADR-0010]], [[ADR-0019]], [[json-report-schema]], [[html-report]], [[glossary]] | docs/ADR-0017-alert-thresholds-config-schema.md |
 | ADR-0018 | technical | Hexagone dé-rustifié — sémantique par-langage dans les adaptateurs (US14-T1) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0001]], [[ADR-0013]], [[ADR-0014]], [[ADR-0019]], [[ADR-0020]], [[glossary]] | docs/ADR-0018-de-rustified-hexagon-language-agnostic.md |
 | ADR-0019 | technical | Fichier de config — agrégat `AnalysisConfig`, globs compilés dans l'adaptateur, schéma forward-compat (US15) | Applied | 2026-07-18 | [[architecture-overview]], [[ADR-0017]], [[ADR-0006]], [[ADR-0001]], [[ADR-0018]], [[ADR-0022]], [[ADR-0023]], [[alert-thresholds]], [[glossary]] | docs/ADR-0019-configuration-file-analysis-config.md |
