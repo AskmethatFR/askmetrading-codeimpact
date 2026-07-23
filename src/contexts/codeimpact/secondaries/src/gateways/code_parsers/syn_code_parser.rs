@@ -978,6 +978,16 @@ impl FunctionVisitor {
             syn::Expr::ForLoop(expr_for) => {
                 self.decision_points += 1;
                 self.has_loop = true;
+
+                // The iterator-producing expression runs exactly once per
+                // loop entry, not once per iteration (e.g. `rdr.lines()` in
+                // `for (i, line) in rdr.lines().enumerate() { .. }`) — visit
+                // it at the OUTER depth, before `loop_depth` is incremented,
+                // so any call it reaches is not recorded as inside the loop
+                // (#73). `Expr::While`'s `cond` is untouched: it IS
+                // re-evaluated every iteration, so it stays in scope.
+                self.visit_expr(&expr_for.expr);
+
                 self.current_depth += 1;
                 self.loop_depth += 1;
                 if self.loop_depth > 1 {
@@ -985,7 +995,6 @@ impl FunctionVisitor {
                 }
                 self.max_depth = self.max_depth.max(self.current_depth);
 
-                self.visit_expr(&expr_for.expr);
                 self.visit_block(&expr_for.body);
 
                 self.loop_depth -= 1;
