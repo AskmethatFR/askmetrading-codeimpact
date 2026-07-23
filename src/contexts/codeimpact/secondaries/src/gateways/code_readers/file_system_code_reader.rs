@@ -6,6 +6,7 @@ use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
+use ignore::overrides::{Override, OverrideBuilder};
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 128;
@@ -23,6 +24,34 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, AnalysisError> {
         let glob = Glob::new(pattern)
             .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))?;
         builder.add(glob);
+    }
+    builder
+        .build()
+        .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
+}
+
+/// Registers `exclude` as walk-time `ignore::overrides::Override` patterns
+/// (#96, perf): each pattern is added NEGATED (`!pattern`), which makes
+/// `ignore::WalkBuilder` PRUNE a matching subtree during descent instead of
+/// yielding every entry underneath it for the post-walk `keep` check below
+/// — measured ~34x faster for a 20.6k-file excluded subtree.
+///
+/// `include` deliberately stays on the post-walk `GlobSet` above rather
+/// than moving here too. `ignore::dir::Ignore::matched` gives overrides
+/// absolute precedence: ANY override match (whitelist or negated) makes
+/// walk-level matching stop and skip the gitignore check entirely for that
+/// path. Adding `include` as non-negated (whitelist) overrides would let an
+/// include pattern resurrect a file `.gitignore` says to drop — a
+/// correctness regression this ticket must not introduce. A negated-only
+/// override set never enables that whitelist short-circuit (confirmed by
+/// the `ignore` crate's own `only_ignores` test), so moving `exclude` alone
+/// is safe: unmatched paths fall through to gitignore exactly as before.
+fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override, AnalysisError> {
+    let mut builder = OverrideBuilder::new(root);
+    for pattern in patterns {
+        builder
+            .add(&format!("!{pattern}"))
+            .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))?;
     }
     builder
         .build()
@@ -72,15 +101,16 @@ impl CodeReader for FileSystemCodeReader {
             .map_err(|_| AnalysisError::IoError("dossier introuvable".to_string()))?;
 
         let include_set = build_glob_set(filter.include())?;
-        let exclude_set = build_glob_set(filter.exclude())?;
         let include_is_empty = filter.include().is_empty();
         let respect_gitignore = filter.respect_gitignore();
+        let exclude_overrides = build_exclude_overrides(&canonical_root, filter.exclude())?;
 
         let mut files = Vec::new();
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
             .hidden(true)
+            .overrides(exclude_overrides)
             // `ignore`'s WalkBuilder exposes FOUR independent ignore-source
             // toggles (git_ignore/.gitignore, git_exclude/.git/info/exclude,
             // git_global/the user's global gitignore, ignore/.ignore files)
@@ -125,8 +155,7 @@ impl CodeReader for FileSystemCodeReader {
                         continue;
                     }
                     let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
-                    let keep = (include_is_empty || include_set.is_match(relative))
-                        && !exclude_set.is_match(relative);
+                    let keep = include_is_empty || include_set.is_match(relative);
                     if !keep {
                         continue;
                     }
