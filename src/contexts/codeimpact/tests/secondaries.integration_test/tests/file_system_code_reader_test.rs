@@ -415,3 +415,209 @@ fn canonical_root_of_a_nonexistent_path_falls_back_to_identity() {
          return the input unchanged, not panic or propagate the error"
     );
 }
+
+// Ticket #96 (perf) — `exclude` moves from post-walk `globset` filtering to
+// a walk-time `ignore::overrides::Override` (negated patterns only), so
+// `ignore::WalkBuilder` PRUNES a matching subtree during descent instead of
+// enumerating every entry underneath it and filtering afterward. Measured:
+// excluding target/ (20.6k files) via exclude=["target/**"] with
+// respectGitignore:false was ~34x slower than gitignore-based exclusion for
+// the identical result set — because only gitignore-based exclusion
+// pruned directory descent; exclude was post-walk only.
+//
+// `include` deliberately STAYS on the existing post-walk globset filter.
+// Moving it to the same walk-time Override too would turn on Override's
+// "whitelist mode" — per `ignore::dir::Ignore::matched`, ANY override match
+// (whitelist or blacklist) short-circuits and skips gitignore entirely for
+// that path. An include pattern matching a gitignored file would then
+// resurrect it, a real regression. A negated-only Override (exclude alone)
+// never enables whitelist mode, so it never bypasses gitignore for a path
+// that doesn't match one of the exclude patterns — see
+// `ignore::overrides::Override::matched`'s doc comment and the `ignore`
+// crate's own `only_ignores` unit test.
+//
+// Most of the cases below characterize EXISTING behavior that must not
+// regress during the migration (result-set identity), not new behavior —
+// consistent with this being "pure perf, results stay identical to today".
+// The one case that genuinely pins NEW behavior (and is expected to be red
+// against the pre-#96 post-walk-only implementation) is the last one: a
+// large, deeply-nested excluded subtree must be walked within a generous
+// time budget, which only holds if the subtree is pruned during descent.
+//
+// Test List:
+// 1. exclude prunes a deeply nested match, not just a top-level one
+//    (regression net: override-based matching must behave like the old
+//    globset `**` matching for nested paths)
+// 2. exclude + include + respect_gitignore=true together: gitignore drops
+//    what it always dropped, exclude drops what it always dropped,
+//    independently (AND-composition unaffected by the migration)
+// 3. an invalid glob syntax in `exclude` surfaces as an AnalysisError, not
+//    a panic (AC4 — hostile config), pinning the NEW OverrideBuilder-based
+//    validation path (mirrors the existing include-side coverage)
+// 4. a large, deeply-nested excluded subtree is walked well within a
+//    generous time ceiling — best-effort proof that the excluded subtree
+//    is pruned during descent rather than fully enumerated and filtered
+//    post-hoc (the direct regression alarm for the reported 34x slowdown)
+
+#[test]
+fn exclude_glob_prunes_a_deeply_nested_match() {
+    let dir = isolated_walk_dir("exclude_nested");
+    std::fs::create_dir_all(dir.join("a").join("b").join("c")).unwrap();
+    std::fs::write(
+        dir.join("a").join("b").join("c").join("drop.rs"),
+        "fn drop_fn() {}",
+    )
+    .unwrap();
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["a/**".to_string()], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.rs")),
+        "keep.rs must still be listed, got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("drop.rs")),
+        "a deeply nested file under an excluded path must still be excluded, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exclude_and_gitignore_compose_independently_with_include() {
+    let dir = isolated_walk_dir("exclude_gitignore_include_compose");
+    std::fs::write(dir.join(".gitignore"), "ignored_by_git.rs\n").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("kept.rs"), "fn kept() {}").unwrap();
+    std::fs::write(dir.join("src").join("ignored_by_git.rs"), "fn g() {}").unwrap();
+    std::fs::write(dir.join("src").join("excluded.rs"), "fn e() {}").unwrap();
+    std::fs::write(dir.join("other.rs"), "fn other() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(
+        vec!["src/**".to_string()],
+        vec!["src/excluded.rs".to_string()],
+        true,
+    )
+    .unwrap();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("kept.rs")),
+        "kept.rs must be listed, got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("ignored_by_git.rs")),
+        "gitignore must still drop its own entry, got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("excluded.rs")),
+        "exclude must still drop its own entry, got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("other.rs")),
+        "other.rs is outside include, must stay dropped, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only kept.rs should survive, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn invalid_glob_syntax_in_exclude_errors_instead_of_panicking() {
+    let dir = isolated_walk_dir("invalid_exclude_glob");
+    std::fs::write(dir.join("a.rs"), "fn a() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    // `[` opens a character class that is never closed — invalid glob
+    // syntax the `ignore` crate's OverrideBuilder rejects at build time.
+    let filter = FileFilter::new(vec![], vec!["target/[".to_string()], false).unwrap();
+    let result = reader.list_source_files(&dir, &["rs"], &filter);
+
+    assert!(
+        result.is_err(),
+        "an invalid exclude glob pattern must surface as an error, got {:?}",
+        result
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
+    // Self-calibrating against THIS machine's speed (avoids a flaky fixed
+    // millisecond ceiling across heterogeneous CI hardware): compare the
+    // excluded walk against a full-enumeration walk of the SAME fixture. If
+    // the excluded subtree is pruned during descent, excluding it must be
+    // dramatically cheaper than fully enumerating it — if it is only
+    // filtered post-walk (the pre-#96 bug), both walks pay the same
+    // directory-descent cost and the ratio collapses to ~1.
+    let dir = isolated_walk_dir("exclude_perf_smoke");
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+    let excluded_root = dir.join("target");
+    for i in 0..20_000 {
+        let sub = excluded_root.join(format!("d{i}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("f.rs"), "fn f() {}").unwrap();
+    }
+
+    let reader = FileSystemCodeReader::new();
+    let exclude_filter = FileFilter::new(vec![], vec!["target/**".to_string()], false).unwrap();
+
+    let excluded_start = std::time::Instant::now();
+    let excluded_files = reader
+        .list_source_files(&dir, &["rs"], &exclude_filter)
+        .expect("excluded walk should succeed");
+    let excluded_elapsed = excluded_start.elapsed();
+
+    let full_start = std::time::Instant::now();
+    let full_files = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("full walk should succeed");
+    let full_elapsed = full_start.elapsed();
+
+    assert!(
+        excluded_files.iter().any(|f| f.ends_with("keep.rs")),
+        "keep.rs must survive the exclude, got {:?}",
+        excluded_files
+    );
+    assert_eq!(
+        excluded_files.len(),
+        1,
+        "only keep.rs should survive the exclude, got {:?}",
+        excluded_files
+    );
+    assert_eq!(
+        full_files.len(),
+        20_001,
+        "the unrestricted walk must still enumerate every file (sanity check \
+         on the fixture itself), got {} files",
+        full_files.len()
+    );
+    assert!(
+        excluded_elapsed * 3 < full_elapsed,
+        "excluding a subtree with 20 000 nested directories must be pruned \
+         during descent, not fully enumerated then filtered — excluded walk \
+         took {:?}, full walk took {:?} (expected the excluded walk to be \
+         well under a third of the full walk, generous margin below the \
+         reported 34x, regression alarm for the reported slowdown)",
+        excluded_elapsed,
+        full_elapsed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
