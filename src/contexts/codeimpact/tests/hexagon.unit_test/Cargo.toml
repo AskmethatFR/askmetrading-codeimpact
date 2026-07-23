@@ -79,3 +79,7 @@ path = "tests/language_test.rs"
 [[test]]
 name = "parser_registry_test"
 path = "tests/parser_registry_test.rs"
+
+[[test]]
+name = "overflow_checks_release_profile_test"
+path = "tests/overflow_checks_release_profile_test.rs"
