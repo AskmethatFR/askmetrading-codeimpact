@@ -671,15 +671,18 @@ mod tests {
     // write-then-exec a script against EACH OTHER, and the CI still failed
     // — on `run_with_timeout_does_not_deadlock_on_large_stderr`, one of
     // those six. Root cause: `run_with_timeout_with_budget_does_not_hang_
-    // when_a_grandchild_holds_the_pipe_open` called `python3_available()`
-    // (its own `Command::new("python3")...status()`) BEFORE taking the
-    // lock. That bare fork — which writes no script and execs nothing of
-    // its own creation — could still land inside another thread's
-    // write-then-exec window and inherit a duplicate write fd on THAT
-    // thread's script, reproducing the exact bug this lock exists to
-    // prevent. `python3_available` now takes this same lock internally,
-    // so every caller gets it automatically instead of depending on the
-    // call site to remember.
+    // when_a_grandchild_holds_the_pipe_open` called a `python3_available()`
+    // helper (its own `Command::new("python3")...status()`, removed in #45
+    // together with the python3 shim it guarded) BEFORE taking the lock.
+    // That bare fork — which writes no script and execs nothing of its own
+    // creation — could still land inside another thread's write-then-exec
+    // window and inherit a duplicate write fd on THAT thread's script,
+    // reproducing the exact bug this lock exists to prevent. The fix made
+    // that helper take this same lock internally, so every caller got it
+    // automatically instead of depending on the call site to remember —
+    // #45's replacement test (a pure-Rust `fork()`+`setsid()` via
+    // `pre_exec`, no separate availability probe) still takes the lock
+    // itself for its own `cmd.spawn()` fork, for the same reason.
     //
     // Rejected fixes:
     // - Routing the fake binary through an interpreter (`sh <script>`)
@@ -707,7 +710,7 @@ mod tests {
     //   larger than the four fork call sites that actually race here.
     //
     // Residual risk: this lock is still call-site (or call-site-adjacent,
-    // for helpers like `python3_available`) discipline — a NEW test added
+    // for a fork-taking helper) discipline — a NEW test added
     // later that spawns a `Command` without taking
     // `lock_fork_in_test_binary()` reopens the same hazard. There is no
     // Rust-level way to force every `Command::new` call in this module
@@ -1066,39 +1069,64 @@ mod tests {
     //    itself outlives the budget -> the call still returns (as an
     //    Err, since the budget was exceeded) within a sane wall-clock
     //    bound, not "never"
+    // 2. the escape must be REAL, not a dud: the call must take
+    //    meaningfully longer than the 1s budget alone, proving it
+    //    actually fell through to `join_drain_thread`'s bounded wait
+    //    rather than the group-kill alone closing the pipe fast (#45 —
+    //    without this floor, a broken/no-op escape would still pass the
+    //    "returns as an Err" assertion above, for the wrong reason)
 
+    // #45 — replaces the former python3 shim
+    // (`python3 -c "import os; os.setsid(); os.execvp(...)"`), which
+    // silently skipped this test — the ONLY guard against an indefinite
+    // hang of the whole tool (#39 follow-up, Security HIGH) — on any
+    // host missing python3. `(sleep 20 &)` alone does NOT reproduce the
+    // escape this test exists to catch: in a non-interactive `/bin/sh`
+    // script, job control is off, so a plain backgrounded process stays
+    // in the SAME process group as the script — the group-kill already
+    // reaches it. The real gap is a grandchild that calls setsid(2) and
+    // genuinely leaves the group. There is no `setsid` CLI on macOS, so
+    // the syscall is invoked directly, in Rust, via `libc::setsid()` — a
+    // thin wrapper over the same syscall python3's `os.setsid()` called.
+    //
+    // `pre_exec` runs in the freshly forked "cmd" process, AFTER stdio
+    // has already been redirected onto the pipe and AFTER
+    // `run_with_timeout_with_budget`'s own `cmd.process_group(0)` has
+    // already placed it in a fresh process group, but BEFORE `sleep` is
+    // exec'd. A raw `libc::fork()` here duplicates that already-set-up
+    // process, so BOTH resulting processes share the same pipe write
+    // ends and both fall through to the same `sleep 20` exec afterward —
+    // exactly mirroring the former shell script's `setsid-and-exec &`
+    // backgrounded grandchild plus its own foregrounded `sleep 20`. Only
+    // the fork's child branch calls `setsid()`, so only it leaves the
+    // process group `kill_process_group` targets — the fork's parent
+    // branch (the pid `Child::id()` reports) stays in it and is the one
+    // actually killed at the 1s budget.
     #[test]
+    #[cfg(unix)]
     fn run_with_timeout_with_budget_does_not_hang_when_a_grandchild_holds_the_pipe_open() {
-        if !python3_available() {
-            eprintln!(
-                "skipping: python3 not available on this host (needed to call the setsid(2) \
-                 syscall directly — the `setsid` CLI does not exist on macOS)"
-            );
-            return;
-        }
+        use std::os::unix::process::CommandExt;
 
         let _guard = lock_fork_in_test_binary();
-        let dir = tempfile::tempdir().expect("create temp dir");
-        // `(sleep 30 &)` alone does NOT reproduce the escape this test
-        // exists to catch: in a non-interactive `/bin/sh` script, job
-        // control is off, so a plain backgrounded process stays in the
-        // SAME process group as the script — the group-kill already
-        // reaches it. The real gap is a grandchild that calls setsid(2)
-        // and genuinely leaves the group. There is no `setsid` CLI on
-        // macOS, so the syscall is invoked directly via python3 (present
-        // on this host and virtually every Linux/macOS CI image) —
-        // os.setsid() is a thin wrapper over the same syscall a small
-        // libc-based helper would call.
-        let script = write_executable_script(
-            dir.path(),
-            "grandchild_escapes_via_setsid.sh",
-            "#!/bin/sh\npython3 -c \"import os; os.setsid(); os.execvp('sleep', ['sleep', '20'])\" &\nsleep 20\n",
-        );
 
-        let mut cmd = Command::new(&script);
+        let mut cmd = Command::new("sleep");
+        cmd.arg("20");
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        unsafe {
+            cmd.pre_exec(|| match libc::fork() {
+                -1 => Err(std::io::Error::last_os_error()),
+                0 => {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                }
+                _parent_returns_to_normal_exec => Ok(()),
+            });
+        }
 
+        let start = Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = CargoTestRunner::run_with_timeout_with_budget(cmd, Duration::from_secs(1));
@@ -1110,10 +1138,28 @@ mod tests {
              escaped the process-group kill and is still holding the pipe open, and the join \
              has no bound of its own",
         );
+        let elapsed = start.elapsed();
 
         assert!(
             result.is_err(),
             "expected the 1s budget to be exceeded and reported as an error"
+        );
+        // Discriminates a dud escape (test list item 2): a grandchild
+        // that never actually left the process group would die together
+        // with the direct child at the ~1s budget, the pipe would close
+        // immediately, and the call would return in ~1s. Only a REAL
+        // escape leaves the pipe's write end open past the group kill,
+        // forcing `join_drain_thread`'s `DRAIN_JOIN_TIMEOUT` (5s, applied
+        // independently to stdout AND stderr) to actually be exhausted —
+        // a floor far above the ~1s a non-escaping grandchild would
+        // produce, and comfortably under the 15s outer bound above.
+        assert!(
+            elapsed >= Duration::from_secs(4),
+            "run_with_timeout_with_budget returned after {:?} — too fast to have hit \
+             DRAIN_JOIN_TIMEOUT, which means the grandchild never actually escaped the \
+             killed process group (the setsid() escape this test exists to reproduce did \
+             not happen)",
+            elapsed
         );
     }
 
@@ -1225,25 +1271,6 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&script, perms).expect("make fake test binary executable");
         script
-    }
-
-    // #41 follow-up — this forks (`Command::status()`), so it must take
-    // `lock_fork_in_test_binary()` itself: the caller checks availability
-    // BEFORE deciding whether to run the rest of its test body (see
-    // `run_with_timeout_with_budget_does_not_hang_when_a_grandchild_holds_
-    // the_pipe_open`), so the fork here happens before that test's own
-    // write-then-exec guard is taken. Guarding it internally means every
-    // caller — this one and any future one — is protected automatically,
-    // instead of depending on the call site to remember.
-    fn python3_available() -> bool {
-        let _guard = lock_fork_in_test_binary();
-        Command::new("python3")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
     }
 
     // Test List (confine_to_target_dir — reject an executable path outside
