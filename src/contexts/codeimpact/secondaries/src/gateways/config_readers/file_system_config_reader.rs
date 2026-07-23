@@ -68,7 +68,12 @@ struct CodeImpactConfig {
     io_signatures: Vec<String>,
 }
 
+/// `deny_unknown_fields` (#85): mirrors `CodeImpactConfig`'s top-level
+/// enforcement — a typo'd key inside `"thresholds": {...}` (e.g.
+/// `max_energy_kw` instead of `max_energy_kwh`) must surface as an
+/// actionable parse error, not be silently dropped.
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct ThresholdsSection {
     #[serde(default)]
     max_energy_kwh: Option<f64>,
