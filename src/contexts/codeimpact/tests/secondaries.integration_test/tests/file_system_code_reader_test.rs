@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AnalysisTarget;
@@ -414,4 +415,57 @@ fn canonical_root_of_a_nonexistent_path_falls_back_to_identity() {
         "canonicalize must fail for a nonexistent path — the fallback must \
          return the input unchanged, not panic or propagate the error"
     );
+}
+
+// #95 (Security DoS residual) — `list_source_files` bounded recursion depth
+// (MAX_WALK_DEPTH) and per-file size (MAX_FILE_SIZE) but not the TOTAL
+// number of entries enumerated. A directory with many small files at
+// shallow depth (a planted/generated tree, plausibly under
+// respectGitignore:false) was fully enumerated with no early abort. A
+// total-entries cap (`MAX_WALK_ENTRIES` in file_system_code_reader.rs, 50
+// 000) now aborts early with an actionable error naming the limit —
+// mirroring how MAX_FILE_SIZE surfaces "fichier trop volumineux (max 10
+// Mo)".
+//
+// Test List:
+// 1. a walk whose entry count exceeds the cap aborts with an Err naming
+//    the limit, under BOTH respect_gitignore=false and =true (the cap
+//    must not depend on the gitignore flag — one fixture, both flags)
+// (below-cap -> normal Ok result is already covered by every test above:
+// each walks a handful of fixture files, none anywhere near the cap)
+
+fn populate_flat_files(dir: &Path, count: usize) {
+    for i in 0..count {
+        std::fs::write(dir.join(format!("f{i}.rs")), "").expect("create fixture file");
+    }
+}
+
+#[test]
+fn walk_exceeding_the_entry_cap_aborts_early_naming_the_limit_under_both_gitignore_modes() {
+    let dir = isolated_walk_dir("entry_cap_exceeded");
+    // MAX_WALK_ENTRIES (production) is 50_000 — one entry over it must
+    // trip the guard.
+    let over_cap_count = 50_001;
+    populate_flat_files(&dir, over_cap_count);
+
+    let reader = FileSystemCodeReader::new();
+
+    for respect_gitignore in [false, true] {
+        let filter = FileFilter::new(vec![], vec![], respect_gitignore).unwrap();
+        let result = reader.list_source_files(&dir, &["rs"], &filter);
+
+        assert!(
+            result.is_err(),
+            "walking {over_cap_count} files (over the entry cap) must abort \
+             with an error (respect_gitignore={respect_gitignore}), got {:?}",
+            result
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("50000") && message.to_lowercase().contains("entr"),
+            "the error must name the entries limit (respect_gitignore={respect_gitignore}), got: {message}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
