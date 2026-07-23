@@ -2,7 +2,7 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-20 (US14-T5 / #33 — ADR-0023, graphe de dépendances inter-fichiers C# ; sur ADR-0022 I/O-en-boucle T4, ADR-0021 dégradation honnête T3)
+> **Updated:** 2026-07-22 (#90 T5 — ADR-0024, cache `DepsIndex` clé sur identité `Arc` ; sur ADR-0023 index dépendances C#, ADR-0022 I/O-en-boucle T4, ADR-0021 dégradation honnête T3)
 
 ## Nodes
 
@@ -36,7 +36,8 @@
 | ADR-0020 | technical | Parsing multi-langage tree-sitter — adaptateur générique, dispatch par extension, isolation in-process (US14-T2) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0018]], [[ADR-0001]], [[ADR-0015]], [[ADR-0006]], [[ADR-0022]], [[ADR-0023]], [[glossary]] | docs/ADR-0020-multi-language-parsing-tree-sitter.md |
 | ADR-0021 | technical | Dégradation honnête — `MetricSupport` circule jusqu'aux writers, `n/a` jamais `0` (US14-T3) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]], [[console-report-enriched]], [[ADR-0023]], [[glossary]] | docs/ADR-0021-honest-degradation-metric-support-flows-to-writers.md |
 | ADR-0022 | technical | Classification I/O-en-boucle C# — le qualificatif statique affirme, le récepteur s'abstient (US14-T4) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0016]], [[ADR-0020]], [[ADR-0019]], [[ADR-0021]], [[ADR-0010]], [[glossary]] | docs/ADR-0022-csharp-io-in-loops-static-asserts-receiver-abstains.md |
-| ADR-0023 | technical | Résolution des dépendances inter-fichiers C# — index namespace→fichiers, arêtes N:M, `sourceRoots` câblé, dégradation honnête (US14-T5) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[glossary]] | docs/ADR-0023-csharp-cross-file-dependency-namespace-index.md |
+| ADR-0023 | technical | Résolution des dépendances inter-fichiers C# — index namespace→fichiers, arêtes N:M, `sourceRoots` câblé, dégradation honnête (US14-T5) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[ADR-0024]], [[glossary]] | docs/ADR-0023-csharp-cross-file-dependency-namespace-index.md |
+| ADR-0024 | technical | Cache du `DepsIndex` mémoïsé — clé sur identité de pointeur `Arc` (`Arc::ptr_eq`), empreinte de contenu supprimée, durcissement poison mutex (#90 T5) | Applied | 2026-07-22 | [[architecture-overview]], [[ADR-0023]], [[ADR-0020]], [[ADR-0006]], [[ADR-0015]], [[glossary]] | docs/ADR-0024-deps-index-cache-arc-identity-keying.md |
 | glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]] | docs/glossary.md |
 
 ## Graph Health

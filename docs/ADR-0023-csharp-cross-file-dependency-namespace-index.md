@@ -4,10 +4,10 @@
 > **Status:** Applied
 > **Date:** 2026-07-20
 > **Decided in:** Issue #33 (US14-T5 — graphe de dépendances C#)
-> **Links:** [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[glossary]]
+> **Links:** [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[ADR-0024]], [[glossary]]
 > **Relations:**
 >   depends-on: ["ADR-0020", "ADR-0018", "ADR-0019", "ADR-0021"]
->   related: ["ADR-0014", "ADR-0006", "architecture-overview", "glossary"]
+>   related: ["ADR-0014", "ADR-0006", "ADR-0024", "architecture-overview", "glossary"]
 
 ## Contexte
 

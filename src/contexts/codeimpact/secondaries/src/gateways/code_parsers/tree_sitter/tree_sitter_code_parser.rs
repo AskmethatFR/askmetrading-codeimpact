@@ -79,12 +79,20 @@ struct DepsIndex {
     file_usings: HashMap<PathBuf, Vec<String>>,
 }
 
+/// The `deps_index_cache`'s memoized entry (#90 T5 retry #1): the exact
+/// `file_sources` `Arc` the cached `DepsIndex` was built from, kept
+/// alongside it so a later call can compare by pointer IDENTITY
+/// (`Arc::ptr_eq`) rather than recomputing a content fingerprint — see
+/// `TreeSitterCodeParser::deps_index`'s doc for the full rationale.
+type DepsIndexCacheEntry = (Arc<Vec<(PathBuf, String)>>, Arc<DepsIndex>);
+
 /// Parses C# via `tree-sitter` (US16 T2). `parse` runs a `.scm` query over
 /// the file and assigns each capture to its innermost enclosing function by
 /// byte range (`assign_captures_to_functions`). `resolve_dependencies`
 /// (US16 T5) resolves C#'s `using` directives through a project-global
 /// `DepsIndex`, built once per run from `DependencyContext::file_sources`
-/// and memoized in `deps_index_cache` (keyed on a file-set fingerprint) —
+/// and memoized in `deps_index_cache` (keyed on the `file_sources` `Arc`'s
+/// pointer IDENTITY, #90 T5 retry #1 — see `deps_index`'s doc for why) —
 /// every file in a project scan shares the SAME `file_sources`/
 /// `source_roots`, so the expensive tree-sitter pass over every project
 /// file (including `current_file` itself) runs exactly once per run, not
@@ -92,7 +100,7 @@ struct DepsIndex {
 pub struct TreeSitterCodeParser {
     language: Language,
     profile: LanguageProfile,
-    deps_index_cache: Mutex<Option<(u64, Arc<DepsIndex>)>>,
+    deps_index_cache: Mutex<Option<DepsIndexCacheEntry>>,
 }
 
 impl TreeSitterCodeParser {
@@ -119,14 +127,37 @@ impl TreeSitterCodeParser {
     }
 
     /// The memoized `DepsIndex` for `ctx`'s project — rebuilt only when
-    /// `ctx.file_sources` changes shape (US16 T5). `Arc` keeps a cache
-    /// hit's clone O(1) rather than O(index size).
+    /// `ctx.file_sources` is a DIFFERENT `Arc` allocation than the one the
+    /// cache was last built from (US16 T5, keying rule hardened #90 T5
+    /// retry #1 — Dev-B changes-requested, Security MEDIUM CWE-400, QA
+    /// convergent). `run_analysis` builds ONE `file_sources` `Arc` per scan
+    /// and clones the SAME `Arc` into every file's `DependencyContext`
+    /// (`Arc::clone(&file_sources)` in the project loop), so `Arc::ptr_eq`
+    /// is a correct, O(1), never-rehashing cache key: `Vec<(PathBuf,
+    /// String)>` has no interior mutability, so "same Arc" already implies
+    /// "same content" — no hash needed to prove it. A prior content-hash
+    /// fingerprint fixed a stale-reuse bug but reintroduced the cost it was
+    /// meant to avoid: hashing every file's full text on EVERY call, which
+    /// `resolve_dependencies` makes once PER PROJECT FILE — O(N_files x
+    /// total_source_bytes) per scan, in production today, not just under a
+    /// future LSP reuse. The trade Arc-identity makes: two distinct,
+    /// byte-identical `Arc` allocations no longer share a cache entry and
+    /// rebuild instead — rare (would need two independently-constructed
+    /// `file_sources` vectors with identical content) and harmless (an
+    /// extra rebuild, never a correctness issue).
     fn deps_index(&self, ctx: &DependencyContext) -> Arc<DepsIndex> {
-        let fingerprint = file_set_fingerprint(&ctx.file_sources);
         {
-            let cache = self.deps_index_cache.lock().unwrap();
-            if let Some((cached_fingerprint, index)) = cache.as_ref() {
-                if *cached_fingerprint == fingerprint {
+            // Poison hardening (#90 T5, Security LOW retry from #33 T5):
+            // unreachable today (this parser is only ever driven
+            // single-threaded), but a poisoned guard must never turn into a
+            // hard panic once a future caller shares one instance across
+            // threads (roadmapped LSP primary) — recover the guard instead.
+            let cache = self
+                .deps_index_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((cached_sources, index)) = cache.as_ref() {
+                if Arc::ptr_eq(cached_sources, &ctx.file_sources) {
                     return Arc::clone(index);
                 }
             }
@@ -136,7 +167,11 @@ impl TreeSitterCodeParser {
             &ctx.file_sources,
             &ctx.source_roots,
         ));
-        *self.deps_index_cache.lock().unwrap() = Some((fingerprint, Arc::clone(&index)));
+        *self
+            .deps_index_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((Arc::clone(&ctx.file_sources), Arc::clone(&index)));
         index
     }
 }
@@ -301,24 +336,6 @@ fn build_deps_index(
         namespace_declarers,
         file_usings,
     }
-}
-
-/// A cheap fingerprint of a file SET (US16 T5) — paths and source
-/// LENGTHS, not full content: enough to detect "this is the same project
-/// scan's file list as last time" (memoization's actual purpose — a
-/// `TreeSitterCodeParser` instance lives for one project scan) without
-/// hashing every byte of every file on every one of a project's N calls.
-fn file_set_fingerprint(file_sources: &[(PathBuf, String)]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    file_sources.len().hash(&mut hasher);
-    for (path, source) in file_sources {
-        path.hash(&mut hasher);
-        source.len().hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 /// Runs `guard_admissible`-style checks then `extract_deps` inside
@@ -1396,5 +1413,148 @@ mod tests {
         drop(tree);
 
         // Reaching this line is the proof: the process survived the Drop.
+    }
+
+    // ── Security hardening (#90 T5, two LOW items deferred from #33 T5) ──
+    // Both must be closed before an LSP primary reuses a single
+    // TreeSitterCodeParser instance across scans:
+    //   1. deps_index_cache must not stale-reuse a memoized DepsIndex for a
+    //      different file set — keyed on Arc pointer identity so a changed
+    //      file set (a fresh Arc) always rebuilds (retry #1 replaced the
+    //      earlier content fingerprint; see `deps_index`).
+    //   2. deps_index_cache's two lock sites must recover from mutex
+    //      poisoning instead of propagating the panic.
+
+    #[test]
+    fn stale_deps_index_is_not_reused_when_file_content_changes_but_lengths_match() {
+        let file1 = "namespace AAAA { class Foo {} }";
+        let file2_v1 = "using AAAA;\nclass Bar {}";
+        // Same length as file2_v1, but no `using` directive at all — built
+        // by padding, not hand-counted, so the length-equality precondition
+        // can never silently drift out of sync with file2_v1 above.
+        let padding = " ".repeat(file2_v1.len() - "class Bar {}".len());
+        let file2_v2 = format!("{padding}class Bar {{}}");
+        assert_eq!(
+            file2_v1.len(),
+            file2_v2.len(),
+            "precondition: same length, different content"
+        );
+
+        let parser = parser();
+
+        let ctx1 = deps_ctx(
+            "file2.cs",
+            &[("file1.cs", file1), ("file2.cs", file2_v1)],
+            &[],
+        );
+        let resolved1 = parser.resolve_dependencies(file2_v1, &ctx1).unwrap();
+        assert_eq!(
+            resolved1,
+            vec![PathBuf::from("file1.cs")],
+            "sanity: the first call resolves through the real `using AAAA;`"
+        );
+
+        let ctx2 = deps_ctx(
+            "file2.cs",
+            &[("file1.cs", file1), ("file2.cs", file2_v2.as_str())],
+            &[],
+        );
+        let resolved2 = parser
+            .resolve_dependencies(file2_v2.as_str(), &ctx2)
+            .unwrap();
+
+        assert!(
+            resolved2.is_empty(),
+            "the second file set has the SAME paths and SAME per-file \
+             lengths as the first, but file2.cs no longer contains a \
+             `using` directive — a length-only fingerprint collides with \
+             the first file set and stale-reuses its cached DepsIndex, \
+             wrongly resolving to {:?}",
+            resolved2
+        );
+    }
+
+    // Retry #1 (#90 T5 — Dev-B changes-requested, Security MEDIUM CWE-400,
+    // QA convergent): the content-hash fingerprint above closed the stale-
+    // reuse bug but introduced a NEW cost — hashing every file's full
+    // content on EVERY `resolve_dependencies` call, in production TODAY
+    // (`run_analysis` calls it once per project file, all sharing the SAME
+    // `file_sources` `Arc`). Keying the cache on `Arc` pointer identity
+    // instead is O(1) per call and never rehashes; the trade is that two
+    // distinct, byte-identical `Arc` allocations no longer share a cache
+    // entry (rare, harmless — just an extra rebuild, not a correctness
+    // issue, and `Vec<(PathBuf,String)>` has no interior mutability so
+    // "same Arc" already guarantees "same content").
+    #[test]
+    fn deps_index_reuses_the_same_arc_but_rebuilds_for_a_different_arc_with_identical_content() {
+        let file_sources = Arc::new(vec![(
+            PathBuf::from("file1.cs"),
+            "namespace A { class Foo {} }".to_string(),
+        )]);
+        let ctx1 = DependencyContext::new(
+            PathBuf::from("file1.cs"),
+            PathBuf::from("."),
+            vec![PathBuf::from("file1.cs")],
+        )
+        .with_file_sources(Arc::clone(&file_sources));
+
+        let parser = parser();
+        let index1 = parser.deps_index(&ctx1);
+        let index2 = parser.deps_index(&ctx1);
+        assert!(
+            Arc::ptr_eq(&index1, &index2),
+            "sanity: the SAME file_sources Arc across two calls must reuse the memoized \
+             DepsIndex (cache hit, O(1)) — a per-call rebuild would defeat the whole point \
+             of memoization"
+        );
+
+        // A second, DISTINCT Arc allocation with byte-identical content.
+        let identical_content_sources = Arc::new((*file_sources).clone());
+        let ctx2 = DependencyContext::new(
+            PathBuf::from("file1.cs"),
+            PathBuf::from("."),
+            vec![PathBuf::from("file1.cs")],
+        )
+        .with_file_sources(Arc::clone(&identical_content_sources));
+
+        let index3 = parser.deps_index(&ctx2);
+
+        assert!(
+            !Arc::ptr_eq(&index1, &index3),
+            "a DIFFERENT file_sources Arc — even with byte-identical content — must NOT be \
+             treated as a cache hit against the first Arc's memoized index: a fingerprint \
+             keyed by content (rather than Arc identity) would incorrectly reuse it here, \
+             and computing that content fingerprint on every call is exactly the \
+             O(total project bytes) per-call cost this fix removes"
+        );
+    }
+
+    #[test]
+    fn deps_index_lookup_recovers_from_a_poisoned_cache_mutex_instead_of_panicking() {
+        let parser = parser();
+
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _guard = parser.deps_index_cache.lock().unwrap();
+                    panic!("deliberately poisoning the cache mutex");
+                })
+                .join()
+                .expect_err("the spawned thread must panic to poison the mutex");
+        });
+        assert!(parser.deps_index_cache.is_poisoned());
+
+        let source = "namespace A { class Foo {} }";
+        let ctx = deps_ctx("file1.cs", &[("file1.cs", source)], &[]);
+
+        let resolved = parser.resolve_dependencies(source, &ctx);
+
+        assert!(
+            resolved.is_ok(),
+            "resolve_dependencies must recover from a poisoned \
+             deps_index_cache mutex instead of panicking on \
+             .lock().unwrap(), got {:?}",
+            resolved
+        );
     }
 }
