@@ -838,54 +838,38 @@ fn stat_grid_shows_dash_when_no_economic_impact() {
 // These fail the BUILD (not merely production) the moment a banned sink or
 // a third `.style` access is introduced anywhere in the emitted JS.
 
+// #28 (ADR-8.10 hardening): scanning `assets::JS` directly — the actual
+// renderer asset the ADR governs — rather than the whole `write_html`
+// document. Precision, not merely style: scanning the full document would
+// also walk the JSON data island, where an attacker-controlled file path
+// could coincidentally contain a banned substring (e.g. a file literally
+// named `weird.style.paddingLeft.rs`) and fail the gate for a reason that
+// has nothing to do with the emitted JS. The gate's own contract
+// (`rendering_gate` module) is exercised identically against a known bypass
+// in `html_renderer_gate_hardening_test.rs`.
 #[test]
 fn rendered_js_contains_no_html_sink() {
-    let writer = HtmlReportWriter::new();
-    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+    let violations = codeimpact_secondaries_integration_test::rendering_gate::html_sink_violations(
+        codeimpact_secondaries::gateways::report_writers::html::assets::JS,
+    );
 
-    let html = writer
-        .write_html(&graph, "proj")
-        .expect("write_html should succeed");
-
-    let banned = [
-        "innerHTML",
-        "outerHTML",
-        "insertAdjacentHTML",
-        "document.write",
-        "setAttribute",
-        "eval(",
-        "new Function",
-        "javascript:",
-        "srcdoc",
-        "cssText",
-    ];
-    for pattern in banned {
-        assert!(
-            !html.contains(pattern),
-            "emitted JS must never contain the banned sink '{}': {}",
-            pattern,
-            html
-        );
-    }
+    assert!(
+        violations.is_empty(),
+        "the real emitted JS must never trip the HTML-sink gate: {:?}",
+        violations
+    );
 }
 
 #[test]
 fn rendered_js_has_only_two_style_sinks() {
-    let writer = HtmlReportWriter::new();
-    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+    let violations = codeimpact_secondaries_integration_test::rendering_gate::style_sink_violations(
+        codeimpact_secondaries::gateways::report_writers::html::assets::JS,
+    );
 
-    let html = writer
-        .write_html(&graph, "proj")
-        .expect("write_html should succeed");
-
-    let total_style = html.matches(".style.").count();
-    let width_sink = html.matches(".style.width").count();
-    let padding_sink = html.matches(".style.paddingLeft").count();
-    assert_eq!(
-        total_style,
-        width_sink + padding_sink,
-        "exactly two clamped numeric style sinks are allowed in the whole file (width, paddingLeft): {}",
-        html
+    assert!(
+        violations.is_empty(),
+        "the real emitted JS must carry only the two clamped numeric style sinks (width, paddingLeft): {:?}",
+        violations
     );
 }
 
