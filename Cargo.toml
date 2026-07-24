@@ -14,3 +14,15 @@ members = [
 # license instead of reporting it unlicensed.
 [workspace.package]
 license = "Apache-2.0"
+
+# #51 — silent integer wrap in --release is exactly the "plausible but
+# false" number ADR-0010/ADR-0012 forbid, and a #[should_panic] invariant
+# test on a debug_assert! was proven (Security audit, #46/#49) to pass
+# --release without ever panicking. overflow-checks converts wrap -> hard
+# panic; debug-assertions makes debug_assert! present in the shipped
+# artifact. See overflow_checks_release_profile_test.rs for the empirical
+# proof and #51's arithmetic-site audit for why no call site needed a
+# saturating/Unmeasurable change alongside this flag.
+[profile.release]
+overflow-checks = true
+debug-assertions = true

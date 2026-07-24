@@ -12,7 +12,7 @@ pub mod js_runtime_check;
 /// place the "ensure the probe binary exists" plumbing is written once and
 /// imported everywhere it is needed, instead of duplicated per file.
 pub mod support {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     pub fn workspace_root() -> PathBuf {
@@ -66,7 +66,9 @@ pub mod support {
     /// validate stale code is not a cache, it is a correctness bug in the
     /// harness itself.
     pub fn ensure_bin_built(package: &str, bin_name: &str) -> PathBuf {
-        let is_release = !cfg!(debug_assertions);
+        let is_release = std::env::current_exe()
+            .map(|exe| is_release_exe_path(&exe))
+            .unwrap_or(false);
         let profile_dir = if is_release { "release" } else { "debug" };
         let bin_path = workspace_root()
             .join("target")
@@ -84,5 +86,20 @@ pub mod support {
             .unwrap_or_else(|_| panic!("failed to build {}", bin_name));
         assert!(status.success(), "{} build failed", bin_name);
         bin_path
+    }
+
+    /// Reads the SAME path signal `SynCodeParser::discover_probe_path`
+    /// itself relies on (`target/<profile>/deps/<binary>`) to decide whether
+    /// `exe_path` was built under `--release`, instead of
+    /// `cfg!(debug_assertions)` — which #51's own
+    /// `[profile.release] debug-assertions = true` makes `true` in BOTH
+    /// profiles, so it can no longer distinguish them (QA retry-1 finding).
+    pub fn is_release_exe_path(exe_path: &Path) -> bool {
+        exe_path
+            .parent()
+            .and_then(|deps_dir| deps_dir.parent())
+            .and_then(|profile_dir| profile_dir.file_name())
+            .map(|name| name == "release")
+            .unwrap_or(false)
     }
 }
