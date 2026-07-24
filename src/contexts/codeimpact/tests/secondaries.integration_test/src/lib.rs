@@ -3,7 +3,7 @@
 /// place the "ensure the probe binary exists" plumbing is written once and
 /// imported everywhere it is needed, instead of duplicated per file.
 pub mod support {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     pub fn workspace_root() -> PathBuf {
@@ -75,5 +75,15 @@ pub mod support {
             .unwrap_or_else(|_| panic!("failed to build {}", bin_name));
         assert!(status.success(), "{} build failed", bin_name);
         bin_path
+    }
+
+    /// Reads the SAME path signal `SynCodeParser::discover_probe_path`
+    /// itself relies on (`target/<profile>/deps/<binary>`) to decide whether
+    /// `exe_path` was built under `--release`, instead of
+    /// `cfg!(debug_assertions)` — which #51's own
+    /// `[profile.release] debug-assertions = true` makes `true` in BOTH
+    /// profiles, so it can no longer distinguish them (QA retry-1 finding).
+    pub fn is_release_exe_path(exe_path: &Path) -> bool {
+        unimplemented!("scaffold — RED before GREEN, ticket #51 retry 1")
     }
 }
