@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::{
     CodeLocation, CodeMetrics, EcologicalImpact, EconomicImpact, EfficiencyClass,
-    FileConsumptionGraph, FileDependency, FunctionDetail, UnmeasurableFile, UnmeasurableReason,
+    FileConsumptionGraph, FileDependency, FunctionDetail, Language, LanguageCapabilities,
+    MetricSupport, UnmeasurableFile, UnmeasurableReason,
 };
 
 // ── Test List ──────────────────────────────────────────────────────────
@@ -44,6 +45,12 @@ use codeimpact_hexagon::analysis::{
 //  25. median_empty_project_reports_none — zero measured files → median is
 //      0 and complexity_level() is "none", not the misleadingly clean "low"
 //      complexity_level_for(0) would give
+//  26. aggregated_metrics_metric_support_folds_mixed_capabilities_to_degraded
+//      — Rust (no capabilities) + C# (io_in_loops Unsupported) → aggregate
+//      io_in_loops is Degraded, not silently Supported/Unsupported (#89 S1)
+//  27. aggregated_metrics_metric_support_all_unsupported_stays_unsupported
+//      — every file Unsupported for io_in_loops (pure-C#, no Rust file in
+//      the mix) → aggregate io_in_loops is Unsupported (#89 S1)
 //
 // total_dependencies / max_depth:
 //  18. graph_with_chain — correct depth and count
@@ -447,6 +454,55 @@ fn median_empty_project_reports_none() {
 
     assert_eq!(metrics.median_file_cyclomatic_complexity, 0);
     assert_eq!(metrics.complexity_level(), "none");
+}
+
+// #89 S1 (ADR-0021 T3b follow-up): the project stat tiles must read the
+// SAME honest degradation the per-file detail already had — a mixed
+// Rust+C# project must not silently report io_in_loops as fully
+// Supported (nor flatly Unsupported: the Rust file DID measure it).
+#[test]
+fn aggregated_metrics_metric_support_folds_mixed_capabilities_to_degraded() {
+    let rust = make_metrics(5, 5);
+    let csharp = make_metrics(3, 3).with_capabilities(
+        LanguageCapabilities::all_supported(Language::CSharp)
+            .with_io_in_loops(MetricSupport::Unsupported),
+    );
+    let files = vec![(path("a.rs"), rust), (path("b.cs"), csharp)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let metrics = graph.aggregated_metrics();
+
+    match metrics.metric_support.io_in_loops() {
+        MetricSupport::Degraded(reason) => {
+            assert_eq!(reason, "partial: 1/2 files measured this metric");
+        }
+        other => panic!(
+            "a mixed Rust+C# project must fold io_in_loops to Degraded, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn aggregated_metrics_metric_support_all_unsupported_stays_unsupported() {
+    let unsupported_csharp = || {
+        make_metrics(1, 1).with_capabilities(
+            LanguageCapabilities::all_supported(Language::CSharp)
+                .with_io_in_loops(MetricSupport::Unsupported),
+        )
+    };
+    let files = vec![
+        (path("a.cs"), unsupported_csharp()),
+        (path("b.cs"), unsupported_csharp()),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let metrics = graph.aggregated_metrics();
+
+    assert_eq!(
+        *metrics.metric_support.io_in_loops(),
+        MetricSupport::Unsupported
+    );
 }
 
 #[test]

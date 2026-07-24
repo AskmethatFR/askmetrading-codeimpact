@@ -308,6 +308,10 @@ pub const JS: &str = r#"
     data.stats.forEach(function (s) {
       var tile = el("div", "tile");
       tile.appendChild(el("div", "tile-label", s.label));
+      if (s.support && s.support !== "supported") {
+        var badgeText = s.support === "unsupported" ? "N/A" : s.support.toUpperCase();
+        tile.appendChild(el("span", "tag " + cls(SUP, s.support, "sup-ok"), badgeText));
+      }
       tile.appendChild(el("div", "tile-value", s.value));
       tile.appendChild(el("div", "tile-sub", s.sub));
       grid.appendChild(tile);
