@@ -347,6 +347,13 @@ fn zero_function_file_renders_level_none_and_js_maps_it_to_its_own_class() {
 // 5. every_stat_tile_matches_the_tree_root — the structural guard: no tile
 //    may report a number that diverges from the root node detail it
 //    summarizes (the #46/#49 anti-recidive guard).
+// 6. (#89 S1) a pure-C# project (io_in_loops Unsupported on every file)
+//    reads "n/a" / support "unsupported" on the I/O-in-loops tile.
+// 7. (#89 S1) a mixed Rust+C# project reads support "degraded" and keeps
+//    the real measured total (never n/a) on the I/O-in-loops tile.
+// 8. (#89 S1) a Rust-only project (no capabilities attached) keeps every
+//    tile's support "supported" and every value/sub unchanged — regression
+//    pin for wiring StatVm.support.
 
 fn extract_data_island(html: &str) -> serde_json::Value {
     let start_marker = r#"<script id="ci-data" type="application/json">"#;
@@ -426,6 +433,113 @@ fn stat_grid_io_tile_counts_io_in_loops() {
         "I/O in loops must have its own tile, separate from Warnings: {}",
         html
     );
+}
+
+// #89 S1 (ADR-0021 "dette connue" T3b follow-up): the project stat tiles now
+// carry the same honest degradation the per-node detail already had (T3,
+// #33) — a purely-C#-with-Unsupported-io project must read "n/a" on the
+// I/O-in-loops tile, never a fabricated "0".
+#[test]
+fn stat_grid_io_tile_reads_na_for_pure_csharp_project() {
+    let writer = HtmlReportWriter::new();
+    let unsupported_io = || {
+        LanguageCapabilities::all_supported(Language::CSharp)
+            .with_io_in_loops(MetricSupport::Unsupported)
+    };
+    let a = make_metrics(5, 5).with_capabilities(unsupported_io());
+    let b = make_metrics(3, 3).with_capabilities(unsupported_io());
+    let graph = graph_from(vec![("a.cs", a), ("b.cs", b)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+    let stats = data["stats"].as_array().expect("stats array");
+
+    let io_tile = stats
+        .iter()
+        .find(|s| s["label"] == "I/O in loops")
+        .expect("I/O in loops tile");
+    assert_eq!(
+        io_tile["value"], "n/a",
+        "a pure-C# project (io_in_loops Unsupported on every file) must read n/a, \
+         never a fabricated 0: {}",
+        html
+    );
+    assert_eq!(io_tile["support"], "unsupported");
+}
+
+#[test]
+fn stat_grid_io_tile_reads_degraded_for_mixed_project() {
+    let writer = HtmlReportWriter::new();
+    let rust = make_metrics(5, 5).with_io_in_loops(vec![io_in("f")]);
+    let csharp = make_metrics(3, 3).with_capabilities(
+        LanguageCapabilities::all_supported(Language::CSharp)
+            .with_io_in_loops(MetricSupport::Unsupported),
+    );
+    let graph = graph_from(vec![("a.rs", rust), ("b.cs", csharp)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+    let stats = data["stats"].as_array().expect("stats array");
+
+    let io_tile = stats
+        .iter()
+        .find(|s| s["label"] == "I/O in loops")
+        .expect("I/O in loops tile");
+    assert_eq!(io_tile["support"], "degraded");
+    assert_eq!(
+        io_tile["value"], "1",
+        "a Degraded tile still shows the real measured total, never n/a: {}",
+        html
+    );
+}
+
+// Regression pin (#89 S1): wiring StatVm.support to metric_support must not
+// perturb a single Rust-only value — `capabilities: None` (make_metrics
+// attaches none) folds to Supported on every axis (ADR-0021 D1), so every
+// tile must stay exactly what it was before this slice.
+#[test]
+fn stat_tiles_rust_only_project_stay_supported_and_unchanged() {
+    let writer = HtmlReportWriter::new();
+    let a = make_metrics(5, 8).with_warnings(vec![warning_in("f", WarningSeverity::Critical)]);
+    let b = make_metrics(3, 4);
+    let graph = graph_from(vec![("a.rs", a), ("b.rs", b)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+    let stats = data["stats"].as_array().expect("stats array");
+
+    assert_eq!(
+        stats.len(),
+        10,
+        "no tile was added or removed by wiring metric_support: {}",
+        html
+    );
+    for tile in stats {
+        assert_eq!(
+            tile["support"], "supported",
+            "a Rust-only project (no capabilities attached) must keep every tile \
+             Supported — capabilities: None folds to Supported on every axis: {:?}",
+            tile
+        );
+    }
+
+    let stat_value = |label: &str| -> String {
+        stats
+            .iter()
+            .find(|s| s["label"] == label)
+            .unwrap_or_else(|| panic!("stat tile '{}' not found", label))["value"]
+            .as_str()
+            .expect("stat value is a string")
+            .to_string()
+    };
+    assert_eq!(stat_value("Direct \u{3a3}"), "8");
+    assert_eq!(stat_value("Warnings"), "1");
 }
 
 // #56 T2 — abstention (ADR-0010/ADR-0014 §4): project-total tile AND

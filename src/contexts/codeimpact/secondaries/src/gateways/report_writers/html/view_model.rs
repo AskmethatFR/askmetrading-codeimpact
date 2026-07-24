@@ -70,6 +70,12 @@ pub struct StatVm {
     pub label: String,
     pub value: String,
     pub sub: String,
+    /// Project-level honesty signal (#89 S1, ADR-0021 T3b follow-up):
+    /// "supported" (default), "degraded", or "unsupported" — mirrors
+    /// `MetricVm::support` one level up, at the project-aggregate tile.
+    /// Placed LAST in field order: existing exact-substring assertions like
+    /// `"value":"2","sub":"1 critical"` must stay adjacent and unbroken.
+    pub support: String,
 }
 
 /// One entry per project/folder/file node, flattened (spec §2: "the root is
@@ -775,7 +781,7 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
         .collect()
 }
 
-/// Renders the 9 project stat tiles. Every value comes straight from
+/// Renders the 10 project stat tiles. Every value comes straight from
 /// `ProjectMetrics` (`FileConsumptionGraph::aggregated_metrics()`, the
 /// single source of truth) — no `.len()`/`.sum()`/`.count()` here (#46/#49
 /// tech spec §11): a tile that recomputes its own aggregate is exactly how
@@ -796,56 +802,69 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
         None => ("\u{2014}".to_string(), String::new()),
     };
 
+    // Scaffold (red, #89 S1): every tile hardcodes "supported" — not yet
+    // wired to aggregated.metric_support. Real tile→axis wiring follows
+    // next commit.
     vec![
         StatVm {
             label: "Files".to_string(),
             value: aggregated.total_files.to_string(),
             sub: "analysed".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Direct \u{3a3}".to_string(),
             value: aggregated.total_cyclomatic_complexity.to_string(),
             sub: "cyclomatic".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Transitive \u{3a3}".to_string(),
             value: aggregated.total_transitive_complexity.to_string(),
             sub: format!("{} hidden", aggregated.total_hidden_complexity),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Warnings".to_string(),
             value: aggregated.total_warnings.to_string(),
             sub: format!("{} critical", aggregated.critical_warnings),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "I/O in loops".to_string(),
             value: aggregated.total_io_in_loops.to_string(),
             sub: "in loops".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Unclassifiable".to_string(),
             value: aggregated.total_unclassifiable_io_in_loops.to_string(),
             sub: "io calls".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Max depth".to_string(),
             value: aggregated.max_call_depth.to_string(),
             sub: "call chain".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Hotspots".to_string(),
             value: aggregated.hotspot_files.to_string(),
             sub: "critical files".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Est. cost".to_string(),
             value: cost_value,
             sub: "per run".to_string(),
+            support: "supported".to_string(),
         },
         StatVm {
             label: "Eco class".to_string(),
             value: eco_class_value,
             sub: eco_sub,
+            support: "supported".to_string(),
         },
     ]
 }
