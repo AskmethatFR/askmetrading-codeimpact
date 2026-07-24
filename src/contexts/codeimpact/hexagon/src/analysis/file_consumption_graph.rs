@@ -249,11 +249,9 @@ impl FileConsumptionGraph {
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
             median_file_cyclomatic_complexity: median_cyclomatic_complexity(&self.per_file_metrics),
-            // Scaffold (red): ignores per_file_metrics entirely, always
-            // folds an empty iterator -> every axis reads Supported
-            // regardless of what the files actually declare. Real fold
-            // follows next commit.
-            metric_support: AggregateMetricSupport::fold(std::iter::empty()),
+            metric_support: AggregateMetricSupport::fold(
+                self.per_file_metrics.values().map(|m| m.capabilities()),
+            ),
         }
     }
 
