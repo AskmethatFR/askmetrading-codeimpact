@@ -542,6 +542,36 @@ fn stat_tiles_rust_only_project_stay_supported_and_unchanged() {
     assert_eq!(stat_value("Warnings"), "1");
 }
 
+// #89 S1: the stat tile itself must render a SUP-classed badge when its
+// support is not "supported" — reusing the already-guarded closed SUP
+// whitelist (rendered_js_defines_sup_whitelist_and_its_css_classes), never
+// a fresh ad-hoc class. `s.support` is the discriminator: before this
+// slice, no rendered JS references `stats[].support` at all (only
+// `m.support` on the per-node MetricVm), so this string can only appear
+// once `renderStats()` reads its own tile's field.
+#[test]
+fn rendered_js_renders_sup_badge_on_stat_tiles() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#"if (s.support && s.support !== "supported")"#),
+        "renderStats() must guard the badge on a non-\"supported\" state, \
+         mirroring renderMetrics()'s existing m.support guard: {}",
+        html
+    );
+    assert!(
+        html.contains(r#"cls(SUP, s.support, "sup-ok")"#),
+        "the stat tile badge must resolve through the existing closed SUP \
+         whitelist, never a data-built class string (ADR-0008 §8.10): {}",
+        html
+    );
+}
+
 // #56 T2 — abstention (ADR-0010/ADR-0014 §4): project-total tile AND
 // per-node aggregate, mirroring the Direct/Transitive/Hidden pattern (a
 // scalar summed postorder), NOT the Warnings/I-O-in-loops pattern (a
