@@ -122,6 +122,12 @@ Le scan pouvant servir de **gate CI dur** ([[ADR-0017]] `--strict`, exit 3), tou
 - **(−)** Deux dépendances `secondaries` de plus (`ignore`, `globset`) — acceptées (D3), confinées à l'adaptateur.
 - **(−)** Résiduel `git_global` sous hôte CI mutualisé non fiable (voir frontière de confiance) — non traité par du code, remédiation opérationnelle.
 
+## Addendum #96 — pruning `exclude` au parcours, seulement pour les formes de glob sans ambiguïté de dialecte
+
+Avant #96, `include`/`exclude` étaient appliqués **post-marche** (par fichier) : seul `.gitignore` élaguait la descente dans les répertoires. Exclure `target/` (20,6k fichiers) via `exclude=["target/**"]` sous `respectGitignore:false` était ~34x plus lent que l'exclusion par gitignore, à résultat identique.
+
+#96 enregistre `exclude` comme surcharges `ignore::overrides::Override` (négatives) au **temps de marche** — mais **uniquement pour la forme `<littéral>/**`** (préfixe non-vide, sans métacaractère glob). Raison : `OverrideBuilder` utilise la **syntaxe gitignore-line**, qui diverge du `globset::Glob` ancré antérieur sur deux points (vérifiés empiriquement vs globset 0.4.19 / ignore 0.4.31) : (1) un motif sans `/` matche le **basename à toute profondeur** en gitignore vs. un **chemin littéral top-level** en globset ; (2) un `*` simple ne **traverse jamais `/`** en gitignore-line mais **le traverse** en globset (`literal_separator=false`). Seule la forme `<littéral>/**` est prouvée identique dans les deux dialectes. **Tout autre motif retombe sur le `GlobSet` post-marche pré-#96** — résultat byte-identique. La garantie « le filtrage produit exactement le même ensemble de fichiers » (§4) est ainsi préservée ; seul le **coût** change, et seulement là où c'est sûr (le cas motivant `target/**`).
+
 ## Dette connue, explicitement non traitée
 
 - **`languages` / `sourceRoots` / `extensions` / `parser` / `ioSignatures`** — parsées mais inertes ; câblage laissé à #33/#34.
