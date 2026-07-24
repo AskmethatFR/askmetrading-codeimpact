@@ -30,11 +30,12 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, AnalysisError> {
         .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
 }
 
-/// Registers `exclude` as walk-time `ignore::overrides::Override` patterns
-/// (#96, perf): each pattern is added NEGATED (`!pattern`), which makes
-/// `ignore::WalkBuilder` PRUNE a matching subtree during descent instead of
-/// yielding every entry underneath it for the post-walk `keep` check below
-/// — measured ~34x faster for a 20.6k-file excluded subtree.
+/// Registers `patterns` (already filtered to the dialect-safe subset — see
+/// `partition_exclude_patterns`) as walk-time `ignore::overrides::Override`
+/// patterns (#96, perf): each pattern is added NEGATED (`!pattern`), which
+/// makes `ignore::WalkBuilder` PRUNE a matching subtree during descent
+/// instead of yielding every entry underneath it for the post-walk `keep`
+/// check below — measured ~34x faster for a 20.6k-file excluded subtree.
 ///
 /// `include` deliberately stays on the post-walk `GlobSet` above rather
 /// than moving here too. `ignore::dir::Ignore::matched` gives overrides
@@ -56,6 +57,63 @@ fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override,
     builder
         .build()
         .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
+}
+
+/// Retry #1 (QA CRITICAL, reproduced): moving `exclude` wholesale to
+/// walk-time `ignore::overrides::Override` silently swapped the glob
+/// DIALECT, not just the evaluation point. Pre-#96, `exclude` matched via
+/// `globset::Glob::new` against the ENTIRE relative path (anchored/exact —
+/// ADR-0019 §4). `ignore`'s gitignore-line syntax disagrees with that on
+/// two points that change RESULTS:
+///   1. a pattern with no `/` matches the file's BASENAME AT ANY DEPTH
+///      (gitignore semantics) instead of the literal full relative path
+///      (globset semantics) — a bare `"generated"` would prune the whole
+///      `generated/` subtree instead of matching nothing (the old
+///      behavior, since no nested path is literally equal to
+///      "generated").
+///   2. a single `*` never crosses `/` in gitignore-line syntax, but DOES
+///      cross it in globset's default `Glob` (`literal_separator` is
+///      `false` unless a `GlobBuilder` says otherwise) — an anchored
+///      pattern like `"src/*.rs"` would only prune direct children of
+///      `src/` instead of every nested `.rs` file under it too.
+///
+/// Only patterns of the EXACT shape `<literal>/**` are provably immune to
+/// both: `globset`'s own doc comment ("if the glob ends with /**, then it
+/// matches all sub-entries... but not foo") and the gitignore spec ("a
+/// trailing '/**' matches everything inside... with infinite depth")
+/// describe the IDENTICAL semantics for that one shape, and neither
+/// dialect's single-`*` behavior comes into play since the only wildcard
+/// used is the trailing `**`. Verified empirically against globset 0.4.19
+/// and ignore 0.4.31 before writing this fix.
+///
+/// Every other exclude pattern shape is routed to the post-walk `GlobSet`
+/// fallback instead (same code path as pre-#96, byte-identical by
+/// construction) rather than the walk-time `Override`.
+fn is_dialect_safe_prune_pattern(pattern: &str) -> bool {
+    match pattern.strip_suffix("/**") {
+        Some(prefix) => {
+            !prefix.is_empty()
+                && !prefix.contains(['*', '?', '[', ']', '!', '{', '}'])
+                && prefix.split('/').all(|segment| !segment.is_empty())
+        }
+        None => false,
+    }
+}
+
+/// Splits `exclude` into the walk-time-prunable subset (dialect-safe) and
+/// the subset that must stay on the post-walk `GlobSet` fallback to
+/// preserve pre-#96 result identity (see `is_dialect_safe_prune_pattern`).
+fn partition_exclude_patterns(patterns: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut walk_time_safe = Vec::new();
+    let mut post_walk_fallback = Vec::new();
+    for pattern in patterns {
+        if is_dialect_safe_prune_pattern(pattern) {
+            walk_time_safe.push(pattern.clone());
+        } else {
+            post_walk_fallback.push(pattern.clone());
+        }
+    }
+    (walk_time_safe, post_walk_fallback)
 }
 
 #[derive(Default)]
@@ -103,7 +161,10 @@ impl CodeReader for FileSystemCodeReader {
         let include_set = build_glob_set(filter.include())?;
         let include_is_empty = filter.include().is_empty();
         let respect_gitignore = filter.respect_gitignore();
-        let exclude_overrides = build_exclude_overrides(&canonical_root, filter.exclude())?;
+        let (walk_time_exclude, fallback_exclude) = partition_exclude_patterns(filter.exclude());
+        let fallback_exclude_set = build_glob_set(&fallback_exclude)?;
+        let fallback_exclude_is_empty = fallback_exclude.is_empty();
+        let exclude_overrides = build_exclude_overrides(&canonical_root, &walk_time_exclude)?;
 
         let mut files = Vec::new();
         let walker = WalkBuilder::new(&canonical_root)
@@ -157,6 +218,12 @@ impl CodeReader for FileSystemCodeReader {
                     let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
                     let keep = include_is_empty || include_set.is_match(relative);
                     if !keep {
+                        continue;
+                    }
+                    // Result-identity fallback (retry #1): any exclude
+                    // pattern NOT dialect-safe for walk-time pruning still
+                    // gets the pre-#96 post-walk globset check here.
+                    if !fallback_exclude_is_empty && fallback_exclude_set.is_match(relative) {
                         continue;
                     }
                     match std::fs::metadata(path) {
