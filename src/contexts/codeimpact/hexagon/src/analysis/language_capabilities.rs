@@ -109,8 +109,16 @@ impl LanguageCapabilities {
 /// analyzed file's `LanguageCapabilities` (#89 S1, ADR-0021 "dette connue"
 /// T3b follow-up). ADR-0021 rendered the honest `n/a`/`Degraded` signal
 /// per-file; this VO extends the same honesty to the project aggregate
-/// (banner stat tiles) — a purely-C# project must read "n/a" for
-/// `io_in_loops`, never a fabricated "0".
+/// (banner stat tiles + project JSON) — instead of a fabricated "0".
+///
+/// The aggregate reads `n/a` (Unsupported) only when EVERY analyzed file
+/// declares that metric `Unsupported`. Note: no shipped adapter emits
+/// `MetricSupport::Unsupported` today — the C# adapter reports `io_in_loops`
+/// as `Degraded` (T4 already flipped Unsupported -> Degraded, ADR-0021 D4),
+/// so a real pure-C# project currently reads "degraded", not "n/a". The
+/// `Unsupported` -> "n/a" path is correct and forward-compatible for
+/// whenever a future axis/adapter does declare `Unsupported`, but is not
+/// reachable end-to-end via a shipped adapter as of #89.
 ///
 /// Four axes only (human-approved Q3: wire ALL tiles to their axis) — the
 /// ones an S1 calling use case (`build_stats`, HTML writer) actually
