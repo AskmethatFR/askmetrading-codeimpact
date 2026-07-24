@@ -171,6 +171,10 @@ The JSON schema is implemented as `#[derive(serde::Serialize)]` DTOs in `seconda
 
 Conversion from hexagon domain types to DTOs is via `From` trait impls.
 
+## Project-aggregate `metric_support` honesty (#89 S2, ADR-0026)
+
+The project-level `metrics` object carries a `metric_support` object (one label per axis: `"supported"` / `"degraded: partial: M/N…"` / `"unsupported"`), folded from every file's `LanguageCapabilities` per the [[ADR-0026]] lattice. When an axis aggregates to `Unsupported`, its metric serializes **JSON `null`, never `[]` or `0`** — e.g. `io_in_loops: null` and `unclassifiable_io_in_loops_count: null` — the same null-not-empty rule [[ADR-0021]] D3 set at file level. `Degraded` keeps the real (partial) value; `Supported` is byte-identical to the pre-#89 shape (additive only, [[ADR-0007]]). Note (ADR-0026): no shipped adapter emits `Unsupported` today, so the `null` path is forward-compatible but exercised only via synthetic fixtures.
+
 ## References
 
 - [[ADR-0007]] — decisions that led to this schema

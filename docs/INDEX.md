@@ -2,7 +2,7 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-24 (dette Batch 2 — #51 overflow-checks release (ADR-0027), #95 cap d'entrées de marche (ADR-0006 pt.9), #96 pruning exclude walk-time dialect-safe (ADR-0019 addendum), #89 S1 agrégation `MetricSupport` honnête (ADR-0026 à venir) ; #87 recette couverture (ADR-0025) ; Batch 1 — #73 (ADR-0016), #86 cargo-deny (ADR-0009))
+> **Updated:** 2026-07-24 (dette Batch 2 — #89 S1+S2 agrégation `MetricSupport` multi-langage honnête, HTML+JSON (ADR-0026) ; #51 overflow-checks release (ADR-0027), #95 cap d'entrées de marche (ADR-0006 pt.9), #96 pruning exclude walk-time dialect-safe (ADR-0019 addendum) ; #87 recette couverture (ADR-0025) ; Batch 1 — #73 (ADR-0016), #86 cargo-deny (ADR-0009))
 
 ## Nodes
 
@@ -11,7 +11,7 @@
 | architecture-overview | technical | Architecture — CodeImpact | Applied | 2026-07-20 | [[ADR-0001]], [[ADR-0002]], [[ADR-0003]], [[ADR-0004]], [[ADR-0005]], [[ADR-0006]], [[ADR-0007]], [[ADR-0008]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]], [[economic-impact-estimator]], [[json-report-schema]], [[html-report]], [[alert-thresholds]] | docs/architecture.md |
 | console-report-enriched | technical | Console Report Format — CodeImpact (Enriched) | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[html-report]], [[ADR-0021]] | docs/technical/console-report-enriched.md |
 | economic-impact-estimator | technical | Economic Impact Estimator — Technical Rationale | Applied | 2026-07-08 | [[ADR-0004]], [[architecture-overview]] | docs/technical/economic-impact.md |
-| json-report-schema | technical | JSON Report Schema — CodeImpact | Applied | 2026-07-20 | [[ADR-0007]], [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/technical/json-report-schema.md |
+| json-report-schema | technical | JSON Report Schema — CodeImpact (+agrégat `metric_support` honnête, null-jamais-vide, #89 S2) | Applied | 2026-07-24 | [[ADR-0007]], [[architecture-overview]], [[html-report]], [[ADR-0021]], [[ADR-0026]] | docs/technical/json-report-schema.md |
 | html-report | technical | HTML Report — Self-Contained Visual Report | Applied | 2026-07-23 | [[ADR-0008]], [[architecture-overview]], [[json-report-schema]], [[console-report-enriched]], [[ADR-0021]] | docs/technical/html-report.md |
 | alert-thresholds | technical | Alert Thresholds — Threshold Gate Design (US8) | Applied | 2026-07-17 | [[architecture-overview]], [[ADR-0017]], [[ADR-0019]], [[ADR-0010]], [[ADR-0006]], [[json-report-schema]], [[html-report]], [[glossary]] | docs/technical/alert-thresholds.md |
 | ADR-0001 | technical | Core Rust, zero-dep hexagon | Accepted | 2026-07-08 | [[architecture-overview]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]] | docs/ADR-0001-rust-core-hexagon.md |
@@ -39,6 +39,7 @@
 | ADR-0023 | technical | Résolution des dépendances inter-fichiers C# — index namespace→fichiers, arêtes N:M, `sourceRoots` câblé, dégradation honnête (US14-T5) | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0020]], [[ADR-0018]], [[ADR-0019]], [[ADR-0021]], [[ADR-0014]], [[ADR-0006]], [[ADR-0024]], [[glossary]] | docs/ADR-0023-csharp-cross-file-dependency-namespace-index.md |
 | ADR-0024 | technical | Cache du `DepsIndex` mémoïsé — clé sur identité de pointeur `Arc` (`Arc::ptr_eq`), empreinte de contenu supprimée, durcissement poison mutex (#90 T5) | Applied | 2026-07-22 | [[architecture-overview]], [[ADR-0023]], [[ADR-0020]], [[ADR-0006]], [[ADR-0015]], [[glossary]] | docs/ADR-0024-deps-index-cache-arc-identity-keying.md |
 | ADR-0025 | technical | Recette de couverture — sonde construite hors `llvm-cov-target`, `--test-threads=4`, source unique CI+local (#87) | Applied | 2026-07-23 | [[architecture-overview]], [[ADR-0009]], [[ADR-0010]], [[ADR-0015]] | docs/ADR-0025-coverage-tooling-recipe.md |
+| ADR-0026 | technical | Agrégation `MetricSupport` multi-langage — lattice honnête (mixte→Degraded), writers branchent sur la donnée, HTML+JSON, `Unsupported` non atteignable end-to-end aujourd'hui (#89) | Applied | 2026-07-24 | [[architecture-overview]], [[ADR-0021]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]] | docs/ADR-0026-mixed-language-metric-support-aggregation.md |
 | ADR-0027 | technical | `overflow-checks` + `debug-assertions` en release — le dépassement panique, il ne wrappe pas ; piège `cfg!(debug_assertions)` (#51) | Applied | 2026-07-24 | [[architecture-overview]], [[ADR-0010]], [[ADR-0012]], [[ADR-0015]] | docs/ADR-0027-overflow-checks-release.md |
 | glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]] | docs/glossary.md |
 
