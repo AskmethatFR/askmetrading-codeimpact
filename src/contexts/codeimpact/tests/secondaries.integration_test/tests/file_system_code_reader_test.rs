@@ -631,3 +631,135 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Ticket #96, retry #1 (QA CRITICAL, reproduced) — the migration to
+// walk-time `ignore::overrides::Override` pruning silently changed the glob
+// DIALECT for `exclude`, not just its evaluation point. Pre-#96, `exclude`
+// compiled via `globset::Glob::new` and matched the ENTIRE relative path
+// (anchored/exact — ADR-0019 §4). `ignore`'s gitignore-line syntax differs
+// on two points that both change RESULTS, not just performance:
+//   1. a pattern with NO `/` matches the file's BASENAME AT ANY DEPTH
+//      (gitignore semantics), not the literal full relative path (globset
+//      semantics) — so a bare `"generated"` prunes the whole `generated/`
+//      subtree under the new dialect, where the old one only ever matched a
+//      top-level entry literally named "generated".
+//   2. a single `*` NEVER crosses a `/` in gitignore-line syntax, but DOES
+//      cross it in globset's default `Glob` (`literal_separator` defaults
+//      to `false`) — so an anchored pattern like `"src/*.rs"` only pruned
+//      *direct* children of `src/` under the new dialect, where the old one
+//      matched the `*` as absorbing any nested path too.
+//
+// Fix: only patterns of the EXACT shape `<literal>/**` (a literal prefix —
+// no `*`/`?`/`[`/`]`/`!`/`{`/`}` — followed by a trailing recursive `/**`)
+// are dialect-safe for walk-time pruning: both `globset`'s own doc comment
+// ("if the glob ends with /**, then it matches all sub-entries... but not
+// foo") and the gitignore spec ("a trailing '/**' matches everything
+// inside... with infinite depth") describe the IDENTICAL semantics for that
+// one shape, and neither dialect's single-`*` behavior comes into play
+// since the only wildcard used is the trailing `**`. Every other exclude
+// pattern shape falls back to the pre-#96 post-walk `globset` match, which
+// is byte-identical to before by construction (same code path, never
+// migrated). Verified empirically against both crates (globset 0.4.19,
+// ignore 0.4.31) before writing this fix.
+//
+// Test List (result-identity, not new behavior):
+// 1. a bare-name exclude (no `/`) must NOT prune a subtree it would not
+//    have matched pre-#96 (the QA-reproduced crux)
+// 2. an anchored single-star exclude (`"src/*.rs"`) must still exclude a
+//    file nested one level deeper than the star, exactly like the old
+//    globset match did (same root cause as #1, same-shape sweep — the
+//    single-`*`-crossing-`/` divergence, not just the bare-name one)
+// 3. the `target/**` walk-time pruning win (perf motivation) must still
+//    hold — already covered above by
+//    `exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration`,
+//    which must stay green after this fix
+
+#[test]
+fn bare_name_exclude_does_not_prune_a_subtree_it_would_not_have_matched_pre_migration() {
+    let dir = isolated_walk_dir("bare_name_dialect_parity");
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("generated").join("drop.rs"), "fn drop_fn() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    // Bare pattern, no `/` — pre-#96 `globset::Glob::new("generated")` only
+    // matches a relative path that is LITERALLY "generated" (no wildcard to
+    // expand), so it never matched the nested "generated/drop.rs". Both
+    // files must survive, exactly as before #96.
+    let filter = FileFilter::new(vec![], vec!["generated".to_string()], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.rs")),
+        "keep.rs must still be listed, got {:?}",
+        files
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("drop.rs")),
+        "a bare-name exclude must NOT prune a nested file it would not have \
+         matched under the pre-#96 anchored globset semantics (ADR-0019 §4) \
+         — result set must stay identical to before the perf migration, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        2,
+        "both files must survive an exclude pattern that never matched \
+         either of them pre-#96, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn anchored_single_star_exclude_still_crosses_directories_like_pre_migration_globset() {
+    let dir = isolated_walk_dir("anchored_single_star_dialect_parity");
+    std::fs::create_dir_all(dir.join("src").join("sub")).unwrap();
+    std::fs::write(dir.join("src").join("direct.rs"), "fn direct() {}").unwrap();
+    std::fs::write(
+        dir.join("src").join("sub").join("nested.rs"),
+        "fn nested() {}",
+    )
+    .unwrap();
+    std::fs::write(dir.join("other.rs"), "fn other() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    // Anchored (contains `/`) but uses a single `*`, not `**` — pre-#96
+    // `globset::Glob::new("src/*.rs")` matched the FULL relative path with
+    // `literal_separator` defaulting to `false`, so `*` crossed the `/`
+    // before `sub/` too: both direct.rs and sub/nested.rs were excluded.
+    // gitignore-line syntax's single `*` never crosses `/`, so a naive
+    // walk-time-only migration would wrongly keep sub/nested.rs.
+    let filter = FileFilter::new(vec![], vec!["src/*.rs".to_string()], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("other.rs")),
+        "other.rs is outside src/, must survive, got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("direct.rs")),
+        "src/direct.rs must still be excluded, got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("nested.rs")),
+        "src/sub/nested.rs must still be excluded — a single `*` crossed `/` \
+         under the pre-#96 globset semantics (literal_separator=false), so \
+         the migration must preserve that result even though gitignore-line \
+         syntax's `*` would not cross `/` on its own, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only other.rs should survive, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
