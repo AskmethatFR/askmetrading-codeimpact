@@ -781,13 +781,54 @@ fn build_tree(graph: &FileConsumptionGraph, target: &str) -> Vec<NodeVm> {
         .collect()
 }
 
+/// Renders a `StatVm` whose value/support are governed by an
+/// `AggregateMetricSupport` axis (#89 S1, ADR-0021 T3b follow-up): `Supported`
+/// keeps the real computed value; `Degraded` keeps the real value too (some
+/// files DID measure it) but flags the tile; `Unsupported` overrides the
+/// value to the honest "n/a" (never the fabricated `real_value`, which for a
+/// zero-measurement axis is always "0").
+fn capability_stat_vm(
+    label: &str,
+    real_value: String,
+    sub: String,
+    support: &MetricSupport,
+) -> StatVm {
+    match support {
+        MetricSupport::Unsupported => StatVm {
+            label: label.to_string(),
+            value: "n/a".to_string(),
+            sub,
+            support: "unsupported".to_string(),
+        },
+        MetricSupport::Degraded(_) => StatVm {
+            label: label.to_string(),
+            value: real_value,
+            sub,
+            support: "degraded".to_string(),
+        },
+        MetricSupport::Supported => StatVm {
+            label: label.to_string(),
+            value: real_value,
+            sub,
+            support: "supported".to_string(),
+        },
+    }
+}
+
 /// Renders the 10 project stat tiles. Every value comes straight from
 /// `ProjectMetrics` (`FileConsumptionGraph::aggregated_metrics()`, the
 /// single source of truth) — no `.len()`/`.sum()`/`.count()` here (#46/#49
 /// tech spec §11): a tile that recomputes its own aggregate is exactly how
-/// the JSON and HTML writers diverged in the first place (ADR-0012).
+/// the JSON and HTML writers diverged in the first place (ADR-0012). #89 S1
+/// wires every tile to its `metric_support` axis (human-approved Q3, tile→
+/// axis map): Files is nominal (no capability narrows a file count);
+/// Direct/Transitive Σ, Warnings, Max depth, Hotspots -> cyclomatic_complexity
+/// (inert today — cyclomatic is always Supported — but future-proof);
+/// I/O in loops, Unclassifiable -> io_in_loops; Est. cost -> economic_impact;
+/// Eco class -> ecological_impact.
 fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
     let aggregated = graph.aggregated_metrics();
+    let support = &aggregated.metric_support;
 
     let cost_value = match &aggregated.total_economic_impact {
         Some(economic) => format_dollars(economic.total_cost_microdollars()),
@@ -802,70 +843,70 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
         None => ("\u{2014}".to_string(), String::new()),
     };
 
-    // Scaffold (red, #89 S1): every tile hardcodes "supported" — not yet
-    // wired to aggregated.metric_support. Real tile→axis wiring follows
-    // next commit.
     vec![
         StatVm {
             label: "Files".to_string(),
             value: aggregated.total_files.to_string(),
             sub: "analysed".to_string(),
+            // Nominal (#89 S1, human-approved Q3): a file count is not
+            // narrowed by any language capability, so it never carries a
+            // support badge of its own.
             support: "supported".to_string(),
         },
-        StatVm {
-            label: "Direct \u{3a3}".to_string(),
-            value: aggregated.total_cyclomatic_complexity.to_string(),
-            sub: "cyclomatic".to_string(),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Transitive \u{3a3}".to_string(),
-            value: aggregated.total_transitive_complexity.to_string(),
-            sub: format!("{} hidden", aggregated.total_hidden_complexity),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Warnings".to_string(),
-            value: aggregated.total_warnings.to_string(),
-            sub: format!("{} critical", aggregated.critical_warnings),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "I/O in loops".to_string(),
-            value: aggregated.total_io_in_loops.to_string(),
-            sub: "in loops".to_string(),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Unclassifiable".to_string(),
-            value: aggregated.total_unclassifiable_io_in_loops.to_string(),
-            sub: "io calls".to_string(),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Max depth".to_string(),
-            value: aggregated.max_call_depth.to_string(),
-            sub: "call chain".to_string(),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Hotspots".to_string(),
-            value: aggregated.hotspot_files.to_string(),
-            sub: "critical files".to_string(),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Est. cost".to_string(),
-            value: cost_value,
-            sub: "per run".to_string(),
-            support: "supported".to_string(),
-        },
-        StatVm {
-            label: "Eco class".to_string(),
-            value: eco_class_value,
-            sub: eco_sub,
-            support: "supported".to_string(),
-        },
+        capability_stat_vm(
+            "Direct \u{3a3}",
+            aggregated.total_cyclomatic_complexity.to_string(),
+            "cyclomatic".to_string(),
+            support.cyclomatic_complexity(),
+        ),
+        capability_stat_vm(
+            "Transitive \u{3a3}",
+            aggregated.total_transitive_complexity.to_string(),
+            format!("{} hidden", aggregated.total_hidden_complexity),
+            support.cyclomatic_complexity(),
+        ),
+        capability_stat_vm(
+            "Warnings",
+            aggregated.total_warnings.to_string(),
+            format!("{} critical", aggregated.critical_warnings),
+            support.cyclomatic_complexity(),
+        ),
+        capability_stat_vm(
+            "I/O in loops",
+            aggregated.total_io_in_loops.to_string(),
+            "in loops".to_string(),
+            support.io_in_loops(),
+        ),
+        capability_stat_vm(
+            "Unclassifiable",
+            aggregated.total_unclassifiable_io_in_loops.to_string(),
+            "io calls".to_string(),
+            support.io_in_loops(),
+        ),
+        capability_stat_vm(
+            "Max depth",
+            aggregated.max_call_depth.to_string(),
+            "call chain".to_string(),
+            support.cyclomatic_complexity(),
+        ),
+        capability_stat_vm(
+            "Hotspots",
+            aggregated.hotspot_files.to_string(),
+            "critical files".to_string(),
+            support.cyclomatic_complexity(),
+        ),
+        capability_stat_vm(
+            "Est. cost",
+            cost_value,
+            "per run".to_string(),
+            support.economic_impact(),
+        ),
+        capability_stat_vm(
+            "Eco class",
+            eco_class_value,
+            eco_sub,
+            support.ecological_impact(),
+        ),
     ]
 }
 
