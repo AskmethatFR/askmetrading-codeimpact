@@ -1,0 +1,13 @@
+{
+  "name": "codeimpact-html-runtime-security-check",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Dev-only jsdom harness (#28, ADR-8.10) that executes the REAL emitted report JS (codeimpact_secondaries::gateways::report_writers::html::assets::JS) against an adversarial data island and asserts the runtime security invariants a purely static gate cannot see: no code execution, no markup parsing, Object.prototype hygiene, and numeric clamping. Invoked exclusively from the Rust integration test suite (tests/html_renderer_runtime_security_test.rs) via `node check.mjs <html-file>` — never part of the Cargo build graph, never shipped.",
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

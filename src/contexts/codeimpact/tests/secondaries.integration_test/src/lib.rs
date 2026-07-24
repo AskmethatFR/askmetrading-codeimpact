@@ -1,3 +1,12 @@
+/// ADR-8.10 structural gate (#28) — shared by `html_report_writer_test.rs`
+/// (the real emitted JS must pass) and `html_renderer_gate_hardening_test.rs`
+/// (a known bypass must fail).
+pub mod rendering_gate;
+
+/// Node/jsdom runtime-security-check harness (#28) — shared by
+/// `html_renderer_runtime_security_test.rs`.
+pub mod js_runtime_check;
+
 /// Shared test-only helpers for this crate's `tests/*.rs` files (#63): each
 /// integration test file is compiled as its own binary, so this is the one
 /// place the "ensure the probe binary exists" plumbing is written once and

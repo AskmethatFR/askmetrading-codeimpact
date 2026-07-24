@@ -5,10 +5,25 @@ use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 128;
+/// Total walk-entry cap (#95, Security DoS residual, ADR-0006) —
+/// `MAX_WALK_DEPTH` bounds how DEEP the walk goes and `MAX_FILE_SIZE`
+/// bounds how BIG one file can be, but neither bounds how MANY entries a
+/// single shallow directory can hold. A directory with hundreds of
+/// thousands of small files at shallow depth (a planted/generated tree
+/// not gitignored, plausible under `respectGitignore:false`) was fully
+/// enumerated with no early abort. Trust model stays "user points the
+/// tool at their own codebase" (ADR-0006), so this is a residual guard,
+/// not hardening against an adversarial filesystem: 50 000 sits
+/// generously above any legitimate single-language codebase's file count
+/// while stopping well before "hundreds of thousands or millions" —
+/// chosen small enough to also keep the boundary test's fixture
+/// construction fast.
+const MAX_WALK_ENTRIES: usize = 50_000;
 const ERR_FILE_NOT_FOUND: &str = "fichier introuvable";
 const ERR_INVALID_GLOB: &str = "motif de filtrage invalide (syntaxe glob)";
 
@@ -27,6 +42,92 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, AnalysisError> {
     builder
         .build()
         .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
+}
+
+/// Registers `patterns` (already filtered to the dialect-safe subset — see
+/// `partition_exclude_patterns`) as walk-time `ignore::overrides::Override`
+/// patterns (#96, perf): each pattern is added NEGATED (`!pattern`), which
+/// makes `ignore::WalkBuilder` PRUNE a matching subtree during descent
+/// instead of yielding every entry underneath it for the post-walk `keep`
+/// check below — measured ~34x faster for a 20.6k-file excluded subtree.
+///
+/// `include` deliberately stays on the post-walk `GlobSet` above rather
+/// than moving here too. `ignore::dir::Ignore::matched` gives overrides
+/// absolute precedence: ANY override match (whitelist or negated) makes
+/// walk-level matching stop and skip the gitignore check entirely for that
+/// path. Adding `include` as non-negated (whitelist) overrides would let an
+/// include pattern resurrect a file `.gitignore` says to drop — a
+/// correctness regression this ticket must not introduce. A negated-only
+/// override set never enables that whitelist short-circuit (confirmed by
+/// the `ignore` crate's own `only_ignores` test), so moving `exclude` alone
+/// is safe: unmatched paths fall through to gitignore exactly as before.
+fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override, AnalysisError> {
+    let mut builder = OverrideBuilder::new(root);
+    for pattern in patterns {
+        builder
+            .add(&format!("!{pattern}"))
+            .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))?;
+    }
+    builder
+        .build()
+        .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
+}
+
+/// Retry #1 (QA CRITICAL, reproduced): moving `exclude` wholesale to
+/// walk-time `ignore::overrides::Override` silently swapped the glob
+/// DIALECT, not just the evaluation point. Pre-#96, `exclude` matched via
+/// `globset::Glob::new` against the ENTIRE relative path (anchored/exact —
+/// ADR-0019 §4). `ignore`'s gitignore-line syntax disagrees with that on
+/// two points that change RESULTS:
+///   1. a pattern with no `/` matches the file's BASENAME AT ANY DEPTH
+///      (gitignore semantics) instead of the literal full relative path
+///      (globset semantics) — a bare `"generated"` would prune the whole
+///      `generated/` subtree instead of matching nothing (the old
+///      behavior, since no nested path is literally equal to
+///      "generated").
+///   2. a single `*` never crosses `/` in gitignore-line syntax, but DOES
+///      cross it in globset's default `Glob` (`literal_separator` is
+///      `false` unless a `GlobBuilder` says otherwise) — an anchored
+///      pattern like `"src/*.rs"` would only prune direct children of
+///      `src/` instead of every nested `.rs` file under it too.
+///
+/// Only patterns of the EXACT shape `<literal>/**` are provably immune to
+/// both: `globset`'s own doc comment ("if the glob ends with /**, then it
+/// matches all sub-entries... but not foo") and the gitignore spec ("a
+/// trailing '/**' matches everything inside... with infinite depth")
+/// describe the IDENTICAL semantics for that one shape, and neither
+/// dialect's single-`*` behavior comes into play since the only wildcard
+/// used is the trailing `**`. Verified empirically against globset 0.4.19
+/// and ignore 0.4.31 before writing this fix.
+///
+/// Every other exclude pattern shape is routed to the post-walk `GlobSet`
+/// fallback instead (same code path as pre-#96, byte-identical by
+/// construction) rather than the walk-time `Override`.
+fn is_dialect_safe_prune_pattern(pattern: &str) -> bool {
+    match pattern.strip_suffix("/**") {
+        Some(prefix) => {
+            !prefix.is_empty()
+                && !prefix.contains(['*', '?', '[', ']', '!', '{', '}'])
+                && prefix.split('/').all(|segment| !segment.is_empty())
+        }
+        None => false,
+    }
+}
+
+/// Splits `exclude` into the walk-time-prunable subset (dialect-safe) and
+/// the subset that must stay on the post-walk `GlobSet` fallback to
+/// preserve pre-#96 result identity (see `is_dialect_safe_prune_pattern`).
+fn partition_exclude_patterns(patterns: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut walk_time_safe = Vec::new();
+    let mut post_walk_fallback = Vec::new();
+    for pattern in patterns {
+        if is_dialect_safe_prune_pattern(pattern) {
+            walk_time_safe.push(pattern.clone());
+        } else {
+            post_walk_fallback.push(pattern.clone());
+        }
+    }
+    (walk_time_safe, post_walk_fallback)
 }
 
 #[derive(Default)]
@@ -72,15 +173,20 @@ impl CodeReader for FileSystemCodeReader {
             .map_err(|_| AnalysisError::IoError("dossier introuvable".to_string()))?;
 
         let include_set = build_glob_set(filter.include())?;
-        let exclude_set = build_glob_set(filter.exclude())?;
         let include_is_empty = filter.include().is_empty();
         let respect_gitignore = filter.respect_gitignore();
+        let (walk_time_exclude, fallback_exclude) = partition_exclude_patterns(filter.exclude());
+        let fallback_exclude_set = build_glob_set(&fallback_exclude)?;
+        let fallback_exclude_is_empty = fallback_exclude.is_empty();
+        let exclude_overrides = build_exclude_overrides(&canonical_root, &walk_time_exclude)?;
 
         let mut files = Vec::new();
+        let mut entries_visited: usize = 0;
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
             .hidden(true)
+            .overrides(exclude_overrides)
             // `ignore`'s WalkBuilder exposes FOUR independent ignore-source
             // toggles (git_ignore/.gitignore, git_exclude/.git/info/exclude,
             // git_global/the user's global gitignore, ignore/.ignore files)
@@ -110,6 +216,14 @@ impl CodeReader for FileSystemCodeReader {
             .build();
 
         for entry in walker {
+            entries_visited += 1;
+            if entries_visited > MAX_WALK_ENTRIES {
+                return Err(AnalysisError::IoError(format!(
+                    "arborescence trop volumineuse (plus de {} entrées) — \
+                     analyse interrompue avant d'énumérer le reste",
+                    MAX_WALK_ENTRIES
+                )));
+            }
             match entry {
                 Ok(entry) => {
                     let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
@@ -125,9 +239,14 @@ impl CodeReader for FileSystemCodeReader {
                         continue;
                     }
                     let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
-                    let keep = (include_is_empty || include_set.is_match(relative))
-                        && !exclude_set.is_match(relative);
+                    let keep = include_is_empty || include_set.is_match(relative);
                     if !keep {
+                        continue;
+                    }
+                    // Result-identity fallback (retry #1): any exclude
+                    // pattern NOT dialect-safe for walk-time pruning still
+                    // gets the pre-#96 post-walk globset check here.
+                    if !fallback_exclude_is_empty && fallback_exclude_set.is_match(relative) {
                         continue;
                     }
                     match std::fs::metadata(path) {
