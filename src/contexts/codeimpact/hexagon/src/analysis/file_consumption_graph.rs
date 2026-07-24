@@ -7,6 +7,7 @@ use super::complexity_detector::WarningSeverity;
 use super::ecological_impact::EcologicalImpact;
 use super::economic_impact::EconomicImpact;
 use super::errors::AnalysisError;
+use super::language_capabilities::AggregateMetricSupport;
 use super::measurement::UnmeasurableReason;
 
 /// A dependency between two files: `from` depends on `to`.
@@ -248,6 +249,11 @@ impl FileConsumptionGraph {
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
             median_file_cyclomatic_complexity: median_cyclomatic_complexity(&self.per_file_metrics),
+            // Scaffold (red): ignores per_file_metrics entirely, always
+            // folds an empty iterator -> every axis reads Supported
+            // regardless of what the files actually declare. Real fold
+            // follows next commit.
+            metric_support: AggregateMetricSupport::fold(std::iter::empty()),
         }
     }
 
@@ -460,6 +466,13 @@ pub struct ProjectMetrics {
     /// on it, because it IS one file's value. Even file count -> the two
     /// middle values are averaged, round-half-up.
     pub median_file_cyclomatic_complexity: u32,
+    /// Project-level `MetricSupport`, one per metric axis, folded from every
+    /// measured file's `CodeMetrics::capabilities()` (#89 S1, ADR-0021 T3b
+    /// follow-up — "dette connue": the project stat tiles now carry the same
+    /// honest degradation the per-file detail already had). A `None`
+    /// capabilities file (the Rust case) contributes `Supported` to every
+    /// axis — see `AggregateMetricSupport::fold`.
+    pub metric_support: AggregateMetricSupport,
 }
 
 impl ProjectMetrics {
