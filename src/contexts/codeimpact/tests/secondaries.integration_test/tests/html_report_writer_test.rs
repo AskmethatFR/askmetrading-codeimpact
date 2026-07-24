@@ -331,8 +331,9 @@ fn zero_function_file_renders_level_none_and_js_maps_it_to_its_own_class() {
     );
 }
 
-// ── #46/#49 T2: build_stats() is a pure render — 9-tile aggregated stat
-// grid, everything sourced from ProjectMetrics (zero local calculation) ──
+// ── #46/#49 T2: build_stats() is a pure render — 10-tile aggregated stat
+// grid (#56 T2 added Unclassifiable), everything sourced from ProjectMetrics
+// (zero local calculation) ──
 //
 // Test List (T2):
 // 1. exactly 9 stat tiles are emitted, Direct Σ is the SUM of files'
