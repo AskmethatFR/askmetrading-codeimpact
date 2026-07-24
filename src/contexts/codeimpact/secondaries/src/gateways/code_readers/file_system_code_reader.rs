@@ -10,6 +10,20 @@ use ignore::WalkBuilder;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 128;
+/// Total walk-entry cap (#95, Security DoS residual, ADR-0006) —
+/// `MAX_WALK_DEPTH` bounds how DEEP the walk goes and `MAX_FILE_SIZE`
+/// bounds how BIG one file can be, but neither bounds how MANY entries a
+/// single shallow directory can hold. A directory with hundreds of
+/// thousands of small files at shallow depth (a planted/generated tree
+/// not gitignored, plausible under `respectGitignore:false`) was fully
+/// enumerated with no early abort. Trust model stays "user points the
+/// tool at their own codebase" (ADR-0006), so this is a residual guard,
+/// not hardening against an adversarial filesystem: 50 000 sits
+/// generously above any legitimate single-language codebase's file count
+/// while stopping well before "hundreds of thousands or millions" —
+/// chosen small enough to also keep the boundary test's fixture
+/// construction fast.
+const MAX_WALK_ENTRIES: usize = 50_000;
 const ERR_FILE_NOT_FOUND: &str = "fichier introuvable";
 const ERR_INVALID_GLOB: &str = "motif de filtrage invalide (syntaxe glob)";
 
@@ -167,6 +181,7 @@ impl CodeReader for FileSystemCodeReader {
         let exclude_overrides = build_exclude_overrides(&canonical_root, &walk_time_exclude)?;
 
         let mut files = Vec::new();
+        let mut entries_visited: usize = 0;
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
@@ -201,6 +216,14 @@ impl CodeReader for FileSystemCodeReader {
             .build();
 
         for entry in walker {
+            entries_visited += 1;
+            if entries_visited > MAX_WALK_ENTRIES {
+                return Err(AnalysisError::IoError(format!(
+                    "arborescence trop volumineuse (plus de {} entrées) — \
+                     analyse interrompue avant d'énumérer le reste",
+                    MAX_WALK_ENTRIES
+                )));
+            }
             match entry {
                 Ok(entry) => {
                     let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
