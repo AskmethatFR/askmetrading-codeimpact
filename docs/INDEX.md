@@ -12,7 +12,7 @@
 | console-report-enriched | technical | Console Report Format — CodeImpact (Enriched) | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[html-report]], [[ADR-0021]] | docs/technical/console-report-enriched.md |
 | economic-impact-estimator | technical | Economic Impact Estimator — Technical Rationale | Applied | 2026-07-08 | [[ADR-0004]], [[architecture-overview]] | docs/technical/economic-impact.md |
 | json-report-schema | technical | JSON Report Schema — CodeImpact | Applied | 2026-07-20 | [[ADR-0007]], [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/technical/json-report-schema.md |
-| html-report | technical | HTML Report — Self-Contained Visual Report | Applied | 2026-07-20 | [[ADR-0008]], [[architecture-overview]], [[json-report-schema]], [[console-report-enriched]], [[ADR-0021]] | docs/technical/html-report.md |
+| html-report | technical | HTML Report — Self-Contained Visual Report | Applied | 2026-07-23 | [[ADR-0008]], [[architecture-overview]], [[json-report-schema]], [[console-report-enriched]], [[ADR-0021]] | docs/technical/html-report.md |
 | alert-thresholds | technical | Alert Thresholds — Threshold Gate Design (US8) | Applied | 2026-07-17 | [[architecture-overview]], [[ADR-0017]], [[ADR-0019]], [[ADR-0010]], [[ADR-0006]], [[json-report-schema]], [[html-report]], [[glossary]] | docs/technical/alert-thresholds.md |
 | ADR-0001 | technical | Core Rust, zero-dep hexagon | Accepted | 2026-07-08 | [[architecture-overview]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]] | docs/ADR-0001-rust-core-hexagon.md |
 | ADR-0002 | technical | Bounded context unique (YAGNI) | Accepted | 2026-07-08 | [[architecture-overview]] | docs/ADR-0002-single-bounded-context.md |
@@ -21,7 +21,7 @@
 | ADR-0005 | technical | Package-by-Context, Package-by-Layer à l'intérieur | Accepted | 2026-07-08 | [[architecture-overview]] | docs/ADR-0005-package-by-context.md |
 | ADR-0006 | technical | Sécurité — Canonicalize, Limite Taille, Pas de Fuite de Path | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0015]], [[ADR-0017]], [[ADR-0019]], [[ADR-0020]], [[ADR-0023]] | docs/ADR-0006-security-measures.md |
 | ADR-0007 | technical | JSON Report Format — Output Format & Schema | Applied | 2026-07-20 | [[architecture-overview]], [[json-report-schema]], [[ADR-0021]] | docs/ADR-0007-json-report-format.md |
-| ADR-0008 | technical | HTML Report Format — Self-Contained Output & XSS Defense | Applied | 2026-07-20 | [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/ADR-0008-html-report-format.md |
+| ADR-0008 | technical | HTML Report Format — Self-Contained Output & XSS Defense | Applied | 2026-07-23 | [[architecture-overview]], [[html-report]], [[ADR-0021]] | docs/ADR-0008-html-report-format.md |
 | ADR-0009 | technical | CI GitHub Actions & posture supply-chain (dépôt public) — +porte `cargo-deny` RUSTSEC (#86) | Applied | 2026-07-23 | [[architecture-overview]], [[ADR-0006]] | docs/ADR-0009-ci-supply-chain.md |
 | ADR-0010 | technical | Honnêteté de la mesure — `Unmeasurable` plutôt que `0` | Applied | 2026-07-20 | [[architecture-overview]], [[ADR-0004]], [[ADR-0006]], [[economic-impact-estimator]], [[ADR-0015]], [[ADR-0016]], [[ADR-0017]], [[ADR-0021]] | docs/ADR-0010-measurement-honesty.md |
 | ADR-0011 | technical | Stress test — portée workspace, agrégation, 0-test honnête | Applied | 2026-07-12 | [[architecture-overview]], [[ADR-0010]], [[ADR-0006]], [[ADR-0009]] | docs/ADR-0011-stress-test-workspace-scope.md |

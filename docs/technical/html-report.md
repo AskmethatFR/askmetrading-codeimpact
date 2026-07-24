@@ -147,10 +147,90 @@ use `textContent`" is not a defense. Four mechanically-enforced rules:
 
 Rules 3 and 4 are pinned by two structural tests (`rendered_js_has_only_two_style_sinks`,
 `rendered_js_contains_no_html_sink`) so a violation fails the build rather than ships.
-**Known gate weakness**: both match literal substrings, so a sink reached by string
-concatenation (`node["inner" + "HTML"]`) or bracket notation (`node["style"]["cssText"]`)
-slips through — demonstrated by the Security audit on #27. The shipped JS uses neither
-pattern; hardening the gates is tracked separately.
+
+**Gate hardening (#28)**: the two tests above originally matched literal substrings
+only, so a sink reached by string concatenation (`"inner" + "HTML"`) or bracket
+notation (`node["style"]["cssText"]`) slipped through undetected — demonstrated by
+the Security audit on #27. The shipped JS used neither pattern (not a shipped
+vuln), but a bypassable gate reads as "covered" when it isn't, which is worse than
+no gate. Both tests now delegate to a shared
+`codeimpact_secondaries_integration_test::rendering_gate` module
+(`tests/secondaries.integration_test/src/rendering_gate.rs`) that additionally
+catches: a banned identifier reconstructed via string-literal concatenation
+(folds maximal `"lit1" + "lit2" (+ …)` chains and matches the joined value);
+bracket-notation style access (`.style[`, `["style"]`, `['style']`);
+`Object.assign(` bulk-setting `.style` (or any other property) in one call; and a
+bare `.style =` reassignment of the whole style object/string. Five tests in
+`html_renderer_gate_hardening_test.rs` each prove a known bypass now fails the
+gate while the real emitted JS stays clean (both directions, per case) — see
+[[ADR-0008]] ADR-8.10 for the decision record.
+
+**Runtime regression test (#28)**: the structural gates above can only prove a
+banned pattern is absent from the JS source TEXT — they cannot prove a payload
+landing in the DOM as `textContent` truly never becomes markup under a real
+parser, or that `cls()`'s `hasOwnProperty` guard truly falls back on a hostile
+whitelist key instead of leaking `Object.prototype`/a constructor into a
+className. `html_renderer_runtime_security_test.rs` closes that gap: it builds
+the REAL report document (real `write_html`, real `assets::JS`), patches the
+data island with values the Rust domain's closed enums could never produce
+(`level: "__proto__"`, `support: "constructor"`, hostile numeric `pct` strings
+including the ticket's own `"100; background:url(evil)"` example, a tree nested
+25 levels deep), and executes it inside **jsdom** — a genuine HTML parser + DOM
+implementation, invoked via `runtime-security-check/check.mjs` (Node, dev-only,
+never a Cargo dependency: no `Cargo.toml` in that directory, nothing on the
+`primaries → hexagon + secondaries` / `secondaries → hexagon` dependency graph
+changed). Asserts: no extra `<script>`/`<img>`/`<iframe>` was parsed; the
+payload reached the DOM as literal text; no code-execution canary fired; the
+jsdom window's own `Object.prototype` carries no extra property; both hostile
+whitelist keys render their `cls()` fallback class, never a leaked
+object/constructor; hostile `pct` values clamp to `0%`/`100%`, never `NaN%`; the
+25-level-deep tree's indent clamps at exactly `300px` (`20 * 15`). Verified to
+genuinely discriminate: temporarily removing `cls()`'s `hasOwnProperty` guard
+turned the whitelist-fallback assertions red (`"swatch [object Object]"`,
+`"tag function Object() { [native code] }"`); temporarily removing `setPct`'s
+`isFinite`/clamp turned the numeric assertions red. Both reverted, both
+production files byte-identical to before.
+
+Node.js is a genuinely optional dev-time vehicle. A bare Rust toolchain with no
+Node installed (or one older than jsdom's own `^20.19.0 || ^22.13.0 || >=24.0.0`
+floor — verified: Node 20.10 crashes 3 layers deep in a transitive ESM-only
+dependency with a cryptic `ERR_REQUIRE_ESM`) must not see a silent gap in
+security coverage. `js_runtime_check::require_node_or_fail_loudly` fails the
+test LOUDLY (an explicit `panic!` with a clear, actionable banner, visible in
+default `cargo test` output with no `--nocapture` needed) rather than returning
+quietly — the #45 lesson (a guard that silently no-ops is worthless) applied to
+a check this codebase chose to keep skippable rather than eliminate outright, so
+the loudness itself carries the weight #45's fix put on removing the skip
+branch entirely. CI's `test` and `coverage` jobs pin Node 22 via
+`actions/setup-node` (`.github/workflows/ci.yml`) so the loud-skip path is a
+local-dev-only concern, never a CI ambiguity.
+
+**Why Node/jsdom over an in-Rust engine (boa/quickjs)?** A hand-rolled DOM shim
+wrapped around boa/quickjs could only validate its own assumptions about HTML
+parsing — "no markup was parsed" is a claim only falsifiable against a real,
+spec-conformant HTML parser, which jsdom genuinely is and a hand-rolled shim is
+not. The dev-only Node dependency (never on the `Cargo.toml`/hexagon/secondaries
+graph) buys that independence.
+
+**Known residuals**, recorded here so a future maintainer inherits them instead
+of rediscovering them:
+
+1. The STATIC gate (`rendering_gate`) is a text scanner — a dynamically
+   constructed sink identifier (e.g.
+   `node[String.fromCharCode(105,110,110,101,114,72,84,77,76)]`, which spells
+   `innerHTML` at runtime) structurally evades it. Accepted: diminishing
+   returns — nobody writes that unobfuscated by accident, and a Dev-B review
+   would flag it.
+2. The RUNTIME jsdom test's adversarial data path is **scoped**: it patches the
+   root node's `level`/`metrics` and the tree's `name`/`path` (via the crafted
+   file paths fed into the real Rust pipeline), but does **not** feed hostile
+   data through `renderWarnings`/`renderIo`/`renderFunctions`/`renderImpact`/
+   `renderThresholds`/`renderUnmeasurable`. A future sink hidden in one of
+   those under-exercised rendering paths could evade both layers
+   simultaneously. Mitigant: all text funnels through the shared `el()`/`cls()`
+   helpers (rules 1/3/4 above), so the verified mechanism is common code
+   shared by every render function, not something proven per-callsite —
+   residual risk is low, not absent.
 
 ## Security — XSS defense (the load-bearing decision)
 

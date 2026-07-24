@@ -57,6 +57,19 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # #28 (ADR-8.10 hardening): html_renderer_runtime_security_test.rs
+      # shells out to a Node/jsdom harness. `ubuntu-latest` bundles SOME
+      # Node by default, but that version is an undocumented, moving target
+      # — verified locally that jsdom 29's own engines floor
+      # (^20.19.0 || ^22.13.0 || >=24.0.0) rejects an otherwise-plausible
+      # Node 20.10 with a cryptic ERR_REQUIRE_ESM three layers deep in a
+      # transitive dependency. Pinning here removes that ambiguity instead
+      # of hoping the runner image's default happens to be new enough; the
+      # Rust test itself still fails LOUDLY (never silently) if this step
+      # were ever skipped or misconfigured.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
       - run: cargo test --workspace
 
   slow-tests:
@@ -119,6 +132,13 @@ jobs:
           toolchain: stable
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # See the `test` job's identical step: scripts/coverage.sh runs the
+      # full workspace suite (cargo llvm-cov --workspace), which includes
+      # the same Node/jsdom-dependent html_renderer_runtime_security_test.rs
+      # (#28, ADR-8.10).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
       - run: cargo install cargo-llvm-cov --locked --version 0.8.7
       # scripts/coverage.sh (#87) is the single source of truth for this
       # recipe — see its header comment for the two defects it closes
