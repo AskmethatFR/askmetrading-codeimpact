@@ -460,6 +460,191 @@ fn project_json_sums_unclassifiable_io_in_loops_count_across_files() {
     assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 3);
 }
 
+// #89 S2 (ADR-0021 T3b follow-up, JSON amendment of ADR-0007 ADR-7.9) — the
+// project JSON aggregate must apply the SAME null-not-empty rule ADR-0021 D3
+// established at file level, now driven by `ProjectMetrics.metric_support`
+// (the `AggregateMetricSupport` fold, #89 S1) instead of the S1-era
+// hardcoded `metric_support_dto(None)`. No shipped adapter emits
+// `Unsupported` yet (C#'s io_in_loops is `Degraded` post-T4) — these
+// fixtures use a synthetic `LanguageCapabilities` (same technique #89 S1's
+// HTML tests already used) to pin the `Unsupported` path forward-
+// compatibly, ahead of a real adapter declaring it.
+//
+// Test List:
+// 1. pure-Unsupported project (every file's io_in_loops capability
+//    Unsupported) -> metric_support.io_in_loops == "unsupported",
+//    io_in_loops == null (never [] or 0), unclassifiable_io_in_loops_count
+//    == null.
+// 2. Rust-only project (no capabilities attached, the all-Supported
+//    default) -> metric_support all "supported", io_in_loops == [] —
+//    byte-identical to the pre-#89 shape (regression pin).
+// 3. mixed project (one file Supported, one Unsupported) -> Degraded, with
+//    the real partial reason and a real (non-null) unclassifiable count.
+
+fn csharp_unsupported_io() -> LanguageCapabilities {
+    LanguageCapabilities::all_supported(Language::CSharp)
+        .with_io_in_loops(MetricSupport::Unsupported)
+}
+
+#[test]
+fn project_json_pure_unsupported_io_serializes_null_never_empty_array_or_zero() {
+    let writer = JsonReportWriter::new();
+    let files = vec![
+        (
+            PathBuf::from("a.cs"),
+            make_measured_file(5).with_capabilities(csharp_unsupported_io()),
+        ),
+        (
+            PathBuf::from("b.cs"),
+            make_measured_file(3).with_capabilities(csharp_unsupported_io()),
+        ),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(
+        json["metrics"]["metric_support"]["io_in_loops"],
+        "unsupported"
+    );
+    assert!(
+        json["metrics"]["io_in_loops"].is_null(),
+        "expected io_in_loops to be JSON null, got: {}",
+        json_str
+    );
+    assert!(
+        json["metrics"]["unclassifiable_io_in_loops_count"].is_null(),
+        "expected unclassifiable_io_in_loops_count to be JSON null, got: {}",
+        json_str
+    );
+
+    // DISCRIMINATING: a writer that keeps hardcoding `metric_support_dto(None)`
+    // / `Some(vec![])` renders "supported" + `[]` here — these substring
+    // checks pin the literal wire format the AC forbids, the same technique
+    // the per-file T3 test already uses.
+    assert!(
+        !json_str.contains("\"io_in_loops\": []"),
+        "unsupported project io must never render as an empty-but-measured array, got: {}",
+        json_str
+    );
+    assert!(
+        !json_str.contains("\"unclassifiable_io_in_loops_count\": 0"),
+        "unsupported project io must never render as a measured zero count, got: {}",
+        json_str
+    );
+}
+
+#[test]
+fn project_json_rust_only_stays_byte_identical_to_pre_89_shape() {
+    let writer = JsonReportWriter::new();
+    let files = vec![
+        (PathBuf::from("a.rs"), make_measured_file(5)),
+        (PathBuf::from("b.rs"), make_measured_file(3)),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(
+        json["metrics"]["metric_support"]["io_in_loops"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["cyclomatic_complexity"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["economic_impact"],
+        "supported"
+    );
+    assert_eq!(
+        json["metrics"]["metric_support"]["ecological_impact"],
+        "supported"
+    );
+    assert_eq!(json["metrics"]["metric_support"]["call_graph"], "supported");
+    // The project aggregate never populates a real per-call `io_in_loops`
+    // array (only the file-level detail does) — pre-#89 it was always
+    // `Some(vec![])`, which `is_empty_supported_io` OMITS from the wire
+    // entirely (same convention as `warnings`). #89 S2 must keep that exact
+    // byte shape for a Supported/all-Rust project: the `metrics.io_in_loops`
+    // key must not appear at all, and never flip to an explicit `null`
+    // (reserved for the Unsupported case the sibling test pins). Checked via
+    // the parsed object's keys, not a raw substring — `"io_in_loops"` is
+    // ALSO the (always-present) key name inside the sibling `metric_support`
+    // object, so a naive string search false-positives on that.
+    assert!(
+        !json["metrics"]
+            .as_object()
+            .expect("metrics should be an object")
+            .contains_key("io_in_loops"),
+        "Rust-only project must keep the pre-#89 shape — the \
+         metrics.io_in_loops key omitted entirely (empty-but-measured), \
+         never present as `[]` or `null`: {}",
+        json_str
+    );
+    assert_eq!(json["metrics"]["unclassifiable_io_in_loops_count"], 0);
+}
+
+#[test]
+fn project_json_mixed_language_io_reports_degraded_with_real_partial_value() {
+    let writer = JsonReportWriter::new();
+    let files = vec![
+        (
+            PathBuf::from("a.rs"),
+            make_measured_file(5).with_unclassifiable_io_in_loops_count(2),
+        ),
+        (
+            PathBuf::from("b.cs"),
+            make_measured_file(3)
+                .with_capabilities(csharp_unsupported_io())
+                .with_unclassifiable_io_in_loops_count(1),
+        ),
+    ];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    let support = json["metrics"]["metric_support"]["io_in_loops"]
+        .as_str()
+        .expect("io_in_loops metric_support should be a string");
+    assert!(
+        support.starts_with("degraded: partial:"),
+        "mixed Supported/Unsupported files must fold to Degraded with the partial reason, got: {}",
+        support
+    );
+    // A Degraded axis still means SOME files measured for real — the count
+    // must stay the real sum, never nulled out like the pure-Unsupported case.
+    assert_eq!(
+        json["metrics"]["unclassifiable_io_in_loops_count"], 3,
+        "a Degraded axis must keep the real measured total, never null: {}",
+        json_str
+    );
+    // Only the pure-Unsupported axis nulls out `io_in_loops` — Degraded
+    // still means SOME files measured for real, so it keeps the pre-#89
+    // omitted-when-empty shape, same as the Supported case. Checked via the
+    // parsed object's keys (see the Rust-only test above for why a raw
+    // substring search on `"io_in_loops"` false-positives against the
+    // sibling `metric_support.io_in_loops` key).
+    assert!(
+        !json["metrics"]
+            .as_object()
+            .expect("metrics should be an object")
+            .contains_key("io_in_loops"),
+        "a Degraded axis must keep the pre-#89 omitted-when-empty shape for \
+         io_in_loops, never null: {}",
+        json_str
+    );
+}
+
 // US8 slice 3 (AC3) — JSON embeds a thresholds/breaches object (AD-3: the
 // message field reuses the ONE shared renderer, same text as console/HTML).
 //

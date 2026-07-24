@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use codeimpact_hexagon::analysis::AggregateMetricSupport;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::CodeMetrics;
 use codeimpact_hexagon::analysis::ComplexityWarning;
@@ -131,6 +132,24 @@ fn metric_support_dto(capabilities: Option<&LanguageCapabilities>) -> MetricSupp
             ecological_impact: "supported".to_string(),
             io_in_loops: "supported".to_string(),
         },
+    }
+}
+
+/// Builds the metric-support DTO from a project's `AggregateMetricSupport`
+/// (#89 S2, ADR-0021 T3b follow-up) — the real per-axis fold across every
+/// measured file (`ProjectMetrics::metric_support`, `#89` S1), replacing the
+/// `metric_support_dto(None)` placeholder `serialize_project_metrics` used
+/// before this slice. `call_graph` has no project-level stat tile yet and
+/// `AggregateMetricSupport` does not fold it (same YAGNI call #89 S1's HTML
+/// writer already made — no calling use case), so it stays `"supported"`,
+/// identical to the pre-S2 shape.
+fn metric_support_dto_from_aggregate(support: &AggregateMetricSupport) -> MetricSupportDto {
+    MetricSupportDto {
+        cyclomatic_complexity: metric_support_label(support.cyclomatic_complexity()),
+        call_graph: "supported".to_string(),
+        economic_impact: metric_support_label(support.economic_impact()),
+        ecological_impact: metric_support_label(support.ecological_impact()),
+        io_in_loops: metric_support_label(support.io_in_loops()),
     }
 }
 
@@ -448,6 +467,24 @@ pub fn serialize_project_metrics(
         })
         .collect();
 
+    // #89 S2 (ADR-0021 D3 / ADR-7.9, now applied to the project aggregate):
+    // an Unsupported io_in_loops axis means NOTHING was measured across the
+    // whole project — both fields must serialize `null`, never the
+    // empty-but-measured `Some(vec![])`/`Some(0)` this writer hardcoded
+    // before this slice. Supported/Degraded both mean at least one file
+    // measured for real, so they keep the pre-S2 shape (the project never
+    // populates a real per-call array, only the count).
+    let io_unsupported = matches!(
+        aggregated.metric_support.io_in_loops(),
+        MetricSupport::Unsupported
+    );
+    let io_in_loops: Option<Vec<IoInLoopDto>> = if io_unsupported { None } else { Some(vec![]) };
+    let unclassifiable_io_in_loops_count: Option<usize> = if io_unsupported {
+        None
+    } else {
+        Some(aggregated.total_unclassifiable_io_in_loops)
+    };
+
     let output = JsonOutput {
         tool: ToolInfo {
             name: "codeimpact",
@@ -471,15 +508,12 @@ pub fn serialize_project_metrics(
             economic_impact: None,
             ecological_impact: None,
             warnings: vec![],
-            // Project aggregate honesty (io_in_loops Unsupported for a
-            // mixed-language project) is OUT OF SCOPE for T3 (human-
-            // approved Q2, deferred to T3b) — always the pre-T3 shape.
-            io_in_loops: Some(vec![]),
+            io_in_loops,
             unmeasurable_files_count: unmeasurable_files.len(),
             unmeasurable_files,
-            unclassifiable_io_in_loops_count: Some(aggregated.total_unclassifiable_io_in_loops),
+            unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(graph.threshold_report()),
-            metric_support: metric_support_dto(None),
+            metric_support: metric_support_dto_from_aggregate(&aggregated.metric_support),
         },
     };
 
