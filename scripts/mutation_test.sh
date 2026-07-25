@@ -111,6 +111,31 @@ assert_success_with_message \
 
 rm -rf mutants.out .mutation-gate
 
+# cargo-mutants itself exits non-zero (2) whenever a mutant is MISSED --
+# not only on a genuine tool error. Under `set -e`, a naive
+# `cargo mutants ...` call with no `||` guard aborts the script on that
+# line, so the post-run vacuity assertion (and the "N mutant(s) validly
+# examined" message) never runs precisely in the case that matters most:
+# a spuriously-vacuous run also reports every mutant "missed" and so also
+# exits 2, indistinguishable from this at cargo-mutants' exit-code layer.
+stub_missed_dir=$(mktemp -d)
+cat >"${stub_missed_dir}/cargo-mutants" <<'STUB'
+#!/usr/bin/env bash
+mkdir -p mutants.out
+printf '{"caught":0,"missed":1,"timeout":0,"unviable":0,"outcomes":[]}' \
+  >mutants.out/outcomes.json
+exit 2
+STUB
+chmod +x "${stub_missed_dir}/cargo-mutants"
+rm -rf mutants.out .mutation-gate
+
+assert_nonzero_with_message \
+  "still runs the vacuity check and reports examined mutants when cargo-mutants exits non-zero (a real missed mutant)" \
+  "1 mutant(s) validly examined" \
+  env PATH="${stub_missed_dir}:${PATH}" ./scripts/mutation.sh --full
+
+rm -rf mutants.out .mutation-gate
+
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} smoke test(s) failed"
   exit 1
