@@ -28,11 +28,15 @@ set -euo pipefail
 #   scripts/mutation.sh --full              whole-workspace campaign (slow)
 #   scripts/mutation.sh ... -- <args>       extra args forwarded to `cargo mutants`
 #
-# Exit codes: 0 on a run that validly examined >=1 mutant (surviving
-# mutants are a review signal, not a script failure -- see
-# mutants.out/outcomes.json for the caught/survived breakdown); non-zero
-# when cargo-mutants is absent, an argument is unrecognized, the campaign
-# examines ZERO mutants (the vacuous case), or cargo-mutants itself errors.
+# Exit codes: propagates cargo-mutants' own exit code (0 all caught, 2 one
+# or more missed -- see mutants.out/outcomes.json for the breakdown) for
+# any run that validly examined >=1 mutant; non-zero (1) when
+# cargo-mutants is absent, an argument is unrecognized, or the campaign
+# examines ZERO mutants (the vacuous case) -- this last check always runs,
+# even when cargo-mutants itself exited non-zero, since a spuriously
+# vacuous run (zero tests executed) also reports every mutant "missed"
+# and so also exits non-zero, indistinguishable from a genuine miss at
+# the exit-code layer alone.
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -70,18 +74,28 @@ if ! command -v cargo-mutants >/dev/null 2>&1; then
   exit 1
 fi
 
+# cargo-mutants exits non-zero (2) whenever a mutant is MISSED, not only
+# on a genuine tool error -- a real, expected outcome we want reported
+# (not swallowed), never a reason to abort BEFORE the vacuity check below.
+# Captured explicitly so `set -e` does not short-circuit past it: doing so
+# would skip the one check that matters most in exactly this case, since
+# a spuriously-vacuous run (zero tests executed) also reports every
+# mutant "missed" and so ALSO exits 2 -- indistinguishable from a genuine
+# missed mutant at the exit-code layer alone.
+mutants_exit=0
 if [[ "${mode}" == "diff" ]]; then
   patch_file=".mutation-gate/changes.patch"
   mkdir -p "$(dirname "${patch_file}")"
   git diff --end-of-options "${base_ref}..." >"${patch_file}"
-  cargo mutants --in-diff "${patch_file}" "${extra_args[@]+"${extra_args[@]}"}"
+  cargo mutants --in-diff "${patch_file}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 else
-  cargo mutants --workspace "${extra_args[@]+"${extra_args[@]}"}"
+  cargo mutants --workspace "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 fi
 
 outcomes_file="mutants.out/outcomes.json"
 if [[ ! -f "${outcomes_file}" ]]; then
   echo "mutation.sh: cargo-mutants produced no ${outcomes_file} -- did it run at all?" >&2
+  echo "mutation.sh: cargo-mutants exited ${mutants_exit}" >&2
   exit 1
 fi
 
@@ -99,3 +113,4 @@ if [[ "${validly_tested}" -eq 0 ]]; then
 fi
 
 echo "mutation.sh: ${validly_tested} mutant(s) validly examined -- see ${outcomes_file}"
+exit "${mutants_exit}"
