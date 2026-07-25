@@ -74,9 +74,9 @@ if [[ "${mode}" == "diff" ]]; then
   patch_file=".mutation-gate/changes.patch"
   mkdir -p "$(dirname "${patch_file}")"
   git diff --end-of-options "${base_ref}..." >"${patch_file}"
-  cargo mutants --in-diff "${patch_file}" "${extra_args[@]}"
+  cargo mutants --in-diff "${patch_file}" "${extra_args[@]+"${extra_args[@]}"}"
 else
-  cargo mutants --workspace "${extra_args[@]}"
+  cargo mutants --workspace "${extra_args[@]+"${extra_args[@]}"}"
 fi
 
 outcomes_file="mutants.out/outcomes.json"
