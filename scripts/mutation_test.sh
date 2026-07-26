@@ -458,6 +458,77 @@ fi
 
 reset_sandbox_state
 
+# --- QA (#114 retry-3): the case pattern's OTHER two spellings --
+# `--timeout=*` and bare `-t` -- were verified against the real binary but
+# never asserted. Mirrors the N2 '-- --timeout 60' test above, one per
+# spelling, each requiring the override form present in argv AND the
+# script's own '--timeout 300' default absent.
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --full -- --timeout=60 >/dev/null 2>&1 || true
+description="a caller-provided '-- --timeout=60' overrides the default instead of duplicating --timeout"
+recorded_argv="$(cat "${argv_log}")"
+if [[ "${recorded_argv}" == *"--timeout=60"* && "${recorded_argv}" != *"--timeout 300"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected only '--timeout=60' (no '--timeout 300'), got: ${recorded_argv}"
+  failures=$((failures + 1))
+fi
+
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --full -- -t 60 >/dev/null 2>&1 || true
+description="a caller-provided '-- -t 60' (space-separated short form) overrides the default instead of duplicating --timeout"
+recorded_argv="$(cat "${argv_log}")"
+if [[ "${recorded_argv}" == *"-t 60"* && "${recorded_argv}" != *"--timeout 300"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected only '-t 60' (no '--timeout 300'), got: ${recorded_argv}"
+  failures=$((failures + 1))
+fi
+
+# --- NF1 (#114 retry-3, Dev-B review): the ATTACHED short form '-t60' is a
+# distinct token from bare '-t' -- `cargo mutants -t60 --list` exits 0
+# (verified against real cargo-mutants 27.1.0), so it is a real, valid
+# spelling a caller may use, but the case pattern's exact `-t` match never
+# fires for it. Before the NF1 fix this duplicates --timeout (300 alongside
+# -t60) and cargo-mutants hard-fails with "cannot be used multiple times".
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --full -- -t60 >/dev/null 2>&1 || true
+description="a caller-provided '-- -t60' (attached short form) overrides the default instead of duplicating --timeout"
+recorded_argv="$(cat "${argv_log}")"
+if [[ "${recorded_argv}" == *"-t60"* && "${recorded_argv}" != *"--timeout 300"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected only '-t60' (no '--timeout 300'), got: ${recorded_argv}"
+  failures=$((failures + 1))
+fi
+
+# --- NF2 (#114 retry-3, Dev-B review): '--timeout-multiplier' is clap's
+# OWN mutually-exclusive alternative to '--timeout' (verified: 'cargo
+# mutants --timeout-multiplier 5 --list' exits 0 standalone, but
+# '--timeout 300 --timeout-multiplier 5' exits non-zero: "cannot be used
+# with"). Before the NF2 fix the script's default --timeout 300 is
+# unconditionally added alongside a caller's --timeout-multiplier, hitting
+# that exact conflict.
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --full -- --timeout-multiplier 5 >/dev/null 2>&1 || true
+description="a caller-provided '-- --timeout-multiplier 5' overrides the default instead of conflicting with --timeout"
+recorded_argv="$(cat "${argv_log}")"
+if [[ "${recorded_argv}" == *"--timeout-multiplier 5"* && "${recorded_argv}" != *"--timeout 300"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected only '--timeout-multiplier 5' (no '--timeout 300'), got: ${recorded_argv}"
+  failures=$((failures + 1))
+fi
+
+reset_sandbox_state
+
 # --- N3 (#114 retry-2, Dev-B): the EXIT trap above (`trap cleanup EXIT`)
 # is armed while `cleanup_paths` is still empty -- if anything between that
 # line and the first `cleanup_paths+=(...)` below fails (e.g. `mktemp -d`
