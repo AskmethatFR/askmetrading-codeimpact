@@ -31,16 +31,38 @@ set -euo pipefail
 # --full and --diff are mutually exclusive (rejected in either order, not
 # "last flag silently wins"). Every invocation passes `--timeout 300` to
 # cargo-mutants (parity with mutation_gate.py's own default) UNLESS the
-# caller's own `-- <extra args>` already contains a `--timeout`/`-t`
-# override, in which case the script's own default is OMITTED entirely --
-# not appended alongside it. clap rejects a repeated `--timeout` ("cannot
-# be used multiple times"), so `-- --timeout <n>` overriding the default
-# only works if the default is never emitted in the first place (#114
-# Dev-B N2: the previous header claimed the override "just works" -- it
-# did not, `-- --timeout 60` produced a hard clap error). Diff-mode's
-# patch lives at `.mutation-gate/mutation-sh-changes.patch` -- a name
-# distinct from mutation_gate.py's own `.mutation-gate/changes.patch`
-# so a concurrent manual run and gate run never clobber each other's file.
+# caller's own `-- <extra args>` already contains one of the following
+# clap-accepted timeout spellings, in which case the script's own default
+# is OMITTED entirely -- not appended alongside it: `--timeout <n>`,
+# `--timeout=<n>`, `-t <n>`, the attached short form `-t<n>` (e.g. `-t60`),
+# or clap's own mutually-exclusive alternative `--timeout-multiplier <n>` /
+# `--timeout-multiplier=<n>`. clap rejects a repeated `--timeout` ("cannot
+# be used multiple times") and rejects `--timeout` alongside
+# `--timeout-multiplier` ("cannot be used with") -- verified against real
+# cargo-mutants 27.1.0 for every spelling above -- so each one must
+# suppress the default, not just the bare `--timeout`/`-t` forms (#114
+# Dev-B N2 found the original header's "just works" claim false for
+# `-- --timeout 60`; retry-3's review (NF1/NF2) found the fixed pattern
+# still missed the attached `-t60` form and `--timeout-multiplier`
+# entirely). No other clap timeout spelling exists today; this list is
+# exhaustive against 27.1.0, not a best-effort subset. Diff-mode's patch
+# lives at `.mutation-gate/mutation-sh-changes.patch` -- a name distinct
+# from mutation_gate.py's own `.mutation-gate/changes.patch` so a
+# concurrent manual run and gate run never clobber each other's file.
+#
+# CALLER-SUPPLIED `--` SEPARATOR IN EXTRAS (#114 retry-3 Dev-B NF3): a
+# caller passing their own `--` inside `-- <extra args>` (e.g.
+# `mutation.sh --full -- -- --nocapture`) produces
+# `cargo test ... -- --nocapture -- --test-threads=4`; libtest reads the
+# SECOND `--` as end-of-options, so `--test-threads=4` becomes a test-name
+# filter instead of a harness flag and zero tests run -- a mutant this
+# script would otherwise catch flips to MISSED. Verified this is
+# cargo-mutants' own pre-existing behavior, not a regression introduced by
+# this script's `additional_cargo_test_args` (`cargo mutants --no-config
+# -- -- --nocapture` already exits 4 the same way). Fails loud (a real
+# missed-mutant report, never a false green) -- recorded here so the next
+# reader does not rediscover it from scratch. Do not pass a bare `--`
+# inside your own extra args.
 #
 # Exit codes: propagates cargo-mutants' own exit code (0 all caught, 2 one
 # or more missed -- see mutants.out/outcomes.json for the breakdown) for
@@ -189,7 +211,7 @@ fi
 has_timeout_override=""
 for extra_arg in "${extra_args[@]+"${extra_args[@]}"}"; do
   case "${extra_arg}" in
-    --timeout | --timeout=* | -t)
+    --timeout | --timeout=* | -t | -t[0-9]* | --timeout-multiplier | --timeout-multiplier=*)
       has_timeout_override=1
       break
       ;;
