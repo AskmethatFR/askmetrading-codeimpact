@@ -28,6 +28,14 @@ set -euo pipefail
 #   scripts/mutation.sh --full              whole-workspace campaign (slow)
 #   scripts/mutation.sh ... -- <args>       extra args forwarded to `cargo mutants`
 #
+# --full and --diff are mutually exclusive (rejected in either order, not
+# "last flag silently wins"). Every invocation passes `--timeout 300` to
+# cargo-mutants (parity with mutation_gate.py's own default) before any
+# forwarded extra args, so `-- --timeout <n>` still lets a caller override
+# it. Diff-mode's patch lives at `.mutation-gate/mutation-sh-changes.patch`
+# -- a name distinct from mutation_gate.py's own `.mutation-gate/changes.patch`
+# so a concurrent manual run and gate run never clobber each other's file.
+#
 # Exit codes: propagates cargo-mutants' own exit code (0 all caught, 2 one
 # or more missed -- see mutants.out/outcomes.json for the breakdown) for
 # any run that validly examined >=1 mutant; non-zero (1) when
@@ -73,11 +81,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mode="diff"
 base_ref="origin/main"
 extra_args=()
+diff_flag=""
+full_flag=""
+default_timeout=300
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --diff)
       mode="diff"
+      diff_flag=1
       if [[ $# -ge 2 && "$2" != --* ]]; then
         base_ref="$2"
         shift
@@ -85,6 +97,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --full)
       mode="full"
+      full_flag=1
       ;;
     --)
       shift
@@ -98,6 +111,11 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ -n "${diff_flag}" && -n "${full_flag}" ]]; then
+  echo "mutation.sh: --full and --diff are mutually exclusive -- pass exactly one" >&2
+  exit 1
+fi
 
 if ! command -v cargo-mutants >/dev/null 2>&1; then
   echo "mutation.sh: cargo-mutants is not installed -- run: cargo install cargo-mutants" >&2
@@ -130,12 +148,15 @@ rm -f "${outcomes_file}"
 
 mutants_exit=0
 if [[ "${mode}" == "diff" ]]; then
-  patch_file=".mutation-gate/changes.patch"
+  # A distinct filename from mutation_gate.py's own `.mutation-gate/changes.patch`
+  # (see `diff_patch_path()` in mutation_gate.py) -- concurrent runs of this
+  # script and the gate would otherwise clobber each other's patch file.
+  patch_file=".mutation-gate/mutation-sh-changes.patch"
   mkdir -p "$(dirname "${patch_file}")"
   git diff --end-of-options "${base_ref}..." >"${patch_file}"
-  cargo mutants --in-diff "${patch_file}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
+  cargo mutants --in-diff "${patch_file}" --timeout "${default_timeout}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 else
-  cargo mutants --workspace "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
+  cargo mutants --workspace --timeout "${default_timeout}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 fi
 
 if [[ ! -f "${outcomes_file}" ]]; then
