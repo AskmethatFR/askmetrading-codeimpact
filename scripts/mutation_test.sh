@@ -231,6 +231,24 @@ assert_exact_status_with_message \
 
 reset_sandbox_state
 
+# --- B1: a stale outcomes.json must never launder a vacuous run as green -
+# `cargo mutants --in-diff <patch-with-no-Rust>` exits 0 and does NOT
+# touch, rotate, or delete mutants.out/ -- so a leftover report from a
+# PREVIOUS, genuinely-successful run sits there unchanged. Pre-seed such a
+# stale "false success" report (caught: 99), then run against a stub that
+# behaves exactly like that vacuous invocation (exits 0, writes nothing).
+# The script must NOT report success off the stale file.
+mkdir -p "${sandbox}/mutants.out"
+printf '%s' '{"caught":99,"missed":0,"timeout":0,"unviable":0,"outcomes":[]}' \
+  >"${sandbox}/mutants.out/outcomes.json"
+assert_nonzero_with_message \
+  "does not launder a stale outcomes.json as success when this run examined nothing" \
+  "did it run at all?" \
+  env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_SKIP_WRITE=1 CARGO_MUTANTS_EXIT=0 \
+  "${sandboxed_script}" --full
+
+reset_sandbox_state
+
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} smoke test(s) failed"
   exit 1
