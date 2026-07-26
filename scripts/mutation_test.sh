@@ -273,6 +273,32 @@ fi
 
 reset_sandbox_state
 
+# --- B4 (Dev-B) / QA: the vacuity refusal ITSELF has no coverage ---------
+# The one behavior this ticket exists for (AC3: refuse to report success on
+# a run that validly examined zero mutants) had no test -- every prior stub
+# wrote caught >= 1. All-unviable is a real shape (e.g. every mutant in the
+# diff sits in an already-`#[cfg(test)]`-excluded or otherwise unbuildable
+# spot): caught+missed+timeout == 0 even though cargo-mutants itself exits 0.
+assert_nonzero_with_message \
+  "refuses to report success when caught+missed+timeout == 0 (all unviable)" \
+  "refusing to report success on a vacuous run" \
+  env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_JSON='{"caught":0,"missed":0,"timeout":0,"unviable":3,"outcomes":[]}' \
+  "${sandboxed_script}" --full
+
+reset_sandbox_state
+
+# --- B4 (Dev-B) / QA: a genuinely missing outcomes.json (fresh, no stale
+# report involved -- distinct from the B1 laundering case above, which
+# pre-seeds a stale file) must be refused with the "did it run at all?"
+# diagnostic.
+assert_nonzero_with_message \
+  "refuses to report success when cargo-mutants writes no outcomes.json at all" \
+  "did it run at all?" \
+  env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_SKIP_WRITE=1 \
+  "${sandboxed_script}" --full
+
+reset_sandbox_state
+
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} smoke test(s) failed"
   exit 1
