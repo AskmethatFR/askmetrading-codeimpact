@@ -2,7 +2,7 @@
 
 > **Type:** Index  
 > **Owner:** Architect + PM (shared)  
-> **Updated:** 2026-07-24 (dette Batch 2 — #89 S1+S2 agrégation `MetricSupport` multi-langage honnête, HTML+JSON (ADR-0026) ; #51 overflow-checks release (ADR-0027), #95 cap d'entrées de marche (ADR-0006 pt.9), #96 pruning exclude walk-time dialect-safe (ADR-0019 addendum) ; #87 recette couverture (ADR-0025) ; Batch 1 — #73 (ADR-0016), #86 cargo-deny (ADR-0009))
+> **Updated:** 2026-07-26 (#114 recette mutation testing (ADR-0028) — suite `[[test]]` externe câblée, trois faux-verts fermés ; dette Batch 2 — #89 S1+S2 agrégation `MetricSupport` multi-langage honnête, HTML+JSON (ADR-0026) ; #51 overflow-checks release (ADR-0027), #95 cap d'entrées de marche (ADR-0006 pt.9), #96 pruning exclude walk-time dialect-safe (ADR-0019 addendum) ; #87 recette couverture (ADR-0025) ; Batch 1 — #73 (ADR-0016), #86 cargo-deny (ADR-0009))
 
 ## Nodes
 
@@ -41,6 +41,7 @@
 | ADR-0025 | technical | Recette de couverture — sonde construite hors `llvm-cov-target`, `--test-threads=4`, source unique CI+local (#87) | Applied | 2026-07-23 | [[architecture-overview]], [[ADR-0009]], [[ADR-0010]], [[ADR-0015]] | docs/ADR-0025-coverage-tooling-recipe.md |
 | ADR-0026 | technical | Agrégation `MetricSupport` multi-langage — lattice honnête (mixte→Degraded), writers branchent sur la donnée, HTML+JSON, `Unsupported` non atteignable end-to-end aujourd'hui (#89) | Applied | 2026-07-24 | [[architecture-overview]], [[ADR-0021]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]] | docs/ADR-0026-mixed-language-metric-support-aggregation.md |
 | ADR-0027 | technical | `overflow-checks` + `debug-assertions` en release — le dépassement panique, il ne wrappe pas ; piège `cfg!(debug_assertions)` (#51) | Applied | 2026-07-24 | [[architecture-overview]], [[ADR-0010]], [[ADR-0012]], [[ADR-0015]] | docs/ADR-0027-overflow-checks-release.md |
+| ADR-0028 | technical | Recette mutation testing — câbler la suite `[[test]]` externe, et fermer trois faux-verts (rapport périmé, baseline `--package` vs mutants `--workspace`, contention réintroduite) (#114) | Applied | 2026-07-26 | [[architecture-overview]], [[ADR-0003]], [[ADR-0010]], [[ADR-0025]], [[ADR-0009]] | docs/ADR-0028-mutation-testing-recipe.md |
 | glossary | functional | Glossaire — Ubiquitous Language | Live | 2026-07-20 | [[architecture-overview]], [[ADR-0001]], [[ADR-0006]], [[ADR-0010]], [[ADR-0011]], [[ADR-0012]], [[ADR-0013]], [[ADR-0014]], [[ADR-0016]], [[ADR-0017]], [[ADR-0018]], [[ADR-0019]], [[ADR-0020]], [[ADR-0021]], [[ADR-0022]], [[ADR-0023]] | docs/glossary.md |
 
 ## Graph Health

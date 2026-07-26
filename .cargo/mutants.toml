@@ -1,0 +1,57 @@
+# .cargo/mutants.toml — cargo-mutants recipe for CodeImpact's [[test]]-crate
+# layout (#114). Read automatically by ANY `cargo mutants` invocation from
+# the workspace root -- this is the canonical default config location
+# (see cargo-mutants' own book, "Config file") -- so this file governs both
+# `scripts/mutation.sh` and `mutation_gate.py`'s direct subprocess call
+# alike, with zero extra flags required on either caller's side.
+#
+# THE TRAP: every test lives in a separate `[[test]]` binary crate
+# (hexagon.unit_test, secondaries.integration_test, primaries.e2e_test),
+# each declaring `[lib] test = false` in its own Cargo.toml. Left
+# unconfigured, `cargo mutants` mutates one of codeimpact_hexagon /
+# _secondaries / _primaries and by default runs ONLY that package's own
+# tests via `cargo test -p <package>` -- which is partial in EVERY package
+# (#114 Dev-B B3: codeimpact_secondaries alone carries 10 in-lib
+# `#[cfg(test)]` modules exercising 160 tests, codeimpact_primaries has
+# one), never the FULL behavioral coverage -- most of which lives in the
+# external [[test]] crates (hexagon.unit_test, secondaries.integration_test,
+# primaries.e2e_test) that a package-scoped `cargo test -p` never runs.
+# This is a vacuous-pass risk regardless of package: a mutant survives not
+# because the behavior is untested, but because the tests that WOULD catch
+# it live in a sibling package or an external test crate cargo-mutants
+# never runs.
+#
+# THE FIX: `test_workspace = true` makes cargo-mutants run
+# `cargo test --workspace` for the baseline AND for every mutant,
+# regardless of which package was mutated -- so hexagon.unit_test,
+# secondaries.integration_test and primaries.e2e_test are always in scope.
+# This is the one config key that closes the trap; see
+# `~/.claude/knowledge-base/tests/mutation-testing.md` and
+# https://mutants.rs (book: "Workspace and package support").
+test_workspace = true
+
+# GATE CONTENTION (#114 Dev-B retry-2 N1): `test_workspace = true` above
+# re-runs the FULL workspace suite for every mutant (not just the mutated
+# package's baseline) -- and ADR-0025 (docs/ADR-0025-coverage-tooling-recipe.md,
+# lines 19, 26) already diagnosed that uncapped workspace suite as
+# wall-clock contention starving the syn_code_parser probe subprocess past
+# its PROBE_TIMEOUT, closed precisely by `--test-threads=4`. Left
+# unconfigured here, a contention flake during any single mutant's test
+# run reads as "caught" against a suite that only failed from resource
+# starvation -- a false green through the same door `test_workspace = true`
+# opened. `cargo mutants -- --test-threads=4` does NOT work (verified:
+# EXIT=4, "--test-threads" is a harness argument, not a cargo one) --
+# `additional_cargo_test_args` is the one config key that reaches the
+# harness correctly, confirmed end-to-end: `ok baseline`, `5 missed,
+# 5 caught`, exit 2 -- the cap applies without breaking the baseline.
+additional_cargo_test_args = ["--", "--test-threads=4"]
+
+# Package selection is untouched (default virtual-workspace heuristic: no
+# `default-members` in the root Cargo.toml, no `-p`/`--workspace` flag from
+# either caller -> every workspace member is a mutation candidate,
+# including the three [[test]] crates themselves). `exclude_globs` closes
+# that gap directly at the file level instead: nothing under
+# `tests/` is production code, so nothing there should ever be mutated --
+# regardless of how `cargo mutants` is invoked, and without touching the
+# workspace's package/member list at all.
+exclude_globs = ["src/contexts/codeimpact/tests/**"]

@@ -2,3 +2,5 @@ target/
 Cargo.lock
 lcov.info
 *.profraw
+mutants.out/
+.mutation-gate/
