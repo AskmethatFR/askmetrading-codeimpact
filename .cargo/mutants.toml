@@ -10,15 +10,16 @@
 # each declaring `[lib] test = false` in its own Cargo.toml. Left
 # unconfigured, `cargo mutants` mutates one of codeimpact_hexagon /
 # _secondaries / _primaries and by default runs ONLY that package's own
-# tests via `cargo test -p <package>` -- which range from partial (a
-# handful of in-lib `#[cfg(test)]` modules survive in codeimpact_hexagon
-# alongside the external crate, e.g. code_location.rs,
-# complexity_detector.rs) to genuinely empty (codeimpact_secondaries,
-# codeimpact_primaries have no in-lib tests at all; every behavior is
-# exercised only via the external [[test]] crates). Either shape is a
-# vacuous-pass risk: a mutant survives not because the behavior is
-# untested, but because the tests that WOULD catch it live in a sibling
-# package cargo-mutants never runs.
+# tests via `cargo test -p <package>` -- which is partial in EVERY package
+# (#114 Dev-B B3: codeimpact_secondaries alone carries 10 in-lib
+# `#[cfg(test)]` modules exercising 160 tests, codeimpact_primaries has
+# one), never the FULL behavioral coverage -- most of which lives in the
+# external [[test]] crates (hexagon.unit_test, secondaries.integration_test,
+# primaries.e2e_test) that a package-scoped `cargo test -p` never runs.
+# This is a vacuous-pass risk regardless of package: a mutant survives not
+# because the behavior is untested, but because the tests that WOULD catch
+# it live in a sibling package or an external test crate cargo-mutants
+# never runs.
 #
 # THE FIX: `test_workspace = true` makes cargo-mutants run
 # `cargo test --workspace` for the baseline AND for every mutant,
