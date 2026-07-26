@@ -37,6 +37,36 @@ set -euo pipefail
 # vacuous run (zero tests executed) also reports every mutant "missed"
 # and so also exits non-zero, indistinguishable from a genuine miss at
 # the exit-code layer alone.
+#
+# STALE REPORTS (#114 Dev-B B1): a vacuous invocation (e.g. `--in-diff`
+# over a patch touching no Rust source) exits 0 WITHOUT touching, rotating
+# or deleting mutants.out/ -- so a leftover report from a PREVIOUS,
+# genuinely-successful run would still be sitting there. The vacuity check
+# below would otherwise read that stale report and launder it as THIS
+# run's success. `mutants.out/outcomes.json` is therefore deleted
+# immediately before every cargo-mutants invocation, not detected via an
+# mtime comparison (`[[ file -nt marker ]]` is second-granular under
+# bash 3.2 and ties on a fast run).
+#
+# RED WORKSPACE SUITE (#114 Dev-B B2): `test_workspace = true`
+# (.cargo/mutants.toml) does NOT make cargo-mutants run
+# `cargo test --workspace` for its OWN baseline check -- measured against
+# cargo-mutants 27.1.0, the baseline still runs `cargo test --package=<the
+# mutated package>` while every mutant afterwards runs the full workspace
+# suite. If that workspace suite is red for a reason unrelated to any
+# mutant (a pre-existing failing test in a sibling package), cargo-mutants'
+# own baseline still passes (it never sees the red test), so EVERY mutant
+# is then reported "caught" against a suite that fails unconditionally --
+# an all-caught false green. This script therefore runs its own
+# `cargo test --workspace` gate before invoking cargo-mutants at all and
+# refuses to proceed when it is red. THIS PROTECTION DOES NOT COVER
+# `mutation_gate.py`: that tool invokes `cargo mutants` directly as a
+# subprocess and never goes through this script, so the exact same
+# all-caught false green remains possible on that path. No `cargo-mutants`
+# config key closes this gap (tried: `test_workspace` alone,
+# `test_workspace` + `--workspace` on the CLI, `test_workspace` +
+# `test_package = [...]` -- the baseline stayed package-scoped in all
+# three).
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -82,6 +112,15 @@ fi
 # a spuriously-vacuous run (zero tests executed) also reports every
 # mutant "missed" and so ALSO exits 2 -- indistinguishable from a genuine
 # missed mutant at the exit-code layer alone.
+outcomes_file="mutants.out/outcomes.json"
+
+# A vacuous invocation (e.g. `--in-diff` over a patch with no Rust source
+# files) exits 0 and does NOT touch/rotate/delete mutants.out/ -- so a
+# leftover report from a PREVIOUS, genuinely-successful run would still be
+# sitting here unchanged. Without this, the vacuity check below reads that
+# stale report and launders it as THIS run's success (#114 Dev-B B1).
+rm -f "${outcomes_file}"
+
 mutants_exit=0
 if [[ "${mode}" == "diff" ]]; then
   patch_file=".mutation-gate/changes.patch"
@@ -92,7 +131,6 @@ else
   cargo mutants --workspace "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 fi
 
-outcomes_file="mutants.out/outcomes.json"
 if [[ ! -f "${outcomes_file}" ]]; then
   echo "mutation.sh: cargo-mutants produced no ${outcomes_file} -- did it run at all?" >&2
   echo "mutation.sh: cargo-mutants exited ${mutants_exit}" >&2
