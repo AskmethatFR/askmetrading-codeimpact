@@ -30,6 +30,22 @@
 # https://mutants.rs (book: "Workspace and package support").
 test_workspace = true
 
+# GATE CONTENTION (#114 Dev-B retry-2 N1): `test_workspace = true` above
+# re-runs the FULL workspace suite for every mutant (not just the mutated
+# package's baseline) -- and ADR-0025 (docs/ADR-0025-coverage-tooling-recipe.md,
+# lines 19, 26) already diagnosed that uncapped workspace suite as
+# wall-clock contention starving the syn_code_parser probe subprocess past
+# its PROBE_TIMEOUT, closed precisely by `--test-threads=4`. Left
+# unconfigured here, a contention flake during any single mutant's test
+# run reads as "caught" against a suite that only failed from resource
+# starvation -- a false green through the same door `test_workspace = true`
+# opened. `cargo mutants -- --test-threads=4` does NOT work (verified:
+# EXIT=4, "--test-threads" is a harness argument, not a cargo one) --
+# `additional_cargo_test_args` is the one config key that reaches the
+# harness correctly, confirmed end-to-end: `ok baseline`, `5 missed,
+# 5 caught`, exit 2 -- the cap applies without breaking the baseline.
+additional_cargo_test_args = ["--", "--test-threads=4"]
+
 # Package selection is untouched (default virtual-workspace heuristic: no
 # `default-members` in the root Cargo.toml, no `-p`/`--workspace` flag from
 # either caller -> every workspace member is a mutation candidate,

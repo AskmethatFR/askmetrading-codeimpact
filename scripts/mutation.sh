@@ -30,10 +30,16 @@ set -euo pipefail
 #
 # --full and --diff are mutually exclusive (rejected in either order, not
 # "last flag silently wins"). Every invocation passes `--timeout 300` to
-# cargo-mutants (parity with mutation_gate.py's own default) before any
-# forwarded extra args, so `-- --timeout <n>` still lets a caller override
-# it. Diff-mode's patch lives at `.mutation-gate/mutation-sh-changes.patch`
-# -- a name distinct from mutation_gate.py's own `.mutation-gate/changes.patch`
+# cargo-mutants (parity with mutation_gate.py's own default) UNLESS the
+# caller's own `-- <extra args>` already contains a `--timeout`/`-t`
+# override, in which case the script's own default is OMITTED entirely --
+# not appended alongside it. clap rejects a repeated `--timeout` ("cannot
+# be used multiple times"), so `-- --timeout <n>` overriding the default
+# only works if the default is never emitted in the first place (#114
+# Dev-B N2: the previous header claimed the override "just works" -- it
+# did not, `-- --timeout 60` produced a hard clap error). Diff-mode's
+# patch lives at `.mutation-gate/mutation-sh-changes.patch` -- a name
+# distinct from mutation_gate.py's own `.mutation-gate/changes.patch`
 # so a concurrent manual run and gate run never clobber each other's file.
 #
 # Exit codes: propagates cargo-mutants' own exit code (0 all caught, 2 one
@@ -52,7 +58,10 @@ set -euo pipefail
 # genuinely-successful run would still be sitting there. The vacuity check
 # below would otherwise read that stale report and launder it as THIS
 # run's success. `mutants.out/outcomes.json` is therefore deleted
-# immediately before every cargo-mutants invocation, not detected via an
+# immediately at script start -- before the red-workspace-suite gate, the
+# cargo-mutants presence check, or the cargo-mutants invocation itself
+# (#114 Dev-B retry-2 nit: a red-suite refusal used to leave a stale report
+# on disk since rm -f ran only after the gate) -- not detected via an
 # mtime comparison (`[[ file -nt marker ]]` is second-granular under
 # bash 3.2 and ties on a fast run).
 #
@@ -75,6 +84,22 @@ set -euo pipefail
 # `test_workspace` + `--workspace` on the CLI, `test_workspace` +
 # `test_package = [...]` -- the baseline stayed package-scoped in all
 # three).
+#
+# GATE CONTENTION (#114 Dev-B retry-2 N1): the gate above ran
+# `cargo test --workspace` with no parallelism cap -- ADR-0025
+# (docs/ADR-0025-coverage-tooling-recipe.md, lines 19, 26) already
+# diagnosed phantom SourceTooComplex failures in syn_code_parser as
+# wall-clock contention starving a probe subprocess past its
+# PROBE_TIMEOUT, closed precisely by `--test-threads=4` -- this gate was
+# ADR-0025's recipe minus that mitigation. Worse than a flaky refusal: once
+# `test_workspace = true` re-runs this same uncapped suite for EVERY
+# mutant (see .cargo/mutants.toml's `additional_cargo_test_args`), a
+# contention flake during a mutant run reads as "caught" -- this ticket's
+# own false-green class, through another door. `--test-threads=4` is
+# passed to THIS gate's own `cargo test` below; the cap that applies to
+# cargo-mutants' per-mutant runs lives in `.cargo/mutants.toml` instead,
+# since `cargo mutants -- --test-threads=4` fails the baseline (`--test-threads`
+# is a harness argument, not a cargo one -- verified: EXIT=4).
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -117,23 +142,6 @@ if [[ -n "${diff_flag}" && -n "${full_flag}" ]]; then
   exit 1
 fi
 
-# `cargo mutants --version` (not `command -v cargo-mutants`): cargo itself
-# resolves the `mutants` subcommand via PATH *and* $CARGO_HOME/bin, so a
-# user with `~/.cargo/bin` off PATH but cargo-mutants installed there would
-# get a spurious hard refusal from a PATH-only check (#114 Dev-B "ALSO
-# FIX" nit).
-if ! cargo mutants --version >/dev/null 2>&1; then
-  echo "mutation.sh: cargo-mutants is not installed -- run: cargo install cargo-mutants" >&2
-  exit 1
-fi
-
-# See "RED WORKSPACE SUITE" above: cargo-mutants' own baseline does not
-# exercise the full workspace, so it cannot catch this itself.
-if ! cargo test --workspace --quiet; then
-  echo "mutation.sh: workspace test suite is RED -- a mutation run over a red suite reports every mutant caught (cargo-mutants' baseline check is package-scoped even under test_workspace, see .cargo/mutants.toml). Refusing." >&2
-  exit 1
-fi
-
 # cargo-mutants exits non-zero (2) whenever a mutant is MISSED, not only
 # on a genuine tool error -- a real, expected outcome we want reported
 # (not swallowed), never a reason to abort BEFORE the vacuity check below.
@@ -149,7 +157,49 @@ outcomes_file="mutants.out/outcomes.json"
 # leftover report from a PREVIOUS, genuinely-successful run would still be
 # sitting here unchanged. Without this, the vacuity check below reads that
 # stale report and launders it as THIS run's success (#114 Dev-B B1).
+# Deleted here, before EITHER the presence check or the red-suite gate, so
+# a refusal on any earlier check never leaves a stale report behind either
+# (#114 Dev-B retry-2 nit).
 rm -f "${outcomes_file}"
+
+# `cargo mutants --version` (not `command -v cargo-mutants`): cargo itself
+# resolves the `mutants` subcommand via PATH *and* $CARGO_HOME/bin, so a
+# user with `~/.cargo/bin` off PATH but cargo-mutants installed there would
+# get a spurious hard refusal from a PATH-only check (#114 Dev-B "ALSO
+# FIX" nit).
+if ! cargo mutants --version >/dev/null 2>&1; then
+  echo "mutation.sh: cargo-mutants is not installed -- run: cargo install cargo-mutants" >&2
+  exit 1
+fi
+
+# See "RED WORKSPACE SUITE" and "GATE CONTENTION" above: cargo-mutants'
+# own baseline does not exercise the full workspace, so it cannot catch
+# this itself, and the cap avoids reintroducing ADR-0025's contention
+# flake in this gate's own run.
+if ! cargo test --workspace --quiet -- --test-threads=4; then
+  echo "mutation.sh: workspace test suite is RED -- a mutation run over a red suite reports every mutant caught (cargo-mutants' baseline check is package-scoped even under test_workspace, see .cargo/mutants.toml). Refusing." >&2
+  exit 1
+fi
+
+# #114 Dev-B retry-2 N2: clap rejects a repeated `--timeout` ("cannot be
+# used multiple times"), so the script's own default must be OMITTED
+# entirely whenever the caller's own extra args already specify one --
+# not appended alongside it. `-t` is `--timeout`'s short form (see
+# `cargo mutants --help`).
+has_timeout_override=""
+for extra_arg in "${extra_args[@]+"${extra_args[@]}"}"; do
+  case "${extra_arg}" in
+    --timeout | --timeout=* | -t)
+      has_timeout_override=1
+      break
+      ;;
+  esac
+done
+
+timeout_args=()
+if [[ -z "${has_timeout_override}" ]]; then
+  timeout_args=(--timeout "${default_timeout}")
+fi
 
 mutants_exit=0
 if [[ "${mode}" == "diff" ]]; then
@@ -159,9 +209,9 @@ if [[ "${mode}" == "diff" ]]; then
   patch_file=".mutation-gate/mutation-sh-changes.patch"
   mkdir -p "$(dirname "${patch_file}")"
   git diff --end-of-options "${base_ref}..." >"${patch_file}"
-  cargo mutants --in-diff "${patch_file}" --timeout "${default_timeout}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
+  cargo mutants --in-diff "${patch_file}" "${timeout_args[@]+"${timeout_args[@]}"}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 else
-  cargo mutants --workspace --timeout "${default_timeout}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
+  cargo mutants --workspace "${timeout_args[@]+"${timeout_args[@]}"}" "${extra_args[@]+"${extra_args[@]}"}" || mutants_exit=$?
 fi
 
 if [[ ! -f "${outcomes_file}" ]]; then

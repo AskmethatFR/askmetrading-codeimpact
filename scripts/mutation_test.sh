@@ -97,7 +97,13 @@ assert_exact_status_with_message() {
 cleanup_paths=()
 cleanup() {
   local path
-  for path in "${cleanup_paths[@]}"; do
+  # #114 Dev-B retry-2 N3: the guard (matching mutation.sh:162's
+  # extra_args[@] fix) is required because this trap is armed HERE, before
+  # `cleanup_paths` is populated below -- if `mktemp -d` itself fails,
+  # cleanup() runs against a still-empty array, and bash 3.2's `set -u`
+  # raises "unbound variable" on a bare "${cleanup_paths[@]}" instead of
+  # expanding to nothing.
+  for path in "${cleanup_paths[@]+"${cleanup_paths[@]}"}"; do
     rm -rf "${path}"
   done
 }
