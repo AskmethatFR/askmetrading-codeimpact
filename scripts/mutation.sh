@@ -104,6 +104,13 @@ if ! command -v cargo-mutants >/dev/null 2>&1; then
   exit 1
 fi
 
+# See "RED WORKSPACE SUITE" above: cargo-mutants' own baseline does not
+# exercise the full workspace, so it cannot catch this itself.
+if ! cargo test --workspace --quiet; then
+  echo "mutation.sh: workspace test suite is RED -- a mutation run over a red suite reports every mutant caught (cargo-mutants' baseline check is package-scoped even under test_workspace, see .cargo/mutants.toml). Refusing." >&2
+  exit 1
+fi
+
 # cargo-mutants exits non-zero (2) whenever a mutant is MISSED, not only
 # on a genuine tool error -- a real, expected outcome we want reported
 # (not swallowed), never a reason to abort BEFORE the vacuity check below.
