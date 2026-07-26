@@ -299,6 +299,100 @@ assert_nonzero_with_message \
 
 reset_sandbox_state
 
+# --- QA / B4: --diff mode had ZERO automated coverage -- every existing
+# case used --full or --bogus-flag. This is ordinary deterministic bash
+# (build a `git diff`, forward it via `--in-diff`) that can be stubbed
+# exactly like --full, per QA's own framing: the ticket's "empirical proof
+# instead of tests" carve-out covers "does cargo-mutants discriminate", not
+# "does the script build the right command line".
+
+# --diff with no explicit ref: base_ref defaults to origin/main, the patch
+# written must match a direct `git diff origin/main...`, and --timeout 300
+# (parity with mutation_gate.py's own default) must reach cargo-mutants.
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+expected_patch=$(git -C "${sandbox}" diff --end-of-options origin/main...)
+description="--diff with no ref defaults to origin/main, writes the matching patch, forwards --timeout 300"
+status=0
+output=$(env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --diff 2>&1) || status=$?
+patch_path="${sandbox}/.mutation-gate/mutation-sh-changes.patch"
+if [[ "${status}" -ne 0 ]]; then
+  echo "FAIL: ${description} -- expected exit 0, got ${status}: ${output}"
+  failures=$((failures + 1))
+elif [[ ! -f "${patch_path}" ]]; then
+  echo "FAIL: ${description} -- expected patch at ${patch_path}, none written"
+  failures=$((failures + 1))
+elif [[ "$(cat "${patch_path}")" != "${expected_patch}" ]]; then
+  echo "FAIL: ${description} -- patch content diverges from a direct 'git diff origin/main...'"
+  failures=$((failures + 1))
+elif [[ "$(cat "${argv_log}")" != *"--timeout 300"* ]]; then
+  echo "FAIL: ${description} -- expected --timeout 300 in cargo-mutants argv, got: $(cat "${argv_log}")"
+  failures=$((failures + 1))
+else
+  echo "PASS: ${description}"
+fi
+
+# --diff with an explicit ref: base_ref is consumed as the second token,
+# and the patch reflects THAT ref, not the default.
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+expected_patch=$(git -C "${sandbox}" diff --end-of-options HEAD~2...)
+description="--diff HEAD~2 consumes the explicit ref and writes the matching patch"
+status=0
+output=$(env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --diff HEAD~2 2>&1) || status=$?
+patch_path="${sandbox}/.mutation-gate/mutation-sh-changes.patch"
+if [[ "${status}" -ne 0 ]]; then
+  echo "FAIL: ${description} -- expected exit 0, got ${status}: ${output}"
+  failures=$((failures + 1))
+elif [[ "$(cat "${patch_path}")" != "${expected_patch}" ]]; then
+  echo "FAIL: ${description} -- patch content diverges from a direct 'git diff HEAD~2...'"
+  failures=$((failures + 1))
+else
+  echo "PASS: ${description}"
+fi
+
+# --diff immediately followed by `--`: the base-ref consumption guard
+# (`"$2" != --*`) must NOT swallow "--" as a ref, base_ref stays the
+# default, and the extra args after `--` are forwarded to cargo-mutants.
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+expected_patch=$(git -C "${sandbox}" diff --end-of-options origin/main...)
+description="--diff -- <extras> does not consume '--' as the ref and forwards the extra args"
+status=0
+output=$(env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --diff -- --alpha --beta 2>&1) || status=$?
+patch_path="${sandbox}/.mutation-gate/mutation-sh-changes.patch"
+if [[ "${status}" -ne 0 ]]; then
+  echo "FAIL: ${description} -- expected exit 0, got ${status}: ${output}"
+  failures=$((failures + 1))
+elif [[ "$(cat "${patch_path}")" != "${expected_patch}" ]]; then
+  echo "FAIL: ${description} -- base_ref was not left at its default (patch diverges from origin/main)"
+  failures=$((failures + 1))
+elif [[ "$(cat "${argv_log}")" != *"--alpha --beta"* ]]; then
+  echo "FAIL: ${description} -- expected '--alpha --beta' forwarded, argv was: $(cat "${argv_log}")"
+  failures=$((failures + 1))
+else
+  echo "PASS: ${description}"
+fi
+
+reset_sandbox_state
+
+# --- ALSO FIX: --full and --diff together silently resolved to "last
+# flag wins" -- reject the conflicting pair instead, in either order.
+assert_nonzero_with_message \
+  "rejects --full and --diff together (order: --full --diff)" \
+  "mutually exclusive" \
+  env PATH="${stub_dir}:${PATH}" "${sandboxed_script}" --full --diff
+
+assert_nonzero_with_message \
+  "rejects --full and --diff together (order: --diff --full)" \
+  "mutually exclusive" \
+  env PATH="${stub_dir}:${PATH}" "${sandboxed_script}" --diff --full
+
+reset_sandbox_state
+
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} smoke test(s) failed"
   exit 1
