@@ -4,17 +4,27 @@ set -euo pipefail
 # scripts/mutation_test.sh — smoke tests for scripts/mutation.sh's OWN
 # contract (#114): the deterministic, scriptable behavior of the recipe
 # itself. Covers AC6 (loud failure when cargo-mutants is absent) and the
-# no-extra-args happy path (a stubbed cargo-mutants standing in for the
-# real tool, so the test stays hermetic and fast).
+# no-extra-args happy path (a stubbed cargo standing in for the real
+# toolchain, so the test stays hermetic and fast).
 #
 # Does NOT invoke a REAL cargo-mutants campaign — whether the tool
 # genuinely catches/misses mutants and whether a real run stays
 # non-vacuous is empirical, one-shot evidence (see the ticket's AC1/AC2/AC3
 # proof), not a repeatable hermetic assertion.
 #
+# SANDBOXING: every invocation below runs a COPY of mutation.sh placed in
+# its own temp directory (with a symlinked .git so `git diff` still works
+# for --diff-mode cases), never the real checkout. mutation.sh resolves its
+# own working directory via `cd "$(dirname "${BASH_SOURCE[0]}")/.."`, so
+# running the copy makes its `mutants.out`/`.mutation-gate` writes (and the
+# `rm -rf` cleanup between cases below) land in the sandbox, never in the
+# real repo root — a prior version of this file ran the real script in
+# place and `rm -rf`'d a real multi-hour campaign's report this way.
+#
 # Run manually: scripts/mutation_test.sh
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+repo_root="$(pwd)"
 
 failures=0
 
@@ -58,9 +68,106 @@ assert_success_with_message() {
   echo "PASS: ${description}"
 }
 
+assert_exact_status_with_message() {
+  local description="$1"
+  local expected_status="$2"
+  local expected_message="$3"
+  shift 3
+  local output
+  local status=0
+  output=$("$@" 2>&1) || status=$?
+  if [[ "$status" -ne "$expected_status" ]]; then
+    echo "FAIL: ${description} -- expected exit ${expected_status}, got ${status}: ${output}"
+    failures=$((failures + 1))
+    return
+  fi
+  if [[ "$output" != *"$expected_message"* ]]; then
+    echo "FAIL: ${description} -- expected message containing '${expected_message}', got: ${output}"
+    failures=$((failures + 1))
+    return
+  fi
+  echo "PASS: ${description}"
+}
+
+# --- sandbox setup -----------------------------------------------------
+# A copy of mutation.sh in its own temp dir, `.git` symlinked back to the
+# real repo so `git diff <ref>...` (a pure ref-to-ref comparison, no path
+# given) resolves correctly without needing the sandbox's working tree
+# files to match: three-dot diffs read only the object database and refs.
+cleanup_paths=()
+cleanup() {
+  local path
+  for path in "${cleanup_paths[@]}"; do
+    rm -rf "${path}"
+  done
+}
+trap cleanup EXIT
+
+sandbox=$(mktemp -d)
+cleanup_paths+=("${sandbox}")
+mkdir -p "${sandbox}/scripts"
+cp "${repo_root}/scripts/mutation.sh" "${sandbox}/scripts/mutation.sh"
+chmod +x "${sandbox}/scripts/mutation.sh"
+ln -s "${repo_root}/.git" "${sandbox}/.git"
+sandboxed_script="${sandbox}/scripts/mutation.sh"
+
+reset_sandbox_state() {
+  rm -rf "${sandbox}/mutants.out" "${sandbox}/.mutation-gate"
+}
+
+# --- unified stub `cargo` dispatcher ------------------------------------
+# Shadows the REAL `cargo` binary entirely (not just `cargo-mutants`) so
+# both `cargo test --workspace --quiet` (the red-suite gate) and
+# `cargo mutants ...` are hermetic and instant. Behavior is parameterized
+# per-invocation via env vars:
+#   CARGO_TEST_EXIT           exit code for the `test` subcommand (default 0)
+#   CARGO_MUTANTS_EXIT        exit code for the `mutants` subcommand (default 0)
+#   CARGO_MUTANTS_JSON        outcomes.json body to write (default: 1 caught)
+#   CARGO_MUTANTS_SKIP_WRITE  when set, `mutants` writes nothing (simulates a
+#                             vacuous/no-op cargo-mutants run that never
+#                             touches mutants.out/outcomes.json)
+#   CARGO_MUTANTS_ARGV_LOG    when set, the `mutants` subcommand's argv
+#                             (after `--version` short-circuits) is appended
+#                             to this file, one invocation per line
+stub_dir=$(mktemp -d)
+cleanup_paths+=("${stub_dir}")
+cat >"${stub_dir}/cargo" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+default_json='{"caught":1,"missed":0,"timeout":0,"unviable":0,"outcomes":[]}'
+subcommand="${1:-}"
+shift || true
+case "${subcommand}" in
+  test)
+    exit "${CARGO_TEST_EXIT:-0}"
+    ;;
+  mutants)
+    if [[ "${1:-}" == "--version" ]]; then
+      exit 0
+    fi
+    if [[ -n "${CARGO_MUTANTS_ARGV_LOG:-}" ]]; then
+      printf '%s\n' "$*" >>"${CARGO_MUTANTS_ARGV_LOG}"
+    fi
+    if [[ -z "${CARGO_MUTANTS_SKIP_WRITE:-}" ]]; then
+      mkdir -p mutants.out
+      printf '%s' "${CARGO_MUTANTS_JSON:-${default_json}}" >mutants.out/outcomes.json
+    fi
+    exit "${CARGO_MUTANTS_EXIT:-0}"
+    ;;
+  *)
+    echo "stub cargo: unsupported subcommand '${subcommand}'" >&2
+    exit 127
+    ;;
+esac
+STUB
+chmod +x "${stub_dir}/cargo"
+
+# --- AC6: absence of the real tool (no stub involved) -------------------
 # Hide cargo-mutants from PATH without breaking the interpreter's own need
 # for `bash`/`git`/`python3`/`env` — strip ONLY the directory that resolves
-# `cargo-mutants` today, keep every other PATH entry intact.
+# `cargo-mutants` today, keep every other PATH entry intact. Runs with the
+# REAL `cargo` (not our stub): `cargo mutants --version` must fail exactly
+# as it would for a user who never installed the tool.
 if ! real_cargo_mutants=$(command -v cargo-mutants); then
   echo "SKIP: cargo-mutants is not installed on this machine -- cannot exercise" \
     "the 'already absent' case meaningfully (it would trivially pass for the" \
@@ -77,40 +184,32 @@ for part in "${path_parts[@]}"; do
   fi
 done
 
+reset_sandbox_state
 assert_nonzero_with_message \
   "refuses to run when cargo-mutants is absent from PATH" \
   "cargo-mutants is not installed" \
-  env PATH="${stripped_path}" ./scripts/mutation.sh --full
+  env PATH="${stripped_path}" "${sandboxed_script}" --full
 
+# --- argument parsing (no stub needed, fails before reaching cargo) ------
+reset_sandbox_state
 assert_nonzero_with_message \
   "rejects an unknown argument" \
   "unknown argument" \
-  env PATH="${stripped_path}" ./scripts/mutation.sh --bogus-flag
+  env PATH="${PATH}" "${sandboxed_script}" --bogus-flag
 
+# --- happy path: empty extra_args under bash 3.2 -------------------------
 # `extra_args=()` stays genuinely empty on every call above (no `--` was
 # given) -- under bash 3.2 (macOS's shipped /bin/bash), `set -u` +
 # `"${extra_args[@]}"` on a zero-element array raises "unbound variable"
-# rather than expanding to nothing. Neither test above reaches the line
-# that expands it (both exit earlier), so this exercises that exact path
-# with a stubbed `cargo-mutants` standing in for the real tool -- fast,
-# hermetic, no real mutation campaign required.
-stub_dir=$(mktemp -d)
-cat >"${stub_dir}/cargo-mutants" <<'STUB'
-#!/usr/bin/env bash
-mkdir -p mutants.out
-printf '{"caught":1,"missed":0,"timeout":0,"unviable":0,"outcomes":[]}' \
-  >mutants.out/outcomes.json
-STUB
-chmod +x "${stub_dir}/cargo-mutants"
-rm -rf mutants.out .mutation-gate
-
+# rather than expanding to nothing. This exercises that exact path with
+# the stubbed `cargo`, green workspace suite (default), one caught mutant.
+reset_sandbox_state
 assert_success_with_message \
   "runs the empty-extra-args path (--full, no -- args) without an unbound-variable crash" \
   "1 mutant(s) validly examined" \
-  env PATH="${stub_dir}:${PATH}" ./scripts/mutation.sh --full
+  env PATH="${stub_dir}:${PATH}" "${sandboxed_script}" --full
 
-rm -rf mutants.out .mutation-gate
-
+# --- cargo-mutants' own non-zero exit (a real missed mutant) survives ----
 # cargo-mutants itself exits non-zero (2) whenever a mutant is MISSED --
 # not only on a genuine tool error. Under `set -e`, a naive
 # `cargo mutants ...` call with no `||` guard aborts the script on that
@@ -118,23 +217,19 @@ rm -rf mutants.out .mutation-gate
 # examined" message) never runs precisely in the case that matters most:
 # a spuriously-vacuous run also reports every mutant "missed" and so also
 # exits 2, indistinguishable from this at cargo-mutants' exit-code layer.
-stub_missed_dir=$(mktemp -d)
-cat >"${stub_missed_dir}/cargo-mutants" <<'STUB'
-#!/usr/bin/env bash
-mkdir -p mutants.out
-printf '{"caught":0,"missed":1,"timeout":0,"unviable":0,"outcomes":[]}' \
-  >mutants.out/outcomes.json
-exit 2
-STUB
-chmod +x "${stub_missed_dir}/cargo-mutants"
-rm -rf mutants.out .mutation-gate
-
-assert_nonzero_with_message \
-  "still runs the vacuity check and reports examined mutants when cargo-mutants exits non-zero (a real missed mutant)" \
+# The exact status (not just non-zero) matters: a script that swallowed
+# cargo-mutants' 2 and returned a bare 1 would still pass a nonzero-only
+# check while breaking the documented "propagates cargo-mutants' own exit
+# code" contract.
+reset_sandbox_state
+assert_exact_status_with_message \
+  "still runs the vacuity check, reports examined mutants, and propagates cargo-mutants' exact exit code (2) when it exits non-zero (a real missed mutant)" \
+  2 \
   "1 mutant(s) validly examined" \
-  env PATH="${stub_missed_dir}:${PATH}" ./scripts/mutation.sh --full
+  env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_JSON='{"caught":0,"missed":1,"timeout":0,"unviable":0,"outcomes":[]}' CARGO_MUTANTS_EXIT=2 \
+  "${sandboxed_script}" --full
 
-rm -rf mutants.out .mutation-gate
+reset_sandbox_state
 
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} smoke test(s) failed"
