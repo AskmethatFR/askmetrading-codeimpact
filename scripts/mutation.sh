@@ -117,7 +117,12 @@ if [[ -n "${diff_flag}" && -n "${full_flag}" ]]; then
   exit 1
 fi
 
-if ! command -v cargo-mutants >/dev/null 2>&1; then
+# `cargo mutants --version` (not `command -v cargo-mutants`): cargo itself
+# resolves the `mutants` subcommand via PATH *and* $CARGO_HOME/bin, so a
+# user with `~/.cargo/bin` off PATH but cargo-mutants installed there would
+# get a spurious hard refusal from a PATH-only check (#114 Dev-B "ALSO
+# FIX" nit).
+if ! cargo mutants --version >/dev/null 2>&1; then
   echo "mutation.sh: cargo-mutants is not installed -- run: cargo install cargo-mutants" >&2
   exit 1
 fi
