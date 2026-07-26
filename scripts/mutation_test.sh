@@ -121,6 +121,8 @@ reset_sandbox_state() {
 # `cargo mutants ...` are hermetic and instant. Behavior is parameterized
 # per-invocation via env vars:
 #   CARGO_TEST_EXIT           exit code for the `test` subcommand (default 0)
+#   CARGO_TEST_ARGV_LOG       when set, the `test` subcommand's own argv is
+#                             appended to this file, one invocation per line
 #   CARGO_MUTANTS_EXIT        exit code for the `mutants` subcommand (default 0)
 #   CARGO_MUTANTS_JSON        outcomes.json body to write (default: 1 caught)
 #   CARGO_MUTANTS_SKIP_WRITE  when set, `mutants` writes nothing (simulates a
@@ -139,6 +141,9 @@ subcommand="${1:-}"
 shift || true
 case "${subcommand}" in
   test)
+    if [[ -n "${CARGO_TEST_ARGV_LOG:-}" ]]; then
+      printf '%s\n' "$*" >>"${CARGO_TEST_ARGV_LOG}"
+    fi
     exit "${CARGO_TEST_EXIT:-0}"
     ;;
   mutants)
@@ -169,7 +174,7 @@ chmod +x "${stub_dir}/cargo"
 # REAL `cargo` (not our stub): `cargo mutants --version` must fail exactly
 # as it would for a user who never installed the tool.
 if ! real_cargo_mutants=$(command -v cargo-mutants); then
-  echo "SKIP: cargo-mutants is not installed on this machine -- cannot exercise" \
+  echo "ERROR: cargo-mutants is not installed on this machine -- cannot exercise" \
     "the 'already absent' case meaningfully (it would trivially pass for the" \
     "wrong reason). Install it and re-run: cargo install cargo-mutants"
   exit 1
@@ -390,6 +395,106 @@ assert_nonzero_with_message \
   "rejects --full and --diff together (order: --diff --full)" \
   "mutually exclusive" \
   env PATH="${stub_dir}:${PATH}" "${sandboxed_script}" --diff --full
+
+reset_sandbox_state
+
+# --- N1 (#114 retry-2, Dev-B): the red-workspace-suite gate must run
+# under a capped test-thread count -- ADR-0025 (docs/ADR-0025-coverage-tooling-recipe.md,
+# lines 19, 26) establishes that phantom SourceTooComplex failures in
+# syn_code_parser are wall-clock contention starving a probe subprocess
+# past its PROBE_TIMEOUT, closed precisely by `--test-threads=4`.
+# mutation.sh's own gate re-ran `cargo test --workspace` uncapped,
+# reintroducing that exact contention class -- and because
+# `test_workspace = true` makes cargo-mutants re-run the full suite for
+# EVERY mutant too, a contention flake there reads as "caught": this
+# ticket's own false-green class, through another door.
+reset_sandbox_state
+test_argv_log=$(mktemp)
+cleanup_paths+=("${test_argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_TEST_ARGV_LOG="${test_argv_log}" "${sandboxed_script}" --full >/dev/null 2>&1 || true
+description="the red-workspace-suite gate runs with --test-threads=4 (ADR-0025 contention cap)"
+if [[ "$(cat "${test_argv_log}")" == *"--test-threads=4"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected '--test-threads=4' in 'cargo test' argv, got: $(cat "${test_argv_log}")"
+  failures=$((failures + 1))
+fi
+
+# --- N2 (#114 retry-2, Dev-B): the header's documented `-- --timeout <n>`
+# override contract is false against the real binary -- clap rejects a
+# repeated `--timeout` ("cannot be used multiple times"). The script's own
+# default must be present when the caller supplies no override, and absent
+# (not duplicated) when the caller's own extra args already specify one.
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --full >/dev/null 2>&1 || true
+description="--full with no override still passes the script's own default --timeout 300"
+if [[ "$(cat "${argv_log}")" == *"--timeout 300"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected '--timeout 300' in argv, got: $(cat "${argv_log}")"
+  failures=$((failures + 1))
+fi
+
+reset_sandbox_state
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+env PATH="${stub_dir}:${PATH}" CARGO_MUTANTS_ARGV_LOG="${argv_log}" "${sandboxed_script}" --full -- --timeout 60 >/dev/null 2>&1 || true
+description="a caller-provided '-- --timeout 60' overrides the default instead of duplicating --timeout"
+recorded_argv="$(cat "${argv_log}")"
+if [[ "${recorded_argv}" == *"--timeout 60"* && "${recorded_argv}" != *"--timeout 300"* ]]; then
+  echo "PASS: ${description}"
+else
+  echo "FAIL: ${description} -- expected only '--timeout 60' (no '--timeout 300'), got: ${recorded_argv}"
+  failures=$((failures + 1))
+fi
+
+reset_sandbox_state
+
+# --- N3 (#114 retry-2, Dev-B): the EXIT trap above (`trap cleanup EXIT`)
+# is armed while `cleanup_paths` is still empty -- if anything between that
+# line and the first `cleanup_paths+=(...)` below fails (e.g. `mktemp -d`
+# itself), the trap fires against a zero-element array. Under bash 3.2
+# (this host's /bin/bash, `set -u`), "${cleanup_paths[@]}" on an empty
+# array raises "unbound variable" instead of expanding to nothing -- the
+# exact bug already fixed once in mutation.sh:162 for its own
+# extra_args[@]. `declare -f cleanup` extracts THIS file's own, currently
+# live `cleanup` function definition (not a hand-written replica) and
+# re-runs it in an isolated bash -c subshell with an empty cleanup_paths,
+# so this test is tied to the real production function, not a copy of it.
+n3_repro_output=$(bash -c "
+$(declare -f cleanup)
+set -u
+cleanup_paths=()
+cleanup
+" 2>&1) || true
+description="cleanup()'s EXIT trap tolerates an empty cleanup_paths under bash 3.2 (set -u)"
+if [[ "${n3_repro_output}" == *"unbound variable"* ]]; then
+  echo "FAIL: ${description} -- got: ${n3_repro_output}"
+  failures=$((failures + 1))
+else
+  echo "PASS: ${description}"
+fi
+
+# --- nit (#114 retry-2, Dev-B): the stale-report rm -f (B1) now runs
+# BEFORE the red-workspace-suite gate (B2), not after -- previously a red
+# suite refused before ever reaching rm -f, leaving a stale outcomes.json
+# on disk (harmless today since mutation_gate.py enforces mtime, but
+# untidy). Pre-seed a stale report, force a red suite, and confirm the
+# stale file is gone even though cargo-mutants was never invoked.
+reset_sandbox_state
+mkdir -p "${sandbox}/mutants.out"
+printf '%s' '{"caught":99,"missed":0,"timeout":0,"unviable":0,"outcomes":[]}' \
+  >"${sandbox}/mutants.out/outcomes.json"
+env PATH="${stub_dir}:${PATH}" CARGO_TEST_EXIT=1 "${sandboxed_script}" --full >/dev/null 2>&1 || true
+description="a stale outcomes.json is deleted even when the red-workspace-suite gate refuses"
+if [[ -f "${sandbox}/mutants.out/outcomes.json" ]]; then
+  echo "FAIL: ${description} -- stale report still present"
+  failures=$((failures + 1))
+else
+  echo "PASS: ${description}"
+fi
 
 reset_sandbox_state
 
