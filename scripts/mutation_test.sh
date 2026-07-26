@@ -249,6 +249,30 @@ assert_nonzero_with_message \
 
 reset_sandbox_state
 
+# --- B2: a red workspace suite must be refused BEFORE any mutation run --
+# Measured against real cargo-mutants 27.1.0: `test_workspace = true`
+# makes cargo-mutants run `cargo test --workspace` for every MUTANT, but
+# its own baseline still runs `cargo test --package=<mutated>` -- so a
+# workspace-wide red test (unrelated to any mutant) never fails the
+# baseline, and every mutant is then reported "caught" against a suite
+# that fails unconditionally. The script must run its own green-suite
+# check first and refuse before ever invoking cargo-mutants.
+argv_log=$(mktemp)
+cleanup_paths+=("${argv_log}")
+assert_nonzero_with_message \
+  "refuses to mutate when the workspace test suite is red" \
+  "workspace" \
+  env PATH="${stub_dir}:${PATH}" CARGO_TEST_EXIT=1 CARGO_MUTANTS_ARGV_LOG="${argv_log}" \
+  "${sandboxed_script}" --full
+if [[ -s "${argv_log}" ]]; then
+  echo "FAIL: refuses to mutate when the workspace test suite is red -- cargo-mutants was invoked anyway (argv log is non-empty): $(cat "${argv_log}")"
+  failures=$((failures + 1))
+else
+  echo "PASS: refuses to mutate when the workspace test suite is red -- cargo-mutants was never invoked"
+fi
+
+reset_sandbox_state
+
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} smoke test(s) failed"
   exit 1
