@@ -345,7 +345,7 @@ fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape
     );
     let stdout = String::from_utf8_lossy(stdout_bytes);
     assert!(
-        stdout.contains("\\x1b[2J"),
+        stdout.contains("\\u{1b}[2J"),
         "the escape sequence should still be visible, just neutralized: {}",
         stdout
     );
@@ -484,6 +484,110 @@ fn e2e_analyze_javascript_file_with_bidi_override_method_name_prints_no_raw_bidi
         !stdout.contains('\u{202E}'),
         "a raw U+202E (RLO) reached the console output: {}",
         stdout
+    );
+}
+
+// Sweep (Dev-B MINOR B, Security MEDIUM, both lanes) — a ZWSP-carrying
+// method name must render VISIBLY DISTINCT from its clean twin, not
+// collapse to the same report line the way `char::is_control` alone
+// (round 1) and the bidi-only class (round 2) both left it.
+#[test]
+fn e2e_analyze_javascript_file_with_zwsp_method_name_prints_visibly_distinct_report_line() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!("codeimpact_e2e_zwsp_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let clean_fixture = dir.join("clean.js");
+    let hostile_fixture = dir.join("hostile.js");
+    std::fs::write(&clean_fixture, "class C { \"authenticate\"() {} }")
+        .expect("write clean fixture");
+    std::fs::write(
+        &hostile_fixture,
+        "class C { \"auth\u{200B}enticate\"() {} }",
+    )
+    .expect("write hostile fixture");
+
+    let clean_output = Command::new(&binary)
+        .args(["analyze", clean_fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let hostile_output = Command::new(&binary)
+        .args(["analyze", hostile_fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(clean_output.status.success());
+    assert!(hostile_output.status.success());
+    let clean_stdout = String::from_utf8_lossy(&clean_output.stdout);
+    let hostile_stdout = String::from_utf8_lossy(&hostile_output.stdout);
+    assert!(
+        !hostile_stdout.contains('\u{200B}'),
+        "a raw ZWSP reached the console output: {}",
+        hostile_stdout
+    );
+    let clean_detail_line = clean_stdout
+        .lines()
+        .find(|l| l.contains("authenticate"))
+        .expect("clean detail line must exist");
+    let hostile_detail_line = hostile_stdout
+        .lines()
+        .find(|l| l.contains("auth"))
+        .expect("hostile detail line must exist");
+    assert_ne!(
+        clean_detail_line, hostile_detail_line,
+        "the ZWSP-carrying name must render visibly distinct from its clean twin, \
+         not collapse to the same report line"
+    );
+}
+
+// Sweep, item 4 (Dev-B + Security) — on Unix a filename may contain any
+// byte except `/` and NUL, so a hostile repo can ship a file whose NAME
+// (not a symbol inside it) carries a raw ESC byte and forges the console
+// report exactly the way a hostile method name did. Verified on BOTH the
+// single-file and the project (`--path`) surfaces.
+#[test]
+fn e2e_analyze_file_with_ansi_escape_in_its_own_name_prints_no_raw_escape_byte_on_either_surface() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_hostile_filename_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let hostile_name = "\x1b[2J\x1b[1;31mPWNED\x1b[0m.js";
+    let fixture = dir.join(hostile_name);
+    std::fs::write(&fixture, "function f() {}").expect("write fixture with a hostile filename");
+
+    let single_file_output = Command::new(&binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    assert!(
+        single_file_output.status.success(),
+        "exit 0 expected (single file). stderr: {}",
+        String::from_utf8_lossy(&single_file_output.stderr)
+    );
+    assert!(
+        !single_file_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte from the FILE NAME reached the single-file console output: {:?}",
+        String::from_utf8_lossy(&single_file_output.stdout)
+    );
+
+    let project_output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        project_output.status.success(),
+        "exit 0 expected (project). stderr: {}",
+        String::from_utf8_lossy(&project_output.stderr)
+    );
+    assert!(
+        !project_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte from the FILE NAME reached the project console output: {:?}",
+        String::from_utf8_lossy(&project_output.stdout)
     );
 }
 

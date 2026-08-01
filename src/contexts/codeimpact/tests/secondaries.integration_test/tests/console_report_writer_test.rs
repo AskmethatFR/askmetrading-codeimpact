@@ -715,7 +715,7 @@ fn write_console_neutralizes_ansi_escape_sequences_in_a_function_name() {
         output
     );
     assert!(
-        output.contains("\\x1b[2J"),
+        output.contains("\\u{1b}[2J"),
         "the escape sequence should still be visible, just neutralized: {:?}",
         output
     );
@@ -860,8 +860,174 @@ fn write_project_report_neutralizes_ansi_escape_sequences_in_a_function_name() {
         output
     );
     assert!(
-        output.contains("\\x1b[2J"),
+        output.contains("\\u{1b}[2J"),
         "the escape sequence should still be visible, just neutralized: {:?}",
         output
     );
+}
+
+// Sweep, item 4 (Dev-B + Security, folded in per the operator's rule —
+// same shape, same file, sanitizer already exists) — FS PATHS are
+// analyzed-repo-derived input exactly like a method name: on Unix a
+// filename may contain any byte except `/` and NUL, so `0x1b` is
+// reachable through a hostile file NAME, not just a hostile SYMBOL name.
+// `path.display()`, `CodeLocation`'s embedded `file_path`, and the
+// `file_stem`-derived consumption-chain labels are all path-derived
+// console strings that need the same treatment as `function`/`message`/
+// `io_call` did in the earlier sweep.
+
+const HOSTILE_PATH_ESC: &str = "\x1b[2J\x1b[1;31mPWNED\x1b[0m.js";
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_the_per_file_path_header() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path(HOSTILE_PATH_ESC), CodeMetrics::new(1))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project per-file path header: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_the_function_detail_location_path() {
+    let writer = ConsoleReportWriter::new();
+    let detail = FunctionDetail::new(
+        "f".to_string(),
+        CodeLocation::new(HOSTILE_PATH_ESC.into(), 1, 1),
+        0,
+        0,
+        1,
+        false,
+    );
+    let metrics = CodeMetrics::new(1).with_function_details(vec![detail]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a function detail's CodeLocation path: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_a_warning_location_path() {
+    let writer = ConsoleReportWriter::new();
+    let warning = hostile_warning("f", "boucles imbriquées détectées");
+    let metrics = CodeMetrics::new(1).with_warnings(vec![ComplexityWarning {
+        location: CodeLocation::new(HOSTILE_PATH_ESC.into(), 1, 1),
+        ..warning
+    }]);
+    let files = vec![(path("clean.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a warning's CodeLocation path: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_the_consumption_chain_file_stem() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.js"), CodeMetrics::new(1)),
+        (path(HOSTILE_PATH_ESC), CodeMetrics::new(1)),
+    ];
+    let deps = vec![FileDependency {
+        from: path("a.js"),
+        to: path(HOSTILE_PATH_ESC),
+    }];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a consumption-chain file_stem: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_a_cycle_path() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.js"), CodeMetrics::new(1)),
+        (path(HOSTILE_PATH_ESC), CodeMetrics::new(1)),
+    ];
+    let deps = vec![
+        FileDependency {
+            from: path("a.js"),
+            to: path(HOSTILE_PATH_ESC),
+        },
+        FileDependency {
+            from: path(HOSTILE_PATH_ESC),
+            to: path("a.js"),
+        },
+    ];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a cycle's path: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_an_unmeasurable_file_path() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("clean.js"), CodeMetrics::new(1))];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unmeasurable_files(vec![UnmeasurableFile {
+            path: path(HOSTILE_PATH_ESC),
+            reason: UnmeasurableReason::SourceUnparseable,
+        }]);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via an unmeasurable file's path: {:?}",
+        output
+    );
+}
+
+// The pre-existing (Security INFO, confirmed unrelated to this diff)
+// `file_stem().unwrap().to_str().unwrap()` panic risk on the SAME line
+// being sanitized: a path ending in `..` has no `file_stem()`. Fixed in
+// the same pass rather than leaving a reachable panic behind a fix.
+#[test]
+fn write_project_report_does_not_panic_on_a_consumption_chain_path_with_no_file_stem() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.js"), CodeMetrics::new(1)),
+        (path("dir/.."), CodeMetrics::new(1)),
+    ];
+    let deps = vec![FileDependency {
+        from: path("a.js"),
+        to: path("dir/.."),
+    }];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    // Must not panic.
+    writer.write_project_report_to(&mut buf, &graph);
 }

@@ -1058,27 +1058,47 @@ fn call_callee_name(call_node: &Node, function_nodes: &[Node], source: &[u8]) ->
 
 /// Descends through syntactically-transparent wrapper nodes to the real
 /// expression they wrap (US17 T1 retry 2, Dev-B F3/Security convergent,
-/// BLOCKING 3): the TEXTBOOK IIFE form, `(function(){...})()` /
-/// `(() => {})()`, puts a `parenthesized_expression` between the call and
-/// the function-shaped node it invokes — the `!`/`void`-prefixed forms
-/// tested first put the function-shaped node DIRECTLY in the callee
-/// position, which is the marginal shape, not the common one. TypeScript
-/// adds two more transparent wrappers (`as_expression` — `(fn as Fn)()`,
-/// `non_null_expression` — `fn!()`). None of these three node kinds carry
-/// a NAMED field for the wrapped expression in either real grammar
-/// (verified against node-types.json) — the wrapped expression is always
-/// the first NAMED child, so `named_child(0)` is the exact descent, looped
-/// to also handle doubly-wrapped forms (`((() => {}))()`). Applied ONLY to
-/// the node used for the `@function`-membership test — the returned NAME
-/// text, when the callee is NOT function-shaped, still comes from
-/// `field_text` on the ORIGINAL (un-unwrapped) callee, so a merely-
-/// parenthesized ordinary call (`(Foo)()`) is unaffected.
+/// BLOCKING 3; extended, sweep, Dev-B MINOR C): the TEXTBOOK IIFE form,
+/// `(function(){...})()` / `(() => {})()`, puts a `parenthesized_
+/// expression` between the call and the function-shaped node it invokes
+/// — the `!`/`void`-prefixed forms tested first put the function-shaped
+/// node DIRECTLY in the callee position, which is the marginal shape, not
+/// the common one.
+///
+/// **Correction (sweep)**: the previous doc here claimed "the wrapped
+/// expression is always the first NAMED child" and used `named_child(0)`
+/// uniformly. That claim was FALSE in two ways, both reproducible and
+/// both fixed below:
+/// - `comment` is a grammar "extra" (`extras: [$.comment, ...]`) — a NAMED
+///   node that tree-sitter permits almost anywhere, including as the
+///   FIRST child inside a `parenthesized_expression`
+///   (`(/* c */ function(){})()`), silently displacing the real
+///   expression from index 0.
+/// - Not every wrapper puts the expression first. `type_assertion`
+///   (`<Type>expr`) and `sequence_expression` (`(a, expr)`, the
+///   comma-operator's "resulting value") put it LAST, per the real
+///   grammar rules (`type_assertion: seq(type_arguments, expression)`,
+///   `sequence_expression: seq(expression+)`).
+///
+/// So the descent is kind-dependent: `parenthesized_expression`,
+/// `non_null_expression` (`expr!`), `as_expression` (`expr as Type`) and
+/// `satisfies_expression` (`expr satisfies Type`) put the expression
+/// FIRST (skipping any leading `comment`/`html_comment` extra);
+/// `type_assertion` and `sequence_expression` put it LAST. Looped to also
+/// handle doubly- or mixed-wrapped forms (`((() => {}))()`,
+/// `(<any>expr as Fn)()`). Applied ONLY to the node used for the
+/// `@function`-membership test — the returned NAME text, when the callee
+/// is NOT function-shaped, still comes from `field_text` on the ORIGINAL
+/// (un-unwrapped) callee, so a merely-parenthesized ordinary call
+/// (`(Foo)()`) is unaffected.
 fn unwrap_transparent_wrapper<'a>(mut node: Node<'a>) -> Node<'a> {
     loop {
         let inner = match node.kind() {
-            "parenthesized_expression" | "as_expression" | "non_null_expression" => {
-                node.named_child(0)
-            }
+            "parenthesized_expression"
+            | "non_null_expression"
+            | "as_expression"
+            | "satisfies_expression" => first_non_comment_named_child(node),
+            "type_assertion" | "sequence_expression" => last_named_child(node),
             _ => None,
         };
         match inner {
@@ -1086,6 +1106,27 @@ fn unwrap_transparent_wrapper<'a>(mut node: Node<'a>) -> Node<'a> {
             None => return node,
         }
     }
+}
+
+/// The first named child of `node` that is not a `comment`/`html_comment`
+/// grammar "extra" — extras can appear almost anywhere tree-sitter allows
+/// whitespace, including before the real expression a transparent wrapper
+/// carries, so plain `named_child(0)` is not safe for that case.
+fn first_non_comment_named_child<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .find(|c| c.is_named() && !matches!(c.kind(), "comment" | "html_comment"));
+    found
+}
+
+/// The last named child of `node` — the comma-operator's "resulting
+/// value" for `sequence_expression`, or the asserted expression (which
+/// follows the type in `<Type>expr`) for `type_assertion`.
+fn last_named_child<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).filter(|c| c.is_named()).last();
+    found
 }
 
 #[cfg(test)]
@@ -2233,12 +2274,21 @@ mod tests {
             // function-shaped node, so the direct `Node::id()` membership
             // check used to miss it entirely (the wrapper itself is never
             // one of the file's captured `@function`s).
+            // Sweep (Dev-B MINOR C) — two more transparent wrappers Dev-B's
+            // 23-form AST probe found unhandled: a comma-operator
+            // `sequence_expression` (the IIFE is the LAST operand, the
+            // comma-operator's "resulting value") and a leading `comment`
+            // (a grammar "extra" — a NAMED node that can appear before the
+            // real expression inside ANY wrapper, which is exactly why the
+            // old doc's "always the first named child" claim was wrong).
             let cases = [
                 "function outer() { !function () { doIo(); }(); }",
                 "function outer() { void function () { doIo(); }(); }",
                 "function outer() { (function () { doIo(); })(); }",
                 "function outer() { (() => { doIo(); })(); }",
                 "function outer() { (async () => { doIo(); })(); }",
+                "function outer() { (a, function () { doIo(); })(); }",
+                "function outer() { (/* c */ function () { doIo(); })(); }",
             ];
             for parser in ecmascript_parsers() {
                 for source in cases {
@@ -2333,6 +2383,35 @@ mod tests {
                     "a parenthesized anonymous callee's own body text must never feed the \
                      suspicious-marker classifier — got {:?}",
                     iife_call.io
+                );
+            }
+        }
+
+        // Sweep (Dev-B MINOR C) — the two remaining forms from Dev-B's
+        // 23-form probe are TypeScript-only syntax (invalid in plain JS,
+        // so `ts_parser()` only): `type_assertion` (`<Type>expr`, the
+        // type comes BEFORE the expression — the wrapped expression is
+        // the LAST named child, not the first) and `satisfies_expression`
+        // (`expr satisfies Type`, the expression comes first, same shape
+        // as the already-handled `as_expression`).
+        #[test]
+        fn iife_wrapped_in_ts_only_transparent_forms_is_attributed_as_anonymous() {
+            let cases = [
+                "function outer() { (<any>function () { doIo(); })(); }",
+                "function outer() { (function () { doIo(); } satisfies Function)(); }",
+            ];
+            for source in cases {
+                let functions = ts_parser().parse(source).unwrap();
+                let outer = functions
+                    .iter()
+                    .find(|f| f.name == "outer")
+                    .expect("outer function must be captured");
+                assert!(
+                    outer.calls.iter().any(|c| c == "<anonymous>"),
+                    "source '{}': the IIFE's own call must be attributed to `outer` as \
+                     \"<anonymous>\" — outer.calls = {:?}",
+                    source,
+                    outer.calls
                 );
             }
         }

@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 
 use codeimpact_hexagon::analysis::AnalysisError;
@@ -17,6 +18,37 @@ use super::humanize::{
 
 const KB_TO_MB: f64 = 1024.0;
 const MB_TO_GB: f64 = 1024.0;
+
+/// Sanitizes a filesystem path before it reaches the console (sweep, item
+/// 4, Dev-B + Security — folded in per the operator's rule: same shape,
+/// same file, the sanitizer already exists). On Unix a filename may
+/// contain any byte except `/` and NUL, so a hostile repo can ship a file
+/// whose NAME (not just a symbol name inside it) carries a raw ANSI
+/// escape sequence and forges the console report exactly the way a
+/// hostile method name did — the threat-model question ("is a local FS
+/// path hostile input?") is settled the moment the operator analyzes a
+/// repo they did not write, which is this tool's stated use case
+/// (ADR-0029). `Path::display()` already lossily handles non-UTF8
+/// components; this only adds control/Cf neutralization on top.
+fn sanitize_path_display(path: &Path) -> String {
+    sanitize_console_text(&path.display().to_string())
+}
+
+/// The sanitized file-stem label used in a consumption chain (sweep, item
+/// 4). Also fixes a pre-existing (Security INFO, confirmed unrelated to
+/// this diff — `git log` shows no `file_stem` hit in this file's history
+/// against `origin/main`) panic risk on the exact line being touched:
+/// `file_stem().unwrap().to_str().unwrap()` panicked on a path with no
+/// stem (e.g. one ending in `..`) or a non-UTF8 component. Falls back to
+/// the full (lossy, then sanitized) path display when there is no stem,
+/// rather than panicking on a path this tool did not choose.
+fn sanitize_file_stem(path: &Path) -> String {
+    let raw = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    sanitize_console_text(&raw)
+}
 
 #[derive(Default)]
 pub struct ConsoleReportWriter;
@@ -104,7 +136,7 @@ impl ConsoleReportWriter {
                 let loc = if d.location().file_path().is_empty() {
                     format!(":{}", d.location().line())
                 } else {
-                    d.location().to_string()
+                    sanitize_console_text(&d.location().to_string())
                 };
                 let cycle = if d.in_cycle() { " [cycle]" } else { "" };
                 writeln!(
@@ -170,7 +202,7 @@ impl ConsoleReportWriter {
                 let loc = if w.location.file_path().is_empty() {
                     format!(":{}", w.location.line())
                 } else {
-                    w.location.to_string()
+                    sanitize_console_text(&w.location.to_string())
                 };
                 writeln!(
                     writer,
@@ -204,7 +236,7 @@ impl ConsoleReportWriter {
                 let location_str = if w.location.file_path().is_empty() {
                     format!("{}:{}", w.location.line(), w.location.col())
                 } else {
-                    w.location.to_string()
+                    sanitize_console_text(&w.location.to_string())
                 };
                 writeln!(
                     writer,
@@ -250,14 +282,14 @@ impl ConsoleReportWriter {
                 writeln!(
                     writer,
                     "{} — complexité directe: {}, complexité transitive: {}, niveau: {}",
-                    path.display(),
+                    sanitize_path_display(path),
                     metrics.cyclomatic_complexity(),
                     metrics.transitive_complexity(),
                     metrics.complexity_level(),
                 )
                 .unwrap();
                 for d in metrics.function_details() {
-                    let loc = d.location().to_string();
+                    let loc = sanitize_console_text(&d.location().to_string());
                     let cycle = if d.in_cycle() { " [cycle]" } else { "" };
                     writeln!(
                         writer,
@@ -287,7 +319,7 @@ impl ConsoleReportWriter {
                             WarningSeverity::Warning => "WARNING",
                             WarningSeverity::Critical => "CRITICAL",
                         };
-                        let loc_str = w.location.to_string();
+                        let loc_str = sanitize_console_text(&w.location.to_string());
                         writeln!(
                             writer,
                             "      [{}][{:?}] {} → {} ({})",
@@ -305,7 +337,7 @@ impl ConsoleReportWriter {
                 if !io_warnings.is_empty() {
                     writeln!(writer, "    I/O dans boucles:").unwrap();
                     for w in io_warnings {
-                        let loc_str = w.location.to_string();
+                        let loc_str = sanitize_console_text(&w.location.to_string());
                         writeln!(
                             writer,
                             "      [CRITICAL] {} → I/O dans boucle: {} ({})",
@@ -324,11 +356,14 @@ impl ConsoleReportWriter {
         for path in &sorted_files {
             let chain = graph.consumption_chain(path);
             if chain.len() > 1 {
-                let chain_str: Vec<String> = chain
-                    .iter()
-                    .map(|p| p.file_stem().unwrap().to_str().unwrap().to_string())
-                    .collect();
-                writeln!(writer, "  {} → {}", path.display(), chain_str.join(" → ")).unwrap();
+                let chain_str: Vec<String> = chain.iter().map(|p| sanitize_file_stem(p)).collect();
+                writeln!(
+                    writer,
+                    "  {} → {}",
+                    sanitize_path_display(path),
+                    chain_str.join(" → ")
+                )
+                .unwrap();
             }
         }
         writeln!(writer).unwrap();
@@ -342,7 +377,7 @@ impl ConsoleReportWriter {
                 writeln!(
                     writer,
                     "  {} fait partie d'un cycle de dépendances",
-                    path.display()
+                    sanitize_path_display(path)
                 )
                 .unwrap();
             }
@@ -358,7 +393,13 @@ impl ConsoleReportWriter {
             )
             .unwrap();
             for f in unmeasurable {
-                writeln!(writer, "  {} — {}", f.path.display(), f.reason).unwrap();
+                writeln!(
+                    writer,
+                    "  {} — {}",
+                    sanitize_path_display(&f.path),
+                    f.reason
+                )
+                .unwrap();
             }
             writeln!(writer).unwrap();
         }
