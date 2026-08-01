@@ -1034,14 +1034,57 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
 /// future grammar without another retry: "is this callee one of OUR
 /// captured functions" is the precise question, independent of what that
 /// grammar happens to name the node kind.
+///
+/// Retry 2, MINOR 6 — this function's `"<anonymous>"` and `field_text`'s
+/// `"<unresolved>"` fallback (the name an anonymous `ParsedFunction` gets)
+/// are DELIBERATELY two different sentinels, not the same one twice: an
+/// IIFE's call edge can therefore never accidentally point at its own
+/// enclosing `ParsedFunction` in the call graph (`"<anonymous>" !=
+/// "<unresolved>"`) — a coincidental match there would be a WRONG
+/// self-edge, not a correct one, so keeping them distinct is the safer
+/// choice, even though it means the edge resolves to nothing rather than
+/// to something meaningful.
 fn call_callee_name(call_node: &Node, function_nodes: &[Node], source: &[u8]) -> String {
     let callee_is_function_shaped = call_node
         .child_by_field_name("function")
+        .map(unwrap_transparent_wrapper)
         .is_some_and(|callee| function_nodes.iter().any(|f| f.id() == callee.id()));
     if callee_is_function_shaped {
         "<anonymous>".to_string()
     } else {
         field_text(call_node, "function", source)
+    }
+}
+
+/// Descends through syntactically-transparent wrapper nodes to the real
+/// expression they wrap (US17 T1 retry 2, Dev-B F3/Security convergent,
+/// BLOCKING 3): the TEXTBOOK IIFE form, `(function(){...})()` /
+/// `(() => {})()`, puts a `parenthesized_expression` between the call and
+/// the function-shaped node it invokes — the `!`/`void`-prefixed forms
+/// tested first put the function-shaped node DIRECTLY in the callee
+/// position, which is the marginal shape, not the common one. TypeScript
+/// adds two more transparent wrappers (`as_expression` — `(fn as Fn)()`,
+/// `non_null_expression` — `fn!()`). None of these three node kinds carry
+/// a NAMED field for the wrapped expression in either real grammar
+/// (verified against node-types.json) — the wrapped expression is always
+/// the first NAMED child, so `named_child(0)` is the exact descent, looped
+/// to also handle doubly-wrapped forms (`((() => {}))()`). Applied ONLY to
+/// the node used for the `@function`-membership test — the returned NAME
+/// text, when the callee is NOT function-shaped, still comes from
+/// `field_text` on the ORIGINAL (un-unwrapped) callee, so a merely-
+/// parenthesized ordinary call (`(Foo)()`) is unaffected.
+fn unwrap_transparent_wrapper<'a>(mut node: Node<'a>) -> Node<'a> {
+    loop {
+        let inner = match node.kind() {
+            "parenthesized_expression" | "as_expression" | "non_null_expression" => {
+                node.named_child(0)
+            }
+            _ => None,
+        };
+        match inner {
+            Some(next) => node = next,
+            None => return node,
+        }
     }
 }
 
@@ -1417,6 +1460,27 @@ mod tests {
             let functions = parser().parse(source).unwrap();
             assert_eq!(functions[0].branch_arms, 3);
             assert_eq!(functions[0].decision_points, 3);
+        }
+
+        // Retry 2 (BLOCKING 4) — `switch_case_cascade_counts_one_decision_
+        // point_matching_csharp` (in `mod ecmascript_tests`, gated
+        // `#[cfg(feature = "lang-typescript")]`) proves parity but lives
+        // where `--no-default-features --features lang-csharp` (no
+        // `lang-typescript`) never compiles it — the C# cascade fix would
+        // be entirely UNTESTED in that build, the same gap class BLOCKING 1
+        // (retry 1) closed on the production side. This standalone twin,
+        // inside `csharp_tests` (gated `lang-csharp` only), proves the C#
+        // behavior alone, independent of whether TS/JS is even built.
+        #[test]
+        fn switch_case_cascade_counts_one_decision_point() {
+            let source = "class C { void M() { switch (x) { case 1: case 2: doX(); break; default: break; } } }";
+            let functions = parser().parse(source).unwrap();
+            assert_eq!(
+                functions[0].decision_points, 2,
+                "the case1+case2 cascade (empty-bodied case 1 folds into case 2) counts as \
+                 ONE decision point, default counts as one more"
+            );
+            assert_eq!(functions[0].branch_arms, 2);
         }
 
         #[test]
@@ -2160,31 +2224,50 @@ mod tests {
         // recorded in its `calls`.
         #[test]
         fn iife_call_sharing_start_byte_with_its_own_function_expression_is_attributed_to_outer() {
-            let source = "function outer() { !function () { doIo(); }(); }";
+            // Retry 2 (BLOCKING 3, Dev-B + Security convergent) — the
+            // `!`/`void` forms tested in round 1 (`function_expression` sits
+            // DIRECTLY in the call's "function" field) are the MARGINAL IIFE
+            // shape. The PARENTHESIZED form — `(function(){})()`,
+            // `(() => {})()`, `(async () => {})()` — is the textbook one:
+            // the callee node is a `parenthesized_expression` WRAPPING the
+            // function-shaped node, so the direct `Node::id()` membership
+            // check used to miss it entirely (the wrapper itself is never
+            // one of the file's captured `@function`s).
+            let cases = [
+                "function outer() { !function () { doIo(); }(); }",
+                "function outer() { void function () { doIo(); }(); }",
+                "function outer() { (function () { doIo(); })(); }",
+                "function outer() { (() => { doIo(); })(); }",
+                "function outer() { (async () => { doIo(); })(); }",
+            ];
             for parser in ecmascript_parsers() {
-                let functions = parser.parse(source).unwrap();
-                let outer = functions
-                    .iter()
-                    .find(|f| f.name == "outer")
-                    .expect("outer function must be captured");
-                // The IIFE's callee IS the anonymous function_expression node
-                // (`call_expression`'s `function` field) — the discriminating
-                // signal is that this call is present in `outer.calls` AT ALL:
-                // before the down-stack fix, the innermost-only ownership check
-                // attributed it to the (smaller-end_byte) inner function
-                // expression, failed the containment test there, and dropped it
-                // from EVERY function. Retry (Dev-B F3, BLOCKING 4): when the
-                // callee node is itself function-shaped, the recorded name is
-                // "<anonymous>" — never the callee's raw source text (the whole
-                // function body), which would falsely trip suspicious I/O
-                // markers by `contains` on an arbitrary substring of the body.
-                assert!(
-                    outer.calls.iter().any(|c| c == "<anonymous>"),
-                    "the IIFE's own call must be attributed to `outer` as \"<anonymous>\", \
-                 not silently dropped, and never as the raw callee body text — \
-                 outer.calls = {:?}",
-                    outer.calls
-                );
+                for source in cases {
+                    let functions = parser.parse(source).unwrap();
+                    let outer = functions
+                        .iter()
+                        .find(|f| f.name == "outer")
+                        .expect("outer function must be captured");
+                    // The discriminating signal is that this call is present
+                    // in `outer.calls` AT ALL: before the down-stack fix, the
+                    // innermost-only ownership check attributed it to the
+                    // (smaller-end_byte) inner function expression, failed
+                    // the containment test there, and dropped it from EVERY
+                    // function. When the callee node is itself function-
+                    // shaped (possibly wrapped in a transparent
+                    // `parenthesized_expression`), the recorded name is
+                    // "<anonymous>" — never the callee's raw source text
+                    // (the whole function body), which would falsely trip
+                    // suspicious I/O markers by `contains` on an arbitrary
+                    // substring of the body.
+                    assert!(
+                        outer.calls.iter().any(|c| c == "<anonymous>"),
+                        "source '{}': the IIFE's own call must be attributed to `outer` as \
+                         \"<anonymous>\", not silently dropped, and never as the raw callee \
+                         body text — outer.calls = {:?}",
+                        source,
+                        outer.calls
+                    );
+                }
             }
         }
 
@@ -2218,19 +2301,60 @@ mod tests {
                 );
             }
         }
+
+        // Retry 2 (BLOCKING 3) — Security's exact reproduction: the
+        // TEXTBOOK parenthesized IIFE form, `(function () { ... })()`,
+        // false-classified as `Unknown` I/O before the fix because its
+        // whole body text (containing the substring "fetch" inside
+        // "prefetchAll") was recorded as the call name and matched by
+        // `classify_call`'s `contains` check.
+        #[test]
+        fn parenthesized_iife_call_in_loop_never_false_classifies_from_its_own_body_text() {
+            let source = "function outer() { for (const u of urls) { \
+                           (function () { const prefetchAll = 1; return prefetchAll; })(); \
+                           } }";
+            for parser in ecmascript_parsers() {
+                let functions = parser.parse(source).unwrap();
+                let outer = functions
+                    .iter()
+                    .find(|f| f.name == "outer")
+                    .expect("outer must be captured");
+                let iife_call = outer
+                    .calls_in_loops
+                    .iter()
+                    .find(|c| c.name == "<anonymous>")
+                    .expect(
+                        "the parenthesized IIFE call must be tracked in calls_in_loops as \
+                         \"<anonymous>\"",
+                    );
+                assert_eq!(
+                    iife_call.io,
+                    IoClassification::NotIo,
+                    "a parenthesized anonymous callee's own body text must never feed the \
+                     suspicious-marker classifier — got {:?}",
+                    iife_call.io
+                );
+            }
+        }
     } // mod ecmascript_tests
 
     // Fold-in 8 (retry, Security LOW) — the C#-only Drop-safety guard
     // (`csharp_tests::dropping_a_deeply_nested_tree_does_not_abort_the_
-    // process`) is extended to TS/JS: needs all three grammars in one
-    // test, so it lives at this outer scope rather than inside either
-    // per-language `mod`, gated on both features together. No abort was
+    // process`) is extended to TS/JS. Its body below constructs ONLY the
+    // TypeScript and JavaScript grammars (C# already has its own twin in
+    // `csharp_tests`) — it lives at this outer scope simply because it is
+    // neither purely a C# nor purely an ecmascript-family test, not
+    // because it needs all three grammars in one test (retry 2, MINOR 5:
+    // the previous `#[cfg(all(lang-csharp, lang-typescript))]` gate was
+    // wrong — this test never touches `tree_sitter_c_sharp` at all, so
+    // gating on `lang-csharp` too silently skipped it under
+    // `--no-default-features --features lang-typescript`). No abort was
     // observed for TS/JS in the Security lane's own runs (100k nested
     // arrows, 20k nested IIFEs both exited cleanly as `SourceTooComplex`)
     // — this guards against a FUTURE regression, not a present defect.
     #[test]
-    #[cfg(all(feature = "lang-csharp", feature = "lang-typescript"))]
-    fn dropping_a_deeply_nested_tree_does_not_abort_the_process_on_any_grammar() {
+    #[cfg(feature = "lang-typescript")]
+    fn dropping_a_deeply_nested_tree_does_not_abort_the_process_on_typescript_and_javascript() {
         // TypeScript: 100k nested IIFE-shaped arrow-function calls.
         {
             let mut source = String::new();
