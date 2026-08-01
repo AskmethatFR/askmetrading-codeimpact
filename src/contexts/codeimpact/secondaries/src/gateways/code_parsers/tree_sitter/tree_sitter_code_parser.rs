@@ -27,7 +27,8 @@ use tree_sitter::QueryCursorOptions;
 use tree_sitter::StreamingIterator;
 
 use super::io_signatures;
-use super::io_signatures::classifier::classify_csharp_call;
+use super::io_signatures::classifier::classify_call;
+use super::language_profile::CapabilityDegradations;
 use super::language_profile::LanguageProfile;
 
 /// Wall-clock budget for BOTH the parse and the query stage (US16 T2, Q2
@@ -121,6 +122,91 @@ impl TreeSitterCodeParser {
                 scm: include_str!("queries/csharp.scm"),
                 deps_scm: include_str!("queries/csharp_deps.scm"),
                 io_table,
+                suspicious_markers: io_signatures::csharp::SUSPICIOUS_RECEIVER_MARKERS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                degradations: CapabilityDegradations {
+                    io_in_loops: MetricSupport::Degraded(
+                        "syntactic only; instance/EF receivers abstained, not asserted"
+                            .to_string(),
+                    ),
+                    call_graph: MetricSupport::Degraded(
+                        "name-based resolution; unresolved-receiver calls may merge".to_string(),
+                    ),
+                    cross_file_dependencies: MetricSupport::Degraded(
+                        "namespace-level resolution; a file links to every declarer of a used namespace"
+                            .to_string(),
+                    ),
+                },
+            },
+            deps_index_cache: Mutex::new(None),
+        }
+    }
+
+    /// US17 T1 — TypeScript, a second `LanguageProfile` sharing the entire
+    /// pipeline C# already exercises (`parse_source`,
+    /// `assign_captures_to_functions`, etc. are unchanged by this ticket).
+    /// `deps_scm` is an EMPTY query (ruling A3): `resolve_dependencies`
+    /// therefore returns empty for TypeScript in T1, the same honest
+    /// staging ADR-0020 used for C# in T2 — real dependency resolution is
+    /// T4.
+    pub fn typescript(extra_prefixes: Vec<String>) -> Self {
+        Self::ecmascript(
+            Language::TypeScript,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            extra_prefixes,
+        )
+    }
+
+    /// US17 T1 — JavaScript, the third `LanguageProfile`, sharing
+    /// `ecmascript.scm` with `typescript` (Q8: one query file for both
+    /// grammars).
+    pub fn javascript(extra_prefixes: Vec<String>) -> Self {
+        Self::ecmascript(
+            Language::JavaScript,
+            tree_sitter_javascript::LANGUAGE.into(),
+            extra_prefixes,
+        )
+    }
+
+    /// Shared construction for both ECMAScript-family languages (US17 T1,
+    /// cc-yagni: TypeScript and JavaScript differ only in their compiled
+    /// grammar — everything else, including the I/O tables and
+    /// degradations, is identical, so there is exactly one place that says
+    /// so instead of two near-duplicate constructors).
+    fn ecmascript(
+        language: Language,
+        grammar: tree_sitter::Language,
+        extra_prefixes: Vec<String>,
+    ) -> Self {
+        let mut io_table: Vec<String> = io_signatures::typescript::IO_PREFIXES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        io_table.extend(extra_prefixes);
+        Self {
+            language,
+            profile: LanguageProfile {
+                grammar,
+                scm: include_str!("queries/ecmascript.scm"),
+                deps_scm: "",
+                io_table,
+                suspicious_markers: io_signatures::typescript::SUSPICIOUS_RECEIVER_MARKERS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                degradations: CapabilityDegradations {
+                    io_in_loops: MetricSupport::Degraded(
+                        "syntactic only; instance receivers and dynamic import() abstained"
+                            .to_string(),
+                    ),
+                    call_graph: MetricSupport::Degraded(
+                        "name-based resolution; truly anonymous functions resolve no edge"
+                            .to_string(),
+                    ),
+                    cross_file_dependencies: MetricSupport::Unsupported,
+                },
             },
             deps_index_cache: Mutex::new(None),
         }
@@ -182,31 +268,16 @@ impl CodeParser for TreeSitterCodeParser {
     }
 
     fn capabilities(&self) -> LanguageCapabilities {
-        // T3+T4+T5 (US16, #33, Q1 human-approved): C# honestly degrades
-        // three metrics rather than claiming full support.
-        // - io_in_loops is Degraded (T4): `classify_csharp_call` measures
-        //   real (syntactic) I/O for static-qualified calls, but instance/EF
-        //   receivers abstain (Unknown) rather than assert, so the metric is
-        //   honestly partial, never fully Supported.
-        // - call_graph is Degraded (T3): `assign_captures_to_functions`
-        //   resolves calls by NAME only — an unresolved receiver can make
-        //   two different calls merge into the same recorded name. Precise
-        //   dropping of ambiguous edges is deferred (T5.3, human-approved).
-        // - cross_file_dependencies is Degraded (T5): `resolve_dependencies`
-        //   resolves at NAMESPACE granularity — a `using` links to every
-        //   file that declares the used namespace, not necessarily the one
-        //   that actually declares what this file needed.
+        // US17 T1: reads `self.profile.degradations` instead of hardcoding
+        // per-language strings, so a new `LanguageProfile` (this ticket's
+        // TypeScript/JavaScript ones) is the only thing that needs to
+        // touch the capabilities question — C#'s three exact strings are
+        // unchanged (moved into its own constructor, see `csharp()`).
+        let degradations = &self.profile.degradations;
         LanguageCapabilities::all_supported(self.language)
-            .with_io_in_loops(MetricSupport::Degraded(
-                "syntactic only; instance/EF receivers abstained, not asserted".to_string(),
-            ))
-            .with_call_graph(MetricSupport::Degraded(
-                "name-based resolution; unresolved-receiver calls may merge".to_string(),
-            ))
-            .with_cross_file_dependencies(MetricSupport::Degraded(
-                "namespace-level resolution; a file links to every declarer of a used namespace"
-                    .to_string(),
-            ))
+            .with_io_in_loops(degradations.io_in_loops.clone())
+            .with_call_graph(degradations.call_graph.clone())
+            .with_cross_file_dependencies(degradations.cross_file_dependencies.clone())
     }
 
     fn parse(&self, source: &str) -> Result<Vec<ParsedFunction>, AnalysisError> {
@@ -476,9 +547,16 @@ fn parse_source(
     let query_source = profile.scm;
     let owned_source = source.to_string();
     let io_table = profile.io_table.clone();
+    let suspicious_markers = profile.suspicious_markers.clone();
 
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
-        run_pipeline(&grammar, query_source, &owned_source, &io_table)
+        run_pipeline(
+            &grammar,
+            query_source,
+            &owned_source,
+            &io_table,
+            &suspicious_markers,
+        )
     }));
 
     match outcome {
@@ -497,6 +575,7 @@ fn run_pipeline(
     query_source: &str,
     source: &str,
     confident_io_prefixes: &[String],
+    suspicious_io_markers: &[String],
 ) -> Option<Vec<ParsedFunction>> {
     let deadline = Instant::now() + PARSE_QUERY_BUDGET;
     let cancelled = Cell::new(false);
@@ -548,7 +627,13 @@ fn run_pipeline(
         return None;
     }
 
-    assign_captures_to_functions(bytes, captures, deadline, confident_io_prefixes)
+    assign_captures_to_functions(
+        bytes,
+        captures,
+        deadline,
+        confident_io_prefixes,
+        suspicious_io_markers,
+    )
 }
 
 /// The generic range-containment post-processor (US16 T2): assigns every
@@ -578,6 +663,7 @@ fn assign_captures_to_functions(
     captures: Vec<(&str, Node)>,
     deadline: Instant,
     confident_io_prefixes: &[String],
+    suspicious_io_markers: &[String],
 ) -> Option<Vec<ParsedFunction>> {
     let mut function_nodes: Vec<Node> = captures
         .iter()
@@ -615,7 +701,10 @@ fn assign_captures_to_functions(
                 depth_nodes_of[owner].push(node);
             }
             "branch.arm" => match node.kind() {
-                "switch_section" => {
+                // US17 T1: `switch_case`/`switch_default` (TS/JS) get the
+                // exact same treatment as C#'s `switch_section` — one arm,
+                // one decision point, one depth node.
+                "switch_section" | "switch_case" | "switch_default" => {
                     results[owner].decision_points += 1;
                     switch_sections_of[owner].push(node);
                     depth_nodes_of[owner].push(node);
@@ -676,8 +765,10 @@ fn assign_captures_to_functions(
                     line: point.row + 1,
                     col: point.column,
                     // US16 T4.1: real classification, replacing T2's
-                    // hardcoded IoClassification::Unknown seam.
-                    io: classify_csharp_call(&name, confident_io_prefixes),
+                    // hardcoded IoClassification::Unknown seam. US17 T1:
+                    // `classify_call` is now language-agnostic, fed each
+                    // language's own confident/suspicious tables.
+                    io: classify_call(&name, confident_io_prefixes, suspicious_io_markers),
                 });
             }
             results[i].calls.push(name);
@@ -718,19 +809,27 @@ fn contains(outer: &Node, inner: &Node) -> bool {
 /// functions, not one pathological one, is not something a per-function
 /// cap can ever catch; only removing the O(functions) scan itself does.
 ///
-/// Grammar precondition (US16 T2 retry #3, Security LOW — read this
-/// before reusing this helper for a future language's `.scm`): the
-/// ownership check below is a single `open.last()` (innermost) with no
-/// deeper-stack fallback — it silently drops a capture whose wrapping
-/// node shares the EXACT `start_byte` of the `@function` it contains.
-/// This never fires for `csharp.scm` today: every wrapping capture
-/// (`for(`/`while(`/`if(`/`case`/`?:`/a call) requires at least one
-/// literal token before any nested content, so a wrapping capture can
-/// never start at the same byte as a `@function` it contains. A future
-/// grammar that allows a zero-byte-gap tie (e.g. a construct whose own
-/// span starts exactly where a nested function begins) would need a
-/// down-stack fallback here instead of the single `top` check — do not
-/// assume this precondition holds for a new `.scm` without verifying it.
+/// Grammar precondition (US16 T2 retry #3, Security LOW; RESOLVED by US17
+/// T1 — read this before reusing this helper for a future language's
+/// `.scm`): the ownership check below used to be a single `open.last()`
+/// (innermost) with no deeper-stack fallback — it silently dropped a
+/// capture whose wrapping node shared the EXACT `start_byte` of the
+/// `@function` it contains. That precondition held for `csharp.scm` (every
+/// wrapping capture — `for(`/`while(`/`if(`/`case`/`?:`/a call — requires
+/// at least one literal token before any nested content) but NOT for
+/// `ecmascript.scm`: a JS/TS IIFE like `!function () { ... }()` puts the
+/// wrapping `call_expression`'s `start_byte` at the exact same position as
+/// the nested `function_expression` it invokes (no parenthesized wrapper
+/// needed once a leading `!` already disambiguates the parse). The single
+/// `open.last()` check attributed such a capture to the INNER function,
+/// found its `end_byte` smaller than the call's own (the call includes the
+/// trailing `()`), and dropped the capture entirely — proven by
+/// `iife_call_sharing_start_byte_with_its_own_function_expression_is_
+/// attributed_to_outer` before this fix. The down-stack scan below finds
+/// the innermost function whose range still fully CONTAINS the capture —
+/// for C# this is always the same element `open.last()` already returned
+/// (the innermost open function always contains the capture there), so
+/// the whole C# suite stays green, byte-for-byte, unmodified.
 fn owning_function_indices<'a>(
     function_nodes: &[Node<'a>],
     captures: Vec<(&'a str, Node<'a>)>,
@@ -788,10 +887,12 @@ fn owning_function_indices<'a>(
             }
         }
 
-        if let Some(&top) = open.last() {
-            if function_nodes[top].end_byte() >= node.end_byte() {
-                owned.push((top, name, node));
-            }
+        if let Some(&owner) = open
+            .iter()
+            .rev()
+            .find(|&&index| function_nodes[index].end_byte() >= node.end_byte())
+        {
+            owned.push((owner, name, node));
         }
     }
 
@@ -1555,6 +1656,267 @@ mod tests {
              deps_index_cache mutex instead of panicking on \
              .lock().unwrap(), got {:?}",
             resolved
+        );
+    }
+
+    // ── US17 T1 — TypeScript/JavaScript, a second/third `LanguageProfile`
+    // sharing the entire pipeline above. Test List:
+    //   1. language()/capabilities() for both constructors — the port
+    //      delta (Q4's degradations) + resolve_dependencies' empty
+    //      contract (A3: deps_scm is an empty query in T1).
+    //   2. each @function kind (function_declaration, named function_
+    //      expression, generator_function_declaration, named generator_
+    //      function, arrow_function, method_definition) becomes its own
+    //      ParsedFunction — one behavior, six divergent rows, one cycle.
+    //   3. every loop kind (for/for-of/for-in/while/do) -> has_loop + +1
+    //      decision point — one behavior, five divergent rows, one cycle.
+    //   4. nested loop -> has_nested_loop; SIBLING loops must NOT set it.
+    //   5. switch case/default arms -> branch_arms (max single switch) AND
+    //      decision_points (sum of arms) — pins the new "switch_case" |
+    //      "switch_default" node-kind dispatch (tech spec step 8).
+    //   6. && / || / ?? -> +1 decision point each — one behavior, three
+    //      divergent rows, one cycle.
+    //   7. ternary -> +1 decision point.
+    //   8. calls tracked in source order.
+    //   9. a loop call classified Io (`fs.readFile`), Unknown (`fetch`),
+    //      NotIo (`list.push`) — TS/JS ships with real classification from
+    //      T1 (no C#-T2-style honest-abstention stage), one behavior,
+    //      three divergent rows, one cycle.
+    //   10. the shared ecmascript.scm query compiles against BOTH grammars
+    //       (a non-compiling query panics inside Query::new, so parsing an
+    //       empty source with each parser IS the guard).
+    //   11. resolve_dependencies always returns empty for TS/JS (A3) even
+    //       when the source contains import statements.
+    //   12. the IIFE grammar-precondition test (tech spec step 8): a
+    //       call_expression sharing its exact start_byte with the nested
+    //       @function it wraps must still be attributed to the OUTER
+    //       function, not silently dropped.
+
+    fn ts_parser() -> TreeSitterCodeParser {
+        TreeSitterCodeParser::typescript(Vec::new())
+    }
+
+    fn js_parser() -> TreeSitterCodeParser {
+        TreeSitterCodeParser::javascript(Vec::new())
+    }
+
+    #[test]
+    fn language_is_typescript_or_javascript() {
+        assert_eq!(ts_parser().language(), Language::TypeScript);
+        assert_eq!(js_parser().language(), Language::JavaScript);
+    }
+
+    #[test]
+    fn capabilities_reports_typescript_and_javascript_degradation() {
+        for capabilities in [ts_parser().capabilities(), js_parser().capabilities()] {
+            assert_eq!(
+                *capabilities.cyclomatic_complexity(),
+                MetricSupport::Supported
+            );
+            assert_eq!(*capabilities.economic_impact(), MetricSupport::Supported);
+            assert_eq!(*capabilities.ecological_impact(), MetricSupport::Supported);
+            match capabilities.io_in_loops() {
+                MetricSupport::Degraded(reason) => {
+                    assert!(
+                        reason.contains("dynamic import"),
+                        "expected the dynamic-import abstention reason, got: {}",
+                        reason
+                    );
+                }
+                other => panic!("expected io_in_loops to be Degraded, got {:?}", other),
+            }
+            match capabilities.call_graph() {
+                MetricSupport::Degraded(reason) => {
+                    assert!(
+                        reason.contains("anonymous functions"),
+                        "expected the anonymous-function reason, got: {}",
+                        reason
+                    );
+                }
+                other => panic!("expected call_graph to be Degraded, got {:?}", other),
+            }
+            // Q4 (human-approved ruling): cross_file_dependencies is
+            // Unsupported in T1 — real dependency resolution is T4, and
+            // reporting Degraded before the code exists would be a
+            // measurement lie (ADR-0010).
+            assert_eq!(
+                *capabilities.cross_file_dependencies(),
+                MetricSupport::Unsupported
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_dependencies_is_always_empty_for_typescript_and_javascript() {
+        let source = "import { x } from './x';\nimport React from 'react';\nfunction f() {}";
+        let ctx = DependencyContext::new(PathBuf::from("a.ts"), PathBuf::from("."), vec![]);
+        let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
+        assert!(
+            resolved.is_empty(),
+            "A3: deps_scm is an empty query in T1 — no edge is ever produced yet, got {:?}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn ecmascript_query_compiles_against_both_grammars() {
+        // A non-compiling query panics inside `Query::new` — this test
+        // IS the guard the tech spec's step 4/10 requires: parsing an
+        // (empty) source with each constructed parser exercises
+        // `parse_source` -> `run_pipeline` -> `Query::new(grammar, scm)`
+        // for both grammars sharing the same `ecmascript.scm`.
+        assert!(ts_parser().parse("").unwrap().is_empty());
+        assert!(js_parser().parse("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn ecmascript_function_shaped_constructs_each_become_their_own_parsed_function() {
+        let cases = [
+            "function foo() {}",
+            "const bar = function foo() {};",
+            "function* foo() {}",
+            "const bar = function* foo() {};",
+            "const bar = () => {};",
+            "class C { foo() {} }",
+        ];
+        for source in cases {
+            let functions = ts_parser().parse(source).unwrap();
+            assert_eq!(
+                functions.len(),
+                1,
+                "source '{}': expected exactly one captured function, got {:?}",
+                source,
+                functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn every_ecmascript_loop_kind_sets_has_loop_and_counts_one_decision_point() {
+        let cases = [
+            "function f() { for (let i = 0; i < 10; i++) {} }",
+            "function f() { for (const x of xs) {} }",
+            "function f() { for (const x in xs) {} }",
+            "function f() { while (true) {} }",
+            "function f() { do {} while (true); }",
+        ];
+        for source in cases {
+            let functions = ts_parser().parse(source).unwrap();
+            assert!(functions[0].has_loop, "source: {}", source);
+            assert_eq!(functions[0].decision_points, 1, "source: {}", source);
+        }
+    }
+
+    #[test]
+    fn ecmascript_nested_loop_sets_has_nested_loop() {
+        let source = "function f() { for (let i = 0; i < 10; i++) { while (true) {} } }";
+        let functions = ts_parser().parse(source).unwrap();
+        assert!(functions[0].has_nested_loop);
+    }
+
+    #[test]
+    fn ecmascript_sibling_loops_do_not_set_has_nested_loop() {
+        let source = "function f() { for (let i = 0; i < 10; i++) {} while (true) {} }";
+        let functions = ts_parser().parse(source).unwrap();
+        assert!(!functions[0].has_nested_loop);
+    }
+
+    // Pins the new "switch_case" | "switch_default" node-kind dispatch
+    // (tech spec step 8) AND `max_switch_section_count`'s two-level
+    // parent().parent() walk reaching `switch_statement` from a JS
+    // `switch_case` (case -> switch_body -> switch_statement, same shape
+    // as C#'s case -> switch_body(?) -> switch_statement — verified
+    // against the real grammar, not assumed).
+    #[test]
+    fn ecmascript_switch_arms_count_branch_arms_and_decision_points() {
+        let source =
+            "function f() { switch (x) { case 1: break; case 2: break; default: break; } }";
+        let functions = ts_parser().parse(source).unwrap();
+        assert_eq!(functions[0].branch_arms, 3);
+        assert_eq!(functions[0].decision_points, 3);
+    }
+
+    #[test]
+    fn ecmascript_and_or_nullish_operators_each_count_one_decision_point() {
+        let cases = ["let x = a && b;", "let x = a || b;", "let x = a ?? b;"];
+        for source in cases {
+            let source = format!("function f() {{ {} }}", source);
+            let functions = ts_parser().parse(&source).unwrap();
+            assert_eq!(functions[0].decision_points, 1, "source: {}", source);
+        }
+    }
+
+    #[test]
+    fn ecmascript_ternary_operator_counts_as_one_decision_point() {
+        let source = "function f() { let y = x > 0 ? 1 : 2; }";
+        let functions = ts_parser().parse(source).unwrap();
+        assert_eq!(functions[0].decision_points, 1);
+    }
+
+    #[test]
+    fn ecmascript_calls_are_tracked_in_source_order() {
+        let source = "function f() { foo(); bar.baz(); }";
+        let functions = ts_parser().parse(source).unwrap();
+        assert_eq!(
+            functions[0].calls,
+            vec!["foo".to_string(), "bar.baz".to_string()]
+        );
+    }
+
+    #[test]
+    fn ecmascript_loop_call_classifies_io_unknown_or_not_io() {
+        let cases = [
+            ("fs.readFile(p, cb);", IoClassification::Io),
+            ("fetch(url);", IoClassification::Unknown),
+            ("list.push(x);", IoClassification::NotIo),
+        ];
+        for (call, expected) in cases {
+            let source = format!(
+                "function f() {{ for (let i = 0; i < 10; i++) {{ {} }} }}",
+                call
+            );
+            let functions = js_parser().parse(&source).unwrap();
+            assert_eq!(functions[0].calls_in_loops.len(), 1, "case: {}", call);
+            assert_eq!(
+                functions[0].calls_in_loops[0].io, expected,
+                "case: {}",
+                call
+            );
+        }
+    }
+
+    // Tech spec step 8's mandatory falsification test — verifies the
+    // ADR-0020 grammar precondition `owning_function_indices` documents:
+    // a wrapping capture sharing a nested @function's exact start_byte
+    // was, before the down-stack-scan fix, silently DROPPED (matched
+    // against the innermost function via `open.last()`, whose end_byte is
+    // always smaller than the wrapping call's, so the containment check
+    // failed and the capture was never assigned to ANY function — not
+    // even the correct outer one). `outer`'s IIFE call must still be
+    // recorded in its `calls`.
+    #[test]
+    fn iife_call_sharing_start_byte_with_its_own_function_expression_is_attributed_to_outer() {
+        let source = "function outer() { !function () { doIo(); }(); }";
+        let functions = ts_parser().parse(source).unwrap();
+        let outer = functions
+            .iter()
+            .find(|f| f.name == "outer")
+            .expect("outer function must be captured");
+        // The IIFE's callee IS the anonymous function_expression node
+        // (`call_expression`'s `function` field), so `field_text` records
+        // its full source text — the discriminating signal is that this
+        // call is present in `outer.calls` AT ALL: before the down-stack
+        // fix, the innermost-only ownership check attributed it to the
+        // (smaller-end_byte) inner function expression, failed the
+        // containment test there, and dropped it from EVERY function.
+        assert!(
+            outer
+                .calls
+                .iter()
+                .any(|c| c.starts_with("function () { doIo(); }")),
+            "the IIFE's own call must be attributed to `outer`, not silently \
+             dropped by the innermost-only ownership check — outer.calls = {:?}",
+            outer.calls
         );
     }
 }

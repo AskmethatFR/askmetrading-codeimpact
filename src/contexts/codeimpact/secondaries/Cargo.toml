@@ -29,6 +29,13 @@ globset = "0.4"
 # stays open at ~zero cost by simply not touching them.
 tree-sitter = { version = "0.26", default-features = false, features = ["std"], optional = true }
 tree-sitter-c-sharp = { version = "0.23", optional = true }
+# US17 T1 — TypeScript/JavaScript grammars, same C-scanner shape as C#
+# above (both verified MIT-licensed, `tree-sitter-language = "0.1"`,
+# compatible with the locked `tree-sitter 0.26` / `tree-sitter-language
+# 0.1.7`). One shared `ecmascript.scm` drives both (Q8) — `.tsx` is
+# deliberately out of scope (ruling A2, issue #118).
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
 
 # `libc` backs `parse_probe.rs`'s `RLIMIT_AS` call, which is itself
 # `#[cfg(unix)]` (#63) — an unconditional dependency would pull it in on
@@ -37,10 +44,11 @@ tree-sitter-c-sharp = { version = "0.23", optional = true }
 libc = "0.2"
 
 [features]
-default = ["lang-rust", "lang-csharp"]
+default = ["lang-rust", "lang-csharp", "lang-typescript"]
 syn-parser = ["syn", "proc-macro2"]
 lang-rust = ["syn-parser"]
 lang-csharp = ["dep:tree-sitter", "dep:tree-sitter-c-sharp"]
+lang-typescript = ["dep:tree-sitter", "dep:tree-sitter-typescript", "dep:tree-sitter-javascript"]
 
 [dev-dependencies]
 tempfile = "3"

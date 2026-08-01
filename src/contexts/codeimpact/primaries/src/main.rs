@@ -72,16 +72,30 @@ enum Commands {
     },
 }
 
-/// The composition root's `CodeParser` wiring (US16 T2) — one adapter per
-/// language, registered once, dispatched per file by `RunAnalysis`. Adding
-/// a language is adding one `.register(...)` line here, never touching the
-/// hexagon (ADR-0018).
+/// The composition root's `CodeParser` wiring (US16 T2, US17 T1) — one
+/// adapter per language, registered once, dispatched per file by
+/// `RunAnalysis`. Adding a language previously needed exactly one
+/// `.register(...)` line here and nothing else in the hexagon (ADR-0018);
+/// US17 corrects that claim honestly — TypeScript/JavaScript needed one
+/// `.register(...)` line each here PLUS two new `Language` enum variants
+/// (`hexagon/src/analysis/language.rs`), a data change (US17 ruling A1),
+/// never a structural one (no port, trait, or adapter signature changed).
 fn build_parser_registry(io_signature_prefixes: Vec<String>) -> ParserRegistry {
     ParserRegistry::new()
         .register(Language::Rust, Box::new(SynCodeParser::new()))
         .register(
             Language::CSharp,
-            Box::new(TreeSitterCodeParser::csharp(io_signature_prefixes)),
+            Box::new(TreeSitterCodeParser::csharp(io_signature_prefixes.clone())),
+        )
+        .register(
+            Language::TypeScript,
+            Box::new(TreeSitterCodeParser::typescript(
+                io_signature_prefixes.clone(),
+            )),
+        )
+        .register(
+            Language::JavaScript,
+            Box::new(TreeSitterCodeParser::javascript(io_signature_prefixes)),
         )
 }
 
