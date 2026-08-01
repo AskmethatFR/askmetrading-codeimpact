@@ -176,6 +176,127 @@ fn e2e_analyze_csharp_file_exits_0() {
     );
 }
 
+// US17 T1 — TypeScript/JavaScript, a second/third `CodeParser` adapter
+// sharing `TreeSitterCodeParser` with C# (ADR-0018). Test List:
+//   1. e2e_analyze_typescript_file_exits_0 / e2e_analyze_javascript_file_
+//      exits_0 — the slice's own behavioral test, `@scenario:
+//      typescript-javascript-analysis/S1` (complexity/loops/patterns/
+//      impact half only — S1 stays @wip, the dependency-graph half is T4):
+//      a .ts/.js file that previously produced nothing now reports
+//      functions + nonzero complexity, exactly like any other supported
+//      language.
+//   2. --format json on a .ts file reports metric_support honestly (Q4).
+
+// @scenario: typescript-javascript-analysis/S1
+#[test]
+fn e2e_analyze_typescript_file_exits_0() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.ts");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Complexité directe"),
+        "missing complexity: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("compute"),
+        "missing function name: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Complexité directe: 0"),
+        "expected a nonzero complexity for a file with an if+for+ternary: {}",
+        stdout
+    );
+}
+
+// @scenario: typescript-javascript-analysis/S1
+#[test]
+fn e2e_analyze_javascript_file_exits_0() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.js");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Complexité directe"),
+        "missing complexity: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("compute"),
+        "missing function name: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Complexité directe: 0"),
+        "expected a nonzero complexity for a file with an if+for+ternary: {}",
+        stdout
+    );
+}
+
+// @scenario: typescript-javascript-analysis/S1 — Q4's honest degradation
+// surfaces through the existing JSON writer (ADR-0021/ADR-0026), no writer
+// change needed: `MetricSupportDto` renders `io_in_loops`/`call_graph`
+// (both `Degraded`, Q4) but has no `cross_file_dependencies` field at all
+// today — that axis is not JSON-rendered for ANY language yet (a
+// pre-existing gap, out of this ticket's scope; see Open Questions).
+#[test]
+fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.ts");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let io_in_loops = json["metrics"]["metric_support"]["io_in_loops"]
+        .as_str()
+        .expect("io_in_loops must be a string");
+    assert!(
+        io_in_loops.starts_with("degraded:") && io_in_loops.contains("dynamic import"),
+        "Q4: io_in_loops must honestly report the dynamic-import abstention, got: {}",
+        stdout
+    );
+    let call_graph = json["metrics"]["metric_support"]["call_graph"]
+        .as_str()
+        .expect("call_graph must be a string");
+    assert!(
+        call_graph.starts_with("degraded:") && call_graph.contains("anonymous functions"),
+        "Q4: call_graph must honestly report the anonymous-function caveat, got: {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_path_with_mixed_rust_and_csharp_files_measures_both() {
     let binary = binary_path();
