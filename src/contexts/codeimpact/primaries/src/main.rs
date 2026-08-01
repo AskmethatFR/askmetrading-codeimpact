@@ -80,6 +80,16 @@ enum Commands {
 /// `.register(...)` line each here PLUS two new `Language` enum variants
 /// (`hexagon/src/analysis/language.rs`), a data change (US17 ruling A1),
 /// never a structural one (no port, trait, or adapter signature changed).
+///
+/// `io_signature_prefixes` (`.codeimpact.json`'s `ioSignatures` key) is
+/// shared, unmodified, across EVERY registered language by design
+/// (human-approved ruling Q1) — there is no per-language configuration
+/// key. Security noted the consequence explicitly: a C#-intended prefix
+/// like `"File."` becomes a CONFIDENT prefix for JavaScript/TypeScript
+/// too, so a hostile `const File = { ReadAllText: () => 0 };` earns an
+/// asserted `Io` classification there. The ruling stands (retry, fold-in
+/// 10) — this paragraph exists so the sharing is a written-down decision,
+/// not an implicit one a future reader has to rediscover.
 fn build_parser_registry(io_signature_prefixes: Vec<String>) -> ParserRegistry {
     ParserRegistry::new()
         .register(Language::Rust, Box::new(SynCodeParser::new()))

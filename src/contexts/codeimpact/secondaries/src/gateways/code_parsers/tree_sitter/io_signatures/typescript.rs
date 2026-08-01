@@ -53,4 +53,18 @@ pub const SUSPICIOUS_RECEIVER_MARKERS: &[&str] = &[
     "XMLHttpRequest",
     "prisma.",
     "knex(",
+    // Retry (Security MEDIUM #2, fold-in 6): network/process markers were
+    // absent from BOTH tables, so `http.get`/`cp.execSync`/etc. landed in
+    // `NotIo` — an ASSERTED negative, not an abstention — silently
+    // dropping real I/O from "Appels en boucle non classifiables". Never
+    // promoted to the confident table above: none of these prove the
+    // receiver's type syntactically (ADR-0016 §1), so abstention
+    // (`Unknown`), not assertion, is the only honest call.
+    "http.",
+    "https.",
+    "net.",
+    "dns.",
+    "child_process",
+    "exec",
+    "spawn",
 ];

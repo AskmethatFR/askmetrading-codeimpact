@@ -291,8 +291,64 @@ fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
         .as_str()
         .expect("call_graph must be a string");
     assert!(
-        call_graph.starts_with("degraded:") && call_graph.contains("anonymous functions"),
-        "Q4: call_graph must honestly report the anonymous-function caveat, got: {}",
+        call_graph.starts_with("degraded:")
+            && call_graph.contains("merges into a single call-graph node"),
+        "Q4/retry (Dev-B F2): call_graph must honestly report that anonymous \
+         functions MERGE (corrupting derived metrics), not merely \"resolve no \
+         edge\", got: {}",
+        stdout
+    );
+}
+
+// US17 T1 retry (Security MEDIUM, CWE-117/CWE-150, BLOCKING 2) — the exact
+// exploit fixture Security used: a JS class whose method name is a string
+// literal carrying ANSI escape sequences (`ESC[2J` clears the screen,
+// `ESC[1;31m` recolors), a shape unreachable via Rust/C# identifier syntax
+// before this ticket's tree-sitter adapter. The real CLI console output
+// must contain no raw ESC byte.
+#[test]
+fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape_byte() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_ansi_escape_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("esc2.js");
+    // A RAW ESC byte (0x1B), not the 4-character text `\x1b` — tree-sitter
+    // returns verbatim source bytes for a string-literal node, it never
+    // evaluates JS escape sequences, so only an actual control byte in
+    // the source reproduces the exploit (a textual `\x1b` would parse as
+    // four harmless printable characters and never reach this path).
+    std::fs::write(
+        &fixture,
+        "class C { \"\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m\"() {} }",
+    )
+    .expect("write hostile fixture");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let stdout_bytes = &output.stdout;
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        String::from_utf8_lossy(stdout_bytes),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !stdout_bytes.contains(&0x1bu8),
+        "a raw ESC byte reached the console output — the sanitizer did not run: {:?}",
+        String::from_utf8_lossy(stdout_bytes)
+    );
+    let stdout = String::from_utf8_lossy(stdout_bytes);
+    assert!(
+        stdout.contains("\\x1b[2J"),
+        "the escape sequence should still be visible, just neutralized: {}",
         stdout
     );
 }

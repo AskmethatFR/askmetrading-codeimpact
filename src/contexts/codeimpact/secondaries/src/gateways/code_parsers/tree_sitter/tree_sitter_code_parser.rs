@@ -109,6 +109,7 @@ impl TreeSitterCodeParser {
     /// are user-configured confident I/O prefixes, additive to the base
     /// `File.`/`Directory.` table — an empty `Vec` reproduces T4.1/T4.2's
     /// behavior byte-for-byte.
+    #[cfg(feature = "lang-csharp")]
     pub fn csharp(extra_prefixes: Vec<String>) -> Self {
         let mut io_table: Vec<String> = io_signatures::csharp::IO_PREFIXES
             .iter()
@@ -151,6 +152,7 @@ impl TreeSitterCodeParser {
     /// therefore returns empty for TypeScript in T1, the same honest
     /// staging ADR-0020 used for C# in T2 — real dependency resolution is
     /// T4.
+    #[cfg(feature = "lang-typescript")]
     pub fn typescript(extra_prefixes: Vec<String>) -> Self {
         Self::ecmascript(
             Language::TypeScript,
@@ -162,6 +164,7 @@ impl TreeSitterCodeParser {
     /// US17 T1 — JavaScript, the third `LanguageProfile`, sharing
     /// `ecmascript.scm` with `typescript` (Q8: one query file for both
     /// grammars).
+    #[cfg(feature = "lang-typescript")]
     pub fn javascript(extra_prefixes: Vec<String>) -> Self {
         Self::ecmascript(
             Language::JavaScript,
@@ -175,6 +178,12 @@ impl TreeSitterCodeParser {
     /// grammar — everything else, including the I/O tables and
     /// degradations, is identical, so there is exactly one place that says
     /// so instead of two near-duplicate constructors).
+    ///
+    /// Feature-gated like `csharp()` above (retry — Dev-B F1, BLOCKING):
+    /// `--no-default-features --features lang-csharp` must compile without
+    /// `lang-typescript`, and vice versa — the per-language isolation the
+    /// `lang-csharp` feature already had on `main` before this ticket.
+    #[cfg(feature = "lang-typescript")]
     fn ecmascript(
         language: Language,
         grammar: tree_sitter::Language,
@@ -202,7 +211,9 @@ impl TreeSitterCodeParser {
                             .to_string(),
                     ),
                     call_graph: MetricSupport::Degraded(
-                        "name-based resolution; truly anonymous functions resolve no edge"
+                        "name-based resolution; every anonymous function is recorded under \
+                         one placeholder name and merges into a single call-graph node — \
+                         precise naming is deferred"
                             .to_string(),
                     ),
                     cross_file_dependencies: MetricSupport::Unsupported,
@@ -701,13 +712,28 @@ fn assign_captures_to_functions(
                 depth_nodes_of[owner].push(node);
             }
             "branch.arm" => match node.kind() {
-                // US17 T1: `switch_case`/`switch_default` (TS/JS) get the
-                // exact same treatment as C#'s `switch_section` — one arm,
-                // one decision point, one depth node.
-                "switch_section" | "switch_case" | "switch_default" => {
+                // US17 T1 retry (Dev-B F6, BLOCKING 5, human ruling D1):
+                // BOTH grammars give each label its OWN node — a cascade
+                // (`case 1: case 2: doX(); break;`) parses as TWO separate
+                // `switch_section` nodes in C# just as it parses as two
+                // `switch_case` nodes in JS/TS (verified against the real
+                // grammars: the retry's premise that C# already groups a
+                // cascade into one node does not hold — same root cause on
+                // both languages, same fix on both). An empty-bodied label
+                // (nothing after its own `:` token — a fallthrough) is
+                // therefore folded into the following label instead of
+                // counted on its own, so a cascade counts as ONE decision
+                // point/arm on EITHER language, restoring the ADR-0020 D4
+                // cross-language comparability invariant this ticket's own
+                // `?.`-omission comment already invokes.
+                "switch_section" | "switch_case" | "switch_default" if switch_label_has_body(&node) => {
                     results[owner].decision_points += 1;
                     switch_sections_of[owner].push(node);
                     depth_nodes_of[owner].push(node);
+                }
+                "switch_section" | "switch_case" | "switch_default" => {
+                    // Empty-bodied cascade label — folds into the next
+                    // one, contributes nothing of its own.
                 }
                 "if_statement" => {
                     results[owner].decision_points += 1;
@@ -754,7 +780,7 @@ fn assign_captures_to_functions(
         let mut call_nodes = calls_of[i].clone();
         call_nodes.sort_by_key(Node::start_byte);
         for call_node in &call_nodes {
-            let name = field_text(call_node, "function", source);
+            let name = call_callee_name(call_node, &function_nodes, source);
             let in_loop = loops_of[i]
                 .iter()
                 .any(|loop_node| contains(loop_node, call_node));
@@ -776,6 +802,34 @@ fn assign_captures_to_functions(
     }
 
     Some(results)
+}
+
+/// Whether a switch label node (`switch_section` in C#, `switch_case`/
+/// `switch_default` in JS/TS) has at least one statement of its own (US17
+/// T1 retry, Dev-B F6, human ruling D1) — used to fold an empty-bodied
+/// cascade label (`case 1:` immediately followed by another label, no
+/// statements of its own) into the one label that actually owns the
+/// shared statements, so a whole cascade counts as ONE decision point on
+/// EITHER grammar. Grammar-agnostic by construction: every switch label in
+/// both grammars is `('case' EXPR | 'default') ':' STATEMENT*` — the
+/// literal `':'` token is always a direct child (verified against both
+/// real grammars), so "any child AFTER the `:` token" is a body-presence
+/// check that needs no per-language field-name assumption (C#'s
+/// `repeat($.statement)` inside `switch_section` carries no field name at
+/// all, unlike JS's `field('body', ...)` — a field-name-based check would
+/// have silently never matched for C#).
+fn switch_label_has_body(node: &Node) -> bool {
+    let mut cursor = node.walk();
+    let mut seen_colon = false;
+    for child in node.children(&mut cursor) {
+        if seen_colon {
+            return true;
+        }
+        if child.kind() == ":" {
+            seen_colon = true;
+        }
+    }
+    false
 }
 
 fn contains(outer: &Node, inner: &Node) -> bool {
@@ -961,11 +1015,52 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
         .to_string()
 }
 
+/// The name recorded for a call node's callee (US17 T1 retry, Dev-B F3
+/// BLOCKING): ordinarily `field_text(call_node, "function", source)`, the
+/// raw source text of the callee — but when the callee node IS ITSELF one
+/// of the file's captured `@function` nodes (an IIFE: `!function(){...}
+/// ()`, `(() => {})()`), that raw text is the callee's ENTIRE BODY, not a
+/// name. Recording the blob is doubly wrong: it produces an absurd
+/// `ParsedFunction.calls`/call-graph edge, AND `classify_call`'s
+/// suspicious-marker check matches by `contains`, so a body merely
+/// CONTAINING a marker substring (e.g. `prefetchAll` containing `fetch`)
+/// false-classifies as `Unknown` I/O for a call that performs none.
+///
+/// Membership is checked by `Node::id()` against `function_nodes` — the
+/// exact list this file already captured as `@function` — rather than a
+/// hardcoded per-language node-kind list, so this stays correct for any
+/// future grammar without another retry: "is this callee one of OUR
+/// captured functions" is the precise question, independent of what that
+/// grammar happens to name the node kind.
+fn call_callee_name(call_node: &Node, function_nodes: &[Node], source: &[u8]) -> String {
+    let callee_is_function_shaped = call_node
+        .child_by_field_name("function")
+        .is_some_and(|callee| function_nodes.iter().any(|f| f.id() == callee.id()));
+    if callee_is_function_shaped {
+        "<anonymous>".to_string()
+    } else {
+        field_text(call_node, "function", source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use codeimpact_hexagon::analysis::IoClassification;
     use codeimpact_hexagon::analysis::Language;
+
+    // US17 T1 retry (same-shape sweep, Dev-B F1 BLOCKING): the entire C#
+    // test section below calls `parser()` (-> `TreeSitterCodeParser::
+    // csharp(..)`) or references `tree_sitter_c_sharp` directly, both now
+    // gated behind `lang-csharp` (see the constructor's own `#[cfg]`) — so
+    // this section must be excluded, not just left uncompiled by omission,
+    // whenever `--no-default-features --features lang-typescript
+    // --all-targets` is built (verified: this exact combination failed to
+    // compile before this `mod` wrapper was added, the same regression
+    // shape BLOCKING 1 fixed on the production side).
+    #[cfg(feature = "lang-csharp")]
+    mod csharp_tests {
+        use super::*;
 
     // ── Test List (US16 T2, step D + E's TreeSitterCodeParser half) ──────
     //   1. language()/capabilities()/resolve_dependencies() — the port
@@ -1516,6 +1611,12 @@ mod tests {
         drop(tree);
 
         // Reaching this line is the proof: the process survived the Drop.
+        // Fold-in 8 (retry, Security LOW): the TS/JS analog of this same
+        // guard lives OUTSIDE this `csharp_tests` module — see
+        // `dropping_a_deeply_nested_tree_does_not_abort_the_process_on_
+        // any_grammar` below, gated on both `lang-csharp` AND
+        // `lang-typescript` since it exercises all three grammars in one
+        // test.
     }
 
     // ── Security hardening (#90 T5, two LOW items deferred from #33 T5) ──
@@ -1661,6 +1762,18 @@ mod tests {
         );
     }
 
+    } // mod csharp_tests
+
+    // US17 T1 retry (Dev-B F1, BLOCKING): every TS/JS test below is nested
+    // in its own `#[cfg(feature = "lang-typescript")]` submodule — the
+    // constructors it exercises (`typescript()`/`javascript()`/
+    // `ecmascript()`) are now feature-gated the same way `csharp()` always
+    // was, so `--no-default-features --features lang-csharp` (no
+    // `lang-typescript`) must not try to compile this section at all.
+    #[cfg(feature = "lang-typescript")]
+    mod ecmascript_tests {
+        use super::*;
+
     // ── US17 T1 — TypeScript/JavaScript, a second/third `LanguageProfile`
     // sharing the entire pipeline above. Test List:
     //   1. language()/capabilities() for both constructors — the port
@@ -1702,6 +1815,16 @@ mod tests {
         TreeSitterCodeParser::javascript(Vec::new())
     }
 
+    /// Both ECMAScript-family constructors, for tests that must prove a
+    /// shared behavior on BOTH grammars (fold-in 7, retry — Dev-B F5/QA):
+    /// the compile guard (`ecmascript_query_compiles_against_both_
+    /// grammars`) only proves node-kind EXISTENCE, not structural parity
+    /// (e.g. `max_switch_section_count`'s parent-walk was exercised
+    /// against TS only before this retry).
+    fn ecmascript_parsers() -> [TreeSitterCodeParser; 2] {
+        [ts_parser(), js_parser()]
+    }
+
     #[test]
     fn language_is_typescript_or_javascript() {
         assert_eq!(ts_parser().language(), Language::TypeScript);
@@ -1730,8 +1853,8 @@ mod tests {
             match capabilities.call_graph() {
                 MetricSupport::Degraded(reason) => {
                     assert!(
-                        reason.contains("anonymous functions"),
-                        "expected the anonymous-function reason, got: {}",
+                        reason.contains("merges into a single call-graph node"),
+                        "expected the merge-not-mere-non-edge reason (retry, Dev-B F2), got: {}",
                         reason
                     );
                 }
@@ -1773,23 +1896,38 @@ mod tests {
 
     #[test]
     fn ecmascript_function_shaped_constructs_each_become_their_own_parsed_function() {
+        // Fold-in 9 (retry, Dev-B F4) — `(source, expected_name)` pairs,
+        // not a bare `len() == 1` count: the earlier count-only assertion
+        // was too weak to catch a wrong grammar mapping (e.g. capturing
+        // `(variable_declarator)` instead of `(arrow_function)` would
+        // still yield `len() == 1`). Five of six constructs are NAMED —
+        // only `arrow_function` has no `name` field in the grammar at all
+        // (Q3, anonymous-function naming is T3) — asserting the real name
+        // pins the capture AND the field-extraction together.
         let cases = [
-            "function foo() {}",
-            "const bar = function foo() {};",
-            "function* foo() {}",
-            "const bar = function* foo() {};",
-            "const bar = () => {};",
-            "class C { foo() {} }",
+            ("function foo() {}", "foo"),
+            ("const bar = function foo() {};", "foo"),
+            ("function* foo() {}", "foo"),
+            ("const bar = function* foo() {};", "foo"),
+            ("const bar = () => {};", "<unresolved>"),
+            ("class C { foo() {} }", "foo"),
         ];
-        for source in cases {
-            let functions = ts_parser().parse(source).unwrap();
-            assert_eq!(
-                functions.len(),
-                1,
-                "source '{}': expected exactly one captured function, got {:?}",
-                source,
-                functions.iter().map(|f| &f.name).collect::<Vec<_>>()
-            );
+        for parser in ecmascript_parsers() {
+            for (source, expected_name) in cases {
+                let functions = parser.parse(source).unwrap();
+                assert_eq!(
+                    functions.len(),
+                    1,
+                    "source '{}': expected exactly one captured function, got {:?}",
+                    source,
+                    functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    functions[0].name, expected_name,
+                    "source '{}': expected name '{}', got '{}'",
+                    source, expected_name, functions[0].name
+                );
+            }
         }
     }
 
@@ -1802,25 +1940,31 @@ mod tests {
             "function f() { while (true) {} }",
             "function f() { do {} while (true); }",
         ];
-        for source in cases {
-            let functions = ts_parser().parse(source).unwrap();
-            assert!(functions[0].has_loop, "source: {}", source);
-            assert_eq!(functions[0].decision_points, 1, "source: {}", source);
+        for parser in ecmascript_parsers() {
+            for source in cases {
+                let functions = parser.parse(source).unwrap();
+                assert!(functions[0].has_loop, "source: {}", source);
+                assert_eq!(functions[0].decision_points, 1, "source: {}", source);
+            }
         }
     }
 
     #[test]
     fn ecmascript_nested_loop_sets_has_nested_loop() {
         let source = "function f() { for (let i = 0; i < 10; i++) { while (true) {} } }";
-        let functions = ts_parser().parse(source).unwrap();
-        assert!(functions[0].has_nested_loop);
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            assert!(functions[0].has_nested_loop);
+        }
     }
 
     #[test]
     fn ecmascript_sibling_loops_do_not_set_has_nested_loop() {
         let source = "function f() { for (let i = 0; i < 10; i++) {} while (true) {} }";
-        let functions = ts_parser().parse(source).unwrap();
-        assert!(!functions[0].has_nested_loop);
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            assert!(!functions[0].has_nested_loop);
+        }
     }
 
     // Pins the new "switch_case" | "switch_default" node-kind dispatch
@@ -1833,36 +1977,117 @@ mod tests {
     fn ecmascript_switch_arms_count_branch_arms_and_decision_points() {
         let source =
             "function f() { switch (x) { case 1: break; case 2: break; default: break; } }";
-        let functions = ts_parser().parse(source).unwrap();
-        assert_eq!(functions[0].branch_arms, 3);
-        assert_eq!(functions[0].decision_points, 3);
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            assert_eq!(functions[0].branch_arms, 3);
+            assert_eq!(functions[0].decision_points, 3);
+        }
+    }
+
+    // Dev-B F6 (retry, BLOCKING 5, human ruling D1) — a cascade of
+    // empty-bodied `case` labels sharing one following body must count as
+    // ONE decision point/branch arm, exactly like C#'s single
+    // `switch_section` for the same construct — never one per label. The
+    // parity assertion against the EQUIVALENT C# source is the point (a
+    // JS-only count would not catch a language-specific divergence that
+    // breaks ADR-0020 D4's cross-language comparability invariant).
+    #[test]
+    #[cfg(feature = "lang-csharp")]
+    fn switch_case_cascade_counts_one_decision_point_matching_csharp() {
+        let js_source =
+            "function f() { switch (x) { case 1: case 2: doX(); break; default: break; } }";
+        let cs_source = "class C { void M() { switch (x) { case 1: case 2: doX(); break; default: break; } } }";
+
+        let js_functions = ts_parser().parse(js_source).unwrap();
+        let cs_functions = TreeSitterCodeParser::csharp(Vec::new())
+            .parse(cs_source)
+            .unwrap();
+
+        assert_eq!(
+            js_functions[0].decision_points, cs_functions[0].decision_points,
+            "JS decision_points={} must match C#'s decision_points={} for the \
+             identical cascade construct (ADR-0020 D4 comparability)",
+            js_functions[0].decision_points, cs_functions[0].decision_points
+        );
+        assert_eq!(
+            js_functions[0].branch_arms, cs_functions[0].branch_arms,
+            "JS branch_arms={} must match C#'s branch_arms={}",
+            js_functions[0].branch_arms, cs_functions[0].branch_arms
+        );
+        // Pin the actual value too (2: the case1+case2 cascade counts as
+        // ONE, default counts as one more) — not just "equal to whatever
+        // C# happens to produce", in case BOTH were silently wrong.
+        assert_eq!(js_functions[0].decision_points, 2);
+        assert_eq!(js_functions[0].branch_arms, 2);
     }
 
     #[test]
     fn ecmascript_and_or_nullish_operators_each_count_one_decision_point() {
         let cases = ["let x = a && b;", "let x = a || b;", "let x = a ?? b;"];
-        for source in cases {
-            let source = format!("function f() {{ {} }}", source);
-            let functions = ts_parser().parse(&source).unwrap();
-            assert_eq!(functions[0].decision_points, 1, "source: {}", source);
+        for parser in ecmascript_parsers() {
+            for source in cases {
+                let source = format!("function f() {{ {} }}", source);
+                let functions = parser.parse(&source).unwrap();
+                assert_eq!(functions[0].decision_points, 1, "source: {}", source);
+            }
         }
     }
 
     #[test]
     fn ecmascript_ternary_operator_counts_as_one_decision_point() {
         let source = "function f() { let y = x > 0 ? 1 : 2; }";
-        let functions = ts_parser().parse(source).unwrap();
-        assert_eq!(functions[0].decision_points, 1);
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            assert_eq!(functions[0].decision_points, 1);
+        }
     }
 
     #[test]
     fn ecmascript_calls_are_tracked_in_source_order() {
         let source = "function f() { foo(); bar.baz(); }";
-        let functions = ts_parser().parse(source).unwrap();
-        assert_eq!(
-            functions[0].calls,
-            vec!["foo".to_string(), "bar.baz".to_string()]
-        );
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            assert_eq!(
+                functions[0].calls,
+                vec!["foo".to_string(), "bar.baz".to_string()]
+            );
+        }
+    }
+
+    // Dev-B F2 (retry, BLOCKING 3) — pins the FACT the widened call_graph
+    // degradation string now honestly describes: two anonymous functions
+    // in the same file are BOTH recorded under the identical placeholder
+    // name ("<unresolved>" — `arrow_function` has no `name` field), not
+    // merely "each resolves no edge". This is what lets
+    // `CallGraph::build`'s `edges.insert("<unresolved>", ...)` /
+    // `direct_complexity.insert("<unresolved>", ...)` overwrite each
+    // other downstream (hexagon logic, out of this adapter's scope to
+    // fix — T3 owns precise naming) — this test only pins what THIS
+    // adapter hands the hexagon: two same-named `ParsedFunction`s of
+    // DIFFERENT complexity, proving the merge is a real collision, not a
+    // same-value coincidence.
+    #[test]
+    fn two_anonymous_functions_in_one_file_share_the_same_unresolved_name() {
+        let source =
+            "function host() { xs.map(x => x > 0 ? 1 : 2); ys.filter(y => y); }";
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            let anonymous: Vec<_> = functions
+                .iter()
+                .filter(|f| f.name == "<unresolved>")
+                .collect();
+            assert_eq!(
+                anonymous.len(),
+                2,
+                "expected both arrow functions to be captured, got {:?}",
+                functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+            );
+            assert_ne!(
+                anonymous[0].decision_points, anonymous[1].decision_points,
+                "the two arrow functions must have DIFFERENT complexity for the \
+                 collision to be observable (not a same-value coincidence)"
+            );
+        }
     }
 
     #[test]
@@ -1887,6 +2112,40 @@ mod tests {
         }
     }
 
+    // Fold-in 6 (retry, Security MEDIUM #2) — the suspicious-marker table
+    // was missing common network/process I/O markers entirely, so these
+    // calls landed in `NotIo` — an ASSERTED negative, not an abstention —
+    // and "Appels en boucle non classifiables: 0" reads to the operator as
+    // "everything was classified" while real I/O was silently dropped.
+    // Never added to the CONFIDENT table (ADR-0016 mandates abstention,
+    // not a syntax-unproven assertion of `Io`).
+    #[test]
+    fn ecmascript_network_and_process_markers_classify_unknown_never_not_io() {
+        let cases = [
+            "http.get(url);",
+            "https.request(opts);",
+            "net.connect(port);",
+            "dns.lookup(host);",
+            "child_process.exec(cmd);",
+            "cp.execSync(cmd);",
+            "cp.spawn(cmd);",
+        ];
+        for call in cases {
+            let source = format!(
+                "function f() {{ for (let i = 0; i < 10; i++) {{ {} }} }}",
+                call
+            );
+            let functions = js_parser().parse(&source).unwrap();
+            assert_eq!(functions[0].calls_in_loops.len(), 1, "case: {}", call);
+            assert_eq!(
+                functions[0].calls_in_loops[0].io,
+                IoClassification::Unknown,
+                "case: {} — must abstain (Unknown), never assert NotIo nor Io",
+                call
+            );
+        }
+    }
+
     // Tech spec step 8's mandatory falsification test — verifies the
     // ADR-0020 grammar precondition `owning_function_indices` documents:
     // a wrapping capture sharing a nested @function's exact start_byte
@@ -1899,26 +2158,113 @@ mod tests {
     #[test]
     fn iife_call_sharing_start_byte_with_its_own_function_expression_is_attributed_to_outer() {
         let source = "function outer() { !function () { doIo(); }(); }";
-        let functions = ts_parser().parse(source).unwrap();
-        let outer = functions
-            .iter()
-            .find(|f| f.name == "outer")
-            .expect("outer function must be captured");
-        // The IIFE's callee IS the anonymous function_expression node
-        // (`call_expression`'s `function` field), so `field_text` records
-        // its full source text — the discriminating signal is that this
-        // call is present in `outer.calls` AT ALL: before the down-stack
-        // fix, the innermost-only ownership check attributed it to the
-        // (smaller-end_byte) inner function expression, failed the
-        // containment test there, and dropped it from EVERY function.
-        assert!(
-            outer
-                .calls
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            let outer = functions
                 .iter()
-                .any(|c| c.starts_with("function () { doIo(); }")),
-            "the IIFE's own call must be attributed to `outer`, not silently \
-             dropped by the innermost-only ownership check — outer.calls = {:?}",
-            outer.calls
-        );
+                .find(|f| f.name == "outer")
+                .expect("outer function must be captured");
+            // The IIFE's callee IS the anonymous function_expression node
+            // (`call_expression`'s `function` field) — the discriminating
+            // signal is that this call is present in `outer.calls` AT ALL:
+            // before the down-stack fix, the innermost-only ownership check
+            // attributed it to the (smaller-end_byte) inner function
+            // expression, failed the containment test there, and dropped it
+            // from EVERY function. Retry (Dev-B F3, BLOCKING 4): when the
+            // callee node is itself function-shaped, the recorded name is
+            // "<anonymous>" — never the callee's raw source text (the whole
+            // function body), which would falsely trip suspicious I/O
+            // markers by `contains` on an arbitrary substring of the body.
+            assert!(
+                outer.calls.iter().any(|c| c == "<anonymous>"),
+                "the IIFE's own call must be attributed to `outer` as \"<anonymous>\", \
+                 not silently dropped, and never as the raw callee body text — \
+                 outer.calls = {:?}",
+                outer.calls
+            );
+        }
+    }
+
+    // Dev-B F3 (retry, BLOCKING 4) — an IIFE nested in a loop must not
+    // classify as `Unknown` I/O merely because its body text happens to
+    // CONTAIN a suspicious marker substring (e.g. "fetch"). Before this
+    // fix the recorded call name was the entire callee body
+    // ("function(){ prefetchAll(); }"), and `classify_call`'s `contains`
+    // check on suspicious markers would false-positive on ANY marker
+    // substring appearing anywhere in that blob.
+    #[test]
+    fn iife_call_in_loop_never_false_classifies_from_its_own_body_text() {
+        let source = "function f(n) { for (let i = 0; i < n; i++) { !function(){ prefetchAll(); }(); } }";
+        for parser in ecmascript_parsers() {
+            let functions = parser.parse(source).unwrap();
+            let outer = functions
+                .iter()
+                .find(|f| f.name == "f")
+                .expect("f must be captured");
+            let iife_call = outer
+                .calls_in_loops
+                .iter()
+                .find(|c| c.name == "<anonymous>")
+                .expect("the IIFE call must be tracked in calls_in_loops as \"<anonymous>\"");
+            assert_eq!(
+                iife_call.io,
+                IoClassification::NotIo,
+                "an anonymous callee's own body text must never feed the suspicious-marker \
+                 classifier — got {:?}",
+                iife_call.io
+            );
+        }
+    }
+    } // mod ecmascript_tests
+
+    // Fold-in 8 (retry, Security LOW) — the C#-only Drop-safety guard
+    // (`csharp_tests::dropping_a_deeply_nested_tree_does_not_abort_the_
+    // process`) is extended to TS/JS: needs all three grammars in one
+    // test, so it lives at this outer scope rather than inside either
+    // per-language `mod`, gated on both features together. No abort was
+    // observed for TS/JS in the Security lane's own runs (100k nested
+    // arrows, 20k nested IIFEs both exited cleanly as `SourceTooComplex`)
+    // — this guards against a FUTURE regression, not a present defect.
+    #[test]
+    #[cfg(all(feature = "lang-csharp", feature = "lang-typescript"))]
+    fn dropping_a_deeply_nested_tree_does_not_abort_the_process_on_any_grammar() {
+        // TypeScript: 100k nested IIFE-shaped arrow-function calls.
+        {
+            let mut source = String::new();
+            for _ in 0..100_000 {
+                source.push_str("(() => ");
+            }
+            source.push('1');
+            for _ in 0..100_000 {
+                source.push_str(")()");
+            }
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+                .expect("grammar must load");
+            let tree = parser.parse(&source, None).expect("parse must succeed");
+            drop(tree);
+        }
+
+        // JavaScript: 20k nested IIFEs.
+        {
+            let mut source = String::from("function outer() {\n");
+            for _ in 0..20_000 {
+                source.push_str("!function(){\n");
+            }
+            source.push_str("doIt();\n");
+            for _ in 0..20_000 {
+                source.push_str("}();\n");
+            }
+            source.push_str("}\n");
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_javascript::LANGUAGE.into())
+                .expect("grammar must load");
+            let tree = parser.parse(&source, None).expect("parse must succeed");
+            drop(tree);
+        }
+
+        // Reaching this line is the proof: the process survived every Drop.
     }
 }
