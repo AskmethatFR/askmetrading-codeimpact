@@ -7,6 +7,7 @@ use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FileDependency;
+use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::LanguageCapabilities;
@@ -668,6 +669,69 @@ fn write_project_report_breaching_threshold_report_shows_warning_with_the_number
     assert!(
         output.contains("ÉNERGIE"),
         "the warning must name the breached metric, got: {}",
+        output
+    );
+}
+
+// US17 T1 retry (Security MEDIUM, CWE-117/CWE-150, BLOCKING 2) — a JS/TS
+// string-literal method name can carry raw ANSI escape sequences (a
+// closed character set for Rust/C# identifiers, impossible before the
+// tree-sitter TS/JS adapter). Both console print sites (single-file
+// `write_console_to` and per-file `write_project_report_to`) must
+// neutralize control characters in a function's name before printing it —
+// the JSON payload (a separate writer, separately verified safe) must
+// keep the real name; this test asserts only on the CONSOLE writer.
+//
+// Test List:
+//   1. write_console_to's "=== Détails par fonction ===" line neutralizes
+//      an ANSI-escape-laden function name.
+//   2. write_project_report_to's per-file function-detail line does the
+//      same (a DIFFERENT print site, its own assertion).
+
+fn function_detail_named(name: &str) -> FunctionDetail {
+    FunctionDetail::new(name.to_string(), CodeLocation::new("a.js".into(), 1, 1), 0, 0, 1, false)
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_sequences_in_a_function_name() {
+    let writer = ConsoleReportWriter::new();
+    let hostile_name = "\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m";
+    let metrics = CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console output — the sanitizer did not run: {:?}",
+        output
+    );
+    assert!(
+        output.contains("\\x1b[2J"),
+        "the escape sequence should still be visible, just neutralized: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_sequences_in_a_function_name() {
+    let writer = ConsoleReportWriter::new();
+    let hostile_name = "\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m";
+    let metrics = CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
+    let files = vec![(path("src/evil.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project console output — the sanitizer did not run: {:?}",
+        output
+    );
+    assert!(
+        output.contains("\\x1b[2J"),
+        "the escape sequence should still be visible, just neutralized: {:?}",
         output
     );
 }

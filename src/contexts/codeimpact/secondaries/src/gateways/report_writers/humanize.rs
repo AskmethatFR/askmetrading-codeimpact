@@ -90,9 +90,83 @@ pub fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
     }
 }
 
+/// Neutralizes control characters before a value derived from analyzed
+/// SOURCE CODE reaches a terminal (US17 T1 retry, Security MEDIUM,
+/// CWE-117/CWE-150). Until the TS/JS tree-sitter adapter landed, every
+/// producer of a `ParsedFunction`/`FunctionDetail` name was a Rust or C#
+/// identifier — a closed character set with no control bytes possible. A
+/// JS/TS `method_definition` key can be an arbitrary STRING LITERAL, so a
+/// hostile name can now carry raw ANSI escape sequences (`ESC[2J` clears
+/// the screen, `ESC[1;31m` recolors) and forge or hide what the operator
+/// reads in `console_report_writer.rs` — under this tool's threat model
+/// the report IS the product.
+///
+/// Every Unicode control character (`char::is_control` — C0 0x00-0x1F, DEL
+/// 0x7F, C1 0x80-0x9F) is replaced by its `\xHH` textual escape: visible
+/// and forensic (the operator can still see WHAT was there) but never
+/// interpreted by the terminal. Every other character, including non-ASCII
+/// UTF-8, passes through untouched.
+///
+/// **Console-writer only.** The JSON writer already escapes control
+/// characters (`serde_json`'s own string encoding) and the HTML writer's
+/// `json_island_escape` (`html_report_writer.rs`) plus its `textContent`
+/// -only renderer already close the `<script>`-breakout class for JS's
+/// much wider character set — this function must NEVER be applied there,
+/// nor inside `field_text` (`tree_sitter_code_parser.rs`): a downstream
+/// tool consuming the JSON payload needs the REAL symbol name, unmodified.
+pub fn sanitize_console_text(input: &str) -> String {
+    let mut sanitized = String::with_capacity(input.len());
+    for c in input.chars() {
+        if c.is_control() {
+            sanitized.push_str(&format!("\\x{:02x}", c as u32));
+        } else {
+            sanitized.push(c);
+        }
+    }
+    sanitized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test List (sanitize_console_text — US17 T1 retry, Security MEDIUM):
+    // 1. an ANSI escape sequence (ESC[2J) is neutralized to a visible,
+    //    non-interpretable \xHH escape — the exploit shape itself.
+    // 2. plain ASCII text passes through unchanged.
+    // 3. non-ASCII UTF-8 (accented / non-Latin) passes through unchanged —
+    //    only CONTROL characters are touched, not "anything non-ASCII".
+    // 4. newline/tab are ALSO neutralized (line-forging is the same class
+    //    of attack as color/clear — not just the ESC byte itself).
+    // 5. the empty string is untouched (vacuous case).
+
+    #[test]
+    fn sanitize_console_text_neutralizes_an_ansi_escape_sequence() {
+        assert_eq!(
+            sanitize_console_text("\x1b[2J\x1b[1;31mCRITICAL\x1b[0m"),
+            "\\x1b[2J\\x1b[1;31mCRITICAL\\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn sanitize_console_text_leaves_plain_ascii_untouched() {
+        assert_eq!(sanitize_console_text("compute"), "compute");
+    }
+
+    #[test]
+    fn sanitize_console_text_leaves_non_ascii_utf8_untouched() {
+        assert_eq!(sanitize_console_text("café_naïve_日本語"), "café_naïve_日本語");
+    }
+
+    #[test]
+    fn sanitize_console_text_neutralizes_newline_and_tab() {
+        assert_eq!(sanitize_console_text("a\nb\tc"), "a\\x0ab\\x09c");
+    }
+
+    #[test]
+    fn sanitize_console_text_of_empty_string_is_empty() {
+        assert_eq!(sanitize_console_text(""), "");
+    }
 
     // Test List (format_dollars):
     // 1. amount < $0.0001 -> 6 decimals

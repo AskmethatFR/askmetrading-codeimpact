@@ -11,7 +11,9 @@ use codeimpact_hexagon::analysis::ReportWriter;
 use codeimpact_hexagon::analysis::StressTestRun;
 use codeimpact_hexagon::analysis::WarningSeverity;
 
-use super::humanize::{format_dollars, format_energy, format_memory, render_threshold_warning};
+use super::humanize::{
+    format_dollars, format_energy, format_memory, render_threshold_warning, sanitize_console_text,
+};
 
 const KB_TO_MB: f64 = 1024.0;
 const MB_TO_GB: f64 = 1024.0;
@@ -108,7 +110,7 @@ impl ConsoleReportWriter {
                 writeln!(
                     writer,
                     "  {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                    d.name(),
+                    sanitize_console_text(d.name()),
                     d.direct(),
                     d.transitive(),
                     d.call_depth(),
@@ -254,7 +256,7 @@ impl ConsoleReportWriter {
                     writeln!(
                         writer,
                         "    {} — directe: {}, transitive: {}, profondeur: {}{} ({})",
-                        d.name(),
+                        sanitize_console_text(d.name()),
                         d.direct(),
                         d.transitive(),
                         d.call_depth(),
