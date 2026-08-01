@@ -1371,9 +1371,11 @@ mod tests {
 
     // T4.1: supersedes T2's `call_in_loop_is_recorded_with_unknown_io_
     // classification` — the hardcoded `IoClassification::Unknown` seam is
-    // gone, replaced by `classify_csharp_call`. A call with no confident-
-    // prefix match and (T4.1-only, no suspicion heuristic yet) no receiver
-    // marker classifies NotIo. Two divergent call shapes, same behavior.
+    // gone, replaced by `classify_call` (US17 T1: renamed from
+    // `classify_csharp_call`, made language-agnostic). A call with no
+    // confident-prefix match and (T4.1-only, no suspicion heuristic yet)
+    // no receiver marker classifies NotIo. Two divergent call shapes,
+    // same behavior.
     #[test]
     fn call_with_no_confident_prefix_match_classifies_not_io() {
         for call in ["DoWork();", "list.Add(x);"] {
