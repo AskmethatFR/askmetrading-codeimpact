@@ -105,7 +105,22 @@ pub fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
 /// 0x7F, C1 0x80-0x9F) is replaced by its `\xHH` textual escape: visible
 /// and forensic (the operator can still see WHAT was there) but never
 /// interpreted by the terminal. Every other character, including non-ASCII
-/// UTF-8, passes through untouched.
+/// UTF-8, passes through untouched — EXCEPT the widened class below.
+///
+/// Retry 2 (BLOCKING 2, Dev-B + Security convergent): `char::is_control`
+/// covers Unicode category Cc only. Bidi-override FORMATTING characters
+/// (category Cf) are a different category entirely and pass through
+/// untouched by that check alone — yet U+202E (RIGHT-TO-LEFT OVERRIDE) is
+/// the exact "Trojan Source" primitive (CVE-2021-42574): it visually
+/// reorders every character after it on the same terminal line, the same
+/// "forge what the operator reads" threat the ESC-sequence fix already
+/// closed for Cc. `is_neutralized_char` below additionally catches the
+/// full bidi-control set (`U+200E`/`U+200F`, `U+202A`-`U+202E`,
+/// `U+2066`-`U+2069`, `U+061C`) and the line/paragraph separators
+/// (`U+2028`/`U+2029`, which can forge extra report lines much like a raw
+/// newline). Ruling D2 is respected: the STRATEGY is unchanged (escape,
+/// don't truncate; console-writer only; `field_text`/JSON keep the real
+/// name) — only the character CLASS is widened.
 ///
 /// **Console-writer only.** The JSON writer already escapes control
 /// characters (`serde_json`'s own string encoding) and the HTML writer's
@@ -117,13 +132,31 @@ pub fn format_metric_value(metric: BreachedMetric, value: f64) -> String {
 pub fn sanitize_console_text(input: &str) -> String {
     let mut sanitized = String::with_capacity(input.len());
     for c in input.chars() {
-        if c.is_control() {
+        if is_neutralized_char(c) {
             sanitized.push_str(&format!("\\x{:02x}", c as u32));
         } else {
             sanitized.push(c);
         }
     }
     sanitized
+}
+
+/// Whether `c` must be neutralized before reaching a terminal (retry 2,
+/// BLOCKING 2): the original Cc class (`char::is_control`) PLUS the bidi
+/// Cf controls and the two Unicode line/paragraph separators — see
+/// `sanitize_console_text`'s doc for the full threat rationale.
+fn is_neutralized_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{2028}'
+                | '\u{2029}'
+        )
 }
 
 #[cfg(test)]
@@ -169,6 +202,70 @@ mod tests {
     #[test]
     fn sanitize_console_text_of_empty_string_is_empty() {
         assert_eq!(sanitize_console_text(""), "");
+    }
+
+    // Retry 2 (BLOCKING 2, Dev-B + Security convergent) — `char::is_control`
+    // is Unicode category Cc ONLY (C0/DEL/C1). Bidi-override formatting
+    // characters (Cf) are a DIFFERENT category and pass through untouched
+    // by that check alone — but U+202E (RIGHT-TO-LEFT OVERRIDE) is the
+    // exact "Trojan Source" (CVE-2021-42574) primitive: it visually
+    // reorders everything after it on the same terminal line, the same
+    // "forge what the operator reads" class as the ESC payload BLOCKING 2
+    // (round 1) already closed for Cc. Line/paragraph separators
+    // (U+2028/U+2029) are not Cc either and can forge extra report lines.
+    //
+    // Test List: 6. U+202E (RLO) is neutralized. 7. every other bidi
+    // control in the widened class (U+200E/U+200F, U+202A-202D, U+2066-
+    // 2069, U+061C) is neutralized. 8. U+2028/U+2029 (line/paragraph
+    // separator) are neutralized. 9. the original Cc class (ESC) still
+    // works — the widening must not regress round 1.
+
+    #[test]
+    fn sanitize_console_text_neutralizes_right_to_left_override() {
+        let input = "safe\u{202E}evil";
+        let output = sanitize_console_text(input);
+        assert!(
+            !output.contains('\u{202E}'),
+            "U+202E (Trojan Source RLO) must be neutralized, got: {:?}",
+            output
+        );
+        assert_eq!(output, "safe\\x202eevil");
+    }
+
+    #[test]
+    fn sanitize_console_text_neutralizes_every_bidi_control_in_the_widened_class() {
+        for bidi in [
+            '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
+            '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{061C}',
+        ] {
+            let output = sanitize_console_text(&format!("a{}b", bidi));
+            assert!(
+                !output.contains(bidi),
+                "bidi control {:?} (U+{:04X}) must be neutralized, got: {:?}",
+                bidi,
+                bidi as u32,
+                output
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_console_text_neutralizes_line_and_paragraph_separators() {
+        for separator in ['\u{2028}', '\u{2029}'] {
+            let output = sanitize_console_text(&format!("a{}b", separator));
+            assert!(
+                !output.contains(separator),
+                "separator {:?} must be neutralized, got: {:?}",
+                separator,
+                output
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_console_text_still_neutralizes_the_original_cc_class() {
+        // Round-1 regression guard: widening the class must not narrow it.
+        assert_eq!(sanitize_console_text("\x1b[2J"), "\\x1b[2J");
     }
 
     // Test List (format_dollars):

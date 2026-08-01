@@ -721,6 +721,127 @@ fn write_console_neutralizes_ansi_escape_sequences_in_a_function_name() {
     );
 }
 
+// US17 T1 retry 2 (BLOCKING 1 — Dev-B + Security convergent) — four MORE
+// unsanitized sinks were reported alongside the two round-1 fixed:
+// ComplexityWarning.function/.message and IoInLoopWarning.function/
+// .io_call, printed at both the single-file "Avertissements"/"I/O dans
+// boucles" sections AND their project-report twins. `io_call` is an
+// INDEPENDENT vector from `function` — a computed member behind a
+// legitimate confident prefix (`fs.promises["<ESC>..."]`) still carries a
+// hostile payload even with a perfectly benign function name, so each
+// field gets its own row rather than being asserted together.
+
+fn hostile_warning(function: &str, message: &str) -> ComplexityWarning {
+    ComplexityWarning {
+        pattern: WarningPattern::NestedLoops,
+        severity: WarningSeverity::Critical,
+        function: function.to_string(),
+        location: CodeLocation::new("evil.js".into(), 1, 1),
+        message: message.to_string(),
+        suggestion: "n/a".to_string(),
+    }
+}
+
+fn hostile_io_warning(function: &str, io_call: &str) -> IoInLoopWarning {
+    IoInLoopWarning {
+        function: function.to_string(),
+        io_call: io_call.to_string(),
+        location: CodeLocation::new("evil.js".into(), 1, 1),
+    }
+}
+
+const ESC_PAYLOAD: &str = "\x1b[2J\x1b[1;31mPWNED\x1b[0m";
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_warning_function_and_message() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_warnings(vec![hostile_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the single-file \"Avertissements\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_io_in_loop_function_and_io_call() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_io_in_loops(vec![hostile_io_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the single-file \"I/O dans boucles\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_io_call_alone_behind_a_benign_function_name() {
+    // Security's independent-vector proof: a computed member expression
+    // behind a legitimate confident prefix carries the payload even when
+    // the FUNCTION name is entirely benign — `io_call` must be sanitized
+    // on its own, not merely "whenever function happens to be hostile
+    // too".
+    let writer = ConsoleReportWriter::new();
+    let hostile_io_call = format!("fs.promises[\"{}\"]", ESC_PAYLOAD);
+    let metrics =
+        CodeMetrics::new(1).with_io_in_loops(vec![hostile_io_warning("f", &hostile_io_call)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via io_call alone: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_warning_function_and_message() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_warnings(vec![hostile_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let files = vec![(path("evil.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project \"avertissements\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_io_in_loop_function_and_io_call() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_io_in_loops(vec![hostile_io_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let files = vec![(path("evil.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project \"I/O dans boucles\" section: {:?}",
+        output
+    );
+}
+
 #[test]
 fn write_project_report_neutralizes_ansi_escape_sequences_in_a_function_name() {
     let writer = ConsoleReportWriter::new();

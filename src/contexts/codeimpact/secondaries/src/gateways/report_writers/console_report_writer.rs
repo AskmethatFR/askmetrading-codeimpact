@@ -175,7 +175,11 @@ impl ConsoleReportWriter {
                 writeln!(
                     writer,
                     "[{}][{:?}] {} → {} ({})",
-                    label, w.pattern, w.function, w.message, loc
+                    label,
+                    w.pattern,
+                    sanitize_console_text(&w.function),
+                    sanitize_console_text(&w.message),
+                    loc
                 )
                 .unwrap();
             }
@@ -205,7 +209,9 @@ impl ConsoleReportWriter {
                 writeln!(
                     writer,
                     "[CRITICAL] {} → I/O dans boucle: {} ({})",
-                    w.function, w.io_call, location_str
+                    sanitize_console_text(&w.function),
+                    sanitize_console_text(&w.io_call),
+                    location_str
                 )
                 .unwrap();
             }
@@ -285,7 +291,11 @@ impl ConsoleReportWriter {
                         writeln!(
                             writer,
                             "      [{}][{:?}] {} → {} ({})",
-                            label, w.pattern, w.function, w.message, loc_str
+                            label,
+                            w.pattern,
+                            sanitize_console_text(&w.function),
+                            sanitize_console_text(&w.message),
+                            loc_str
                         )
                         .unwrap();
                     }
@@ -299,7 +309,9 @@ impl ConsoleReportWriter {
                         writeln!(
                             writer,
                             "      [CRITICAL] {} → I/O dans boucle: {} ({})",
-                            w.function, w.io_call, loc_str,
+                            sanitize_console_text(&w.function),
+                            sanitize_console_text(&w.io_call),
+                            loc_str,
                         )
                         .unwrap();
                     }

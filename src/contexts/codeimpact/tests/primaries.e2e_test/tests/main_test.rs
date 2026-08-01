@@ -351,6 +351,142 @@ fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape
     );
 }
 
+// US17 T1 retry 2 (BLOCKING 1, Dev-B + Security convergent) — round 1's
+// `esc2.js` fixture has no loop and no I/O, so it never triggers a
+// ComplexityWarning/IoInLoopWarning at all — exactly why the round-1
+// fixes to `d.name()` alone went green while the warning print sites
+// stayed unsanitized. This fixture has BOTH: nested loops (triggers
+// NestedLoops) and an in-loop I/O call (triggers an I/O-in-loop entry),
+// on a hostile method name — reproduced against BOTH the single-file and
+// the project (`--path`) surfaces, matching Dev-B's own repro.
+#[test]
+fn e2e_analyze_javascript_file_with_nested_loop_and_io_prints_no_raw_escape_byte_on_either_surface()
+{
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_ansi_escape_warnings_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("esc_warnings.js");
+    std::fs::write(
+        &fixture,
+        "class C { \"\x1b[2J\x1b[1;31mPWNED\x1b[0m\"() { \
+         for (let i = 0; i < 10; i++) { \
+         for (let j = 0; j < 10; j++) { \
+         fs.readFileSync(String(j)); \
+         } } } }",
+    )
+    .expect("write hostile fixture");
+
+    // Single-file surface.
+    let single_file_output = Command::new(&binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    assert!(
+        single_file_output.status.success(),
+        "exit 0 expected (single file). stderr: {}",
+        String::from_utf8_lossy(&single_file_output.stderr)
+    );
+    assert!(
+        !single_file_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte reached the single-file console output: {:?}",
+        String::from_utf8_lossy(&single_file_output.stdout)
+    );
+
+    // Project surface (--path).
+    let project_output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        project_output.status.success(),
+        "exit 0 expected (project). stderr: {}",
+        String::from_utf8_lossy(&project_output.stderr)
+    );
+    assert!(
+        !project_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte reached the project console output: {:?}",
+        String::from_utf8_lossy(&project_output.stdout)
+    );
+}
+
+// The computed-member-behind-a-benign-confident-prefix vector: a
+// perfectly benign FUNCTION name, hostile only in `io_call` (which
+// `IoInLoopWarning` carries independently) — proves the fix covers
+// `io_call` on its own, not merely "whenever `function` happens to be
+// hostile too".
+#[test]
+fn e2e_analyze_javascript_file_with_hostile_computed_member_io_call_prints_no_raw_escape_byte() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_ansi_escape_io_call_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("esc_io_call.js");
+    std::fs::write(
+        &fixture,
+        "function f(xs) { for (const x of xs) { \
+         fs.promises[\"\x1b[2J\x1b[1;32mNO I/O FOUND\x1b[0m\"](x); \
+         } }",
+    )
+    .expect("write hostile fixture");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.stdout.contains(&0x1bu8),
+        "a raw ESC byte reached the console via a computed-member io_call: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+// BLOCKING 2 — U+202E (Trojan Source RLO) through a method name, the same
+// vector as the ESC payload but a DIFFERENT Unicode category (Cf, not Cc)
+// — must be neutralized end-to-end too, not just at the unit level.
+#[test]
+fn e2e_analyze_javascript_file_with_bidi_override_method_name_prints_no_raw_bidi_char() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_bidi_override_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("bidi.js");
+    std::fs::write(&fixture, "class C { \"safe\u{202E}evil\"() {} }").expect("write fixture");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains('\u{202E}'),
+        "a raw U+202E (RLO) reached the console output: {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_path_with_mixed_rust_and_csharp_files_measures_both() {
     let binary = binary_path();
