@@ -689,14 +689,22 @@ fn write_project_report_breaching_threshold_report_shows_warning_with_the_number
 //      same (a DIFFERENT print site, its own assertion).
 
 fn function_detail_named(name: &str) -> FunctionDetail {
-    FunctionDetail::new(name.to_string(), CodeLocation::new("a.js".into(), 1, 1), 0, 0, 1, false)
+    FunctionDetail::new(
+        name.to_string(),
+        CodeLocation::new("a.js".into(), 1, 1),
+        0,
+        0,
+        1,
+        false,
+    )
 }
 
 #[test]
 fn write_console_neutralizes_ansi_escape_sequences_in_a_function_name() {
     let writer = ConsoleReportWriter::new();
     let hostile_name = "\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m";
-    let metrics = CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
+    let metrics =
+        CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
     let mut buf = Vec::new();
     writer.write_console_to(&mut buf, &metrics);
     let output = String::from_utf8(buf).unwrap();
@@ -717,7 +725,8 @@ fn write_console_neutralizes_ansi_escape_sequences_in_a_function_name() {
 fn write_project_report_neutralizes_ansi_escape_sequences_in_a_function_name() {
     let writer = ConsoleReportWriter::new();
     let hostile_name = "\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m";
-    let metrics = CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
+    let metrics =
+        CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
     let files = vec![(path("src/evil.js"), metrics)];
     let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
     let mut buf = Vec::new();

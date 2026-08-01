@@ -155,7 +155,10 @@ mod tests {
 
     #[test]
     fn sanitize_console_text_leaves_non_ascii_utf8_untouched() {
-        assert_eq!(sanitize_console_text("café_naïve_日本語"), "café_naïve_日本語");
+        assert_eq!(
+            sanitize_console_text("café_naïve_日本語"),
+            "café_naïve_日本語"
+        );
     }
 
     #[test]

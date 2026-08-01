@@ -309,10 +309,8 @@ fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
 #[test]
 fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape_byte() {
     let binary = binary_path();
-    let dir = std::env::temp_dir().join(format!(
-        "codeimpact_e2e_ansi_escape_{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("codeimpact_e2e_ansi_escape_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated scan dir");
     let fixture = dir.join("esc2.js");
