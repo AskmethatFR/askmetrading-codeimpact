@@ -195,7 +195,7 @@ Un seul bounded context pour le MVP: **CodeImpact**.
 | US14 | P1 | Support multi-langage (étude + de-Rustification) | 🔄 En cours — T1 (de-Rustify hexagone) ✅, **T2 C# ✅ (US16/#33)**, **T3 (dégradation) ✅ (#33)**, **T4 I/O-en-boucle C# ✅ (#33)**, **T5 (deps inter-fichiers C#) ✅ (#33, [[ADR-0023]])**, T5.3 (drop arêtes d'appel ambiguës) + T6 (TS) à venir |
 | US15 | P1 | Fichier de configuration `.codeimpact.json` (include/exclude, respectGitignore) | ✅ Livré (#31) |
 | US16 | P1 | Support C#/.NET via tree-sitter (US14-T2) — `analyze <csharp-dir>` rend complexité + impact | ✅ Livré (#33) |
-| US17 | P1 | Support TypeScript/JavaScript via tree-sitter (US14-T6) | 🔄 En cours — **T1 (analyse de bout en bout) ✅ (#34, [[ADR-0029]])**, T2 (exclusions par défaut), T3 (nommage des fonctions anonymes), T4 (graphe de dépendances inter-fichiers) à venir. `.tsx` hors périmètre (#118 — exigerait d'élargir le port `CodeParser::parse`) |
+| US17 | P1 | Support TypeScript/JavaScript via tree-sitter (US14-T6) | 🔄 En cours — **T1 (analyse de bout en bout) ✅**, **T2 (exclusions par défaut + observabilité) ✅** (#34, [[ADR-0029]]), T3 (nommage des fonctions anonymes), T4 (graphe de dépendances inter-fichiers) à venir. `.tsx` hors périmètre (#118 — exigerait d'élargir le port `CodeParser::parse`) |
 
 ## Décisions enregistrées (ADR)
 

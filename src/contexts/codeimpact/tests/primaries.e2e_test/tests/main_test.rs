@@ -2251,6 +2251,7 @@ fn e2e_analyze_path_strict_without_breach_exits_0() {
 // `--strict` silently exited 0, exactly as if the gate had genuinely
 // evaluated a clean project. A hard error is the correct behavior — this
 // is an input/setup problem (nothing measured), not a threshold
+// @scenario: typescript-javascript-analysis/S7
 // evaluation, so it must NEVER read as "0" the way a real non-breach does.
 #[test]
 fn e2e_analyze_path_strict_on_zero_measured_files_does_not_exit_0() {

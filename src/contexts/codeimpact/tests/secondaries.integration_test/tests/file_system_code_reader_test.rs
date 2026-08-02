@@ -1194,6 +1194,7 @@ fn remaining_guard_characters_still_exclude_correctly_via_fallback() {
 //    count here, the user already knows about their own exclude list
 // 5. zero exclusions -> count is exactly 0 (not "falsy", the literal
 //    number a test can assert on)
+// @scenario: typescript-javascript-analysis/S7
 
 #[test]
 fn default_excluded_count_reflects_pruned_entries_not_a_file_count() {

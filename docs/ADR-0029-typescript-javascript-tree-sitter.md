@@ -109,12 +109,30 @@ Correctif : un balayage descendant de la pile de fonctions ouvertes au lieu du s
 
 **C'est le retour sur investissement le plus net de ce cycle** : une dette écrite dans un ADR huit semaines plus tôt a évité un défaut silencieux dans le langage suivant. La documentation a fait son travail.
 
+### D9 — Les exclusions par défaut sont un invariant de `FileFilter`, et `target/` en fait partie
+
+**T2.** `DEFAULT_EXCLUDES = ["node_modules/**", "**/node_modules/**", "dist/**", "**/*.min.js", "target/**", "**/target/**"]`, replié dans **`unrestricted()` et `new()`** — donc au constructeur, pas chez l'appelant. Câbler la liste aux deux sites d'appel aurait laissé un troisième site l'oublier ; l'invariant tenu par le VO rend l'oubli structurellement impossible. L'union est ordonnée **motifs utilisateur d'abord** : quelqu'un qui relit sa liste effective doit voir ce qu'il a écrit avant le standard. `MAX_PATTERN_COUNT` valide désormais l'union, ce qui réduit de 6 le budget utilisateur — assumé, et le message d'erreur nomme la cause plutôt que de rendre un total que personne n'a tapé.
+
+`target/**` avait été **écarté** par l'arbitrage initial, au motif de ne pas changer le comportement des projets Rust. La mesure a inversé la décision : sur ce dépôt, `target/` pèse **6,9 Go** et `codeimpact analyze --path .` mourait sur `arborescence trop volumineuse (plus de 50 000 entrées)` avant d'atteindre la moindre source. **L'outil ne pouvait pas s'analyser lui-même.** Le comportement que l'exclusion change est *l'analyse d'artefacts générés* — que personne ne voulait. Les jumeaux `**/…/**` couvrent les monorepos ; `dist/` reste ancré à la racine, délibérément.
+
+Corollaire d'ingénierie : `is_dialect_safe_prune_pattern` accepte désormais la forme `**/<littéral>/**`, donc un `node_modules` imbriqué est **élagué au walk** au lieu d'être filtré après. La distinction n'est pas cosmétique — `MAX_WALK_ENTRIES` compte les **visites**, pas les résultats. L'équivalence des dialectes `globset`/`ignore` sur cette forme a été vérifiée empiriquement aux versions épinglées, deux fois et indépendamment (corpus dirigé de 28 motifs ; balayage aléatoire de 2 342 motifs, 1 036 classés élagables, zéro divergence). Le garde n'est pas décoratif : `**/a*b/**` **diverge** réellement entre les deux dialectes, et le prédicat le rejette.
+
+### D10 — Exclure est de l'ergonomie ; exclure en silence ne l'est pas
+
+**T2, finding Security.** Le même fichier (complexité 17) placé dans `src/` déclenche `exit 3` sous `--strict` ; placé dans `dist/`, `target/` ou un `node_modules` imbriqué, il rend `exit 0`. Avant T2, déplacer un fichier ne le soustrayait pas à la porte. Après, si — et rien dans le rapport ne le disait : `unmeasurable_files_count: 0`, aucun avertissement. Pire, `include: ["dist/**"]` ne ressuscitait rien (l'élagage est au walk, l'include ne voit jamais l'entrée) et une analyse à **zéro fichier sortait en `exit 0`** sous `--strict` — un feu vert sur un run vide.
+
+Le *fait d'exclure* est aligné sur tout l'outillage comparable (eslint, sonar, couverture) et n'est pas remis en cause. C'est le **silence** qui contredit [[ADR-0010]], dont la discipline est précisément que l'outil dise ce qu'il n'a pas mesuré. Correctif purement additif : un compteur `default_excluded_count` rendu en console et en JSON, et `--strict` qui refuse de rendre `0` sur une analyse vide.
+
+Le compteur compte des **entrées élaguées**, pas des fichiers — sous un élagage au walk, le contenu n'est jamais énuméré, donc un nombre de fichiers serait une invention. Un N honnête au sens documenté vaut mieux qu'un nombre précis et faux : c'est la même discipline que `Measurement` ([[ADR-0010]]).
+
+**Borne du modèle de menace, explicite.** Cette décision tient parce qu'[[ADR-0006]] pose que l'utilisateur pointe l'outil sur son propre code : `--strict` est une hygiène auto-imposée, pas un contrôle anti-altération. **Si l'outil devait un jour garder des PR de contributeurs non fiables, la conclusion change** — l'exclusion par défaut deviendrait un contournement de mécanisme de protection (CWE-693), sans qu'une ligne de code ait bougé. À réévaluer le jour où le modèle d'usage change, pas avant.
+
 ## Conséquences
 
 - Un projet TS/JS s'analyse de bout en bout : complexité, boucles, branchements, appels, I/O en boucle, impact — console, JSON et HTML.
 - **La métrique C# change sur les cascades de `case`** (D5). À annoncer si des seuils sont calibrés en production.
 - Le graphe de dépendances inter-fichiers TS/JS **n'existe pas encore** (T4) ; `cross_file_dependencies` rend `Unsupported`, honnêtement.
-- Les exclusions par défaut (`node_modules`, `dist`, `*.min.js`) **ne sont pas livrées** (T2) : un `analyze` sur un projet TS réel avale encore les dépendances vendorées.
+- **T2 livré** : les exclusions par défaut s'appliquent avec ou sans `.codeimpact.json`, en union avec l'`exclude` utilisateur. `codeimpact analyze --path .` sur ce dépôt passe de `arborescence trop volumineuse` à **126 fichiers analysés en ~17 s**. Le budget de motifs utilisateur baisse de 6 (`MAX_PATTERN_COUNT` valide l'union).
 - La feature `lang-typescript` entre dans `default`, donc les deux nouvelles crates sont couvertes par la porte `cargo-deny` de la CI, qui résout le graphe par défaut.
 - Le sanitizer console s'applique aux trois langages ; la sortie Rust et C# pour des identifiants ordinaires est inchangée, octet pour octet.
 
