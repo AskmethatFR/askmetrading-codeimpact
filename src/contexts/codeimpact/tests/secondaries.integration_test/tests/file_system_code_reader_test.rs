@@ -925,3 +925,89 @@ fn a_nested_node_modules_over_the_entry_cap_is_pruned_at_walk_time_not_counted()
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Mutation-gate follow-up (#34 T2, blocking --in-diff): `cargo mutants`
+// survived both `&&` -> `||` mutants inside `is_dialect_safe_prune_pattern`'s
+// three-condition boolean chain (`!literal.is_empty() &&
+// !literal.contains([...]) && literal.split('/').all(...)`), because every
+// existing exclude pattern fed through it up to this point was EITHER a
+// clean literal (all three conditions true either way — AND and OR agree)
+// OR failed the earlier `strip_suffix("/**")` guard entirely (never reaches
+// the chain). Neither shape can tell AND from OR.
+//
+// A pattern whose literal CONTAINS a wildcard char (so `contains(...)` is
+// true, the middle conjunct is false) is required to discriminate — under
+// `&&` it must be correctly rejected as dialect-unsafe and fall back to the
+// post-walk `GlobSet`; under either mutated `||` it gets wrongly accepted as
+// walk-time-safe. That misclassification is only OBSERVABLE (not just
+// structurally different) when the two dialects actually disagree on the
+// match for a real path — verified empirically (same two pinned crate
+// versions, same method as the shape-equivalence proofs above):
+// `*generated/**` against `a/generated/x.js` — globset's `*` crosses `/`
+// (`literal_separator=false` by default), so the whole-path match ABSORBS
+// `a/` before `generated` and excludes it; the walk-time `Override`
+// (gitignore-line syntax) anchors the pattern component-by-component from
+// the relative-path root, so `*generated` never aligns with the `a`
+// component and `a/generated/x.js` survives instead. This is the SAME root
+// cause already documented in `partition_exclude_patterns`'s doc comment
+// (single `*` crossing `/` in globset but not gitignore-line syntax),
+// applied to a LEADING star instead of a trailing one.
+//
+// Test List:
+// 1. a literal containing a wildcard (`*generated/**`) must still exclude
+//    via the post-walk `GlobSet` dialect (globset's `*` crossing `/`),
+//    proving `is_dialect_safe_prune_pattern` correctly refused to route it
+//    to the walk-time `Override` — kills both survived `&&`->`||` mutants
+//    at once, since either one would wrongly keep a/generated/x.js instead
+
+#[test]
+fn wildcard_literal_before_the_trailing_star_star_uses_the_globset_fallback_not_walk_time_override()
+{
+    let dir = isolated_walk_dir("wildcard_literal_dialect_parity");
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("generated").join("top.js"), "var x=1;").unwrap();
+    std::fs::create_dir_all(dir.join("a").join("generated")).unwrap();
+    std::fs::write(
+        dir.join("a").join("generated").join("nested.js"),
+        "var x=1;",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("gen2")).unwrap();
+    std::fs::write(dir.join("gen2").join("kept.js"), "var x=1;").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.ts"), "const keep = 1;").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["*generated/**".to_string()], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["js", "ts"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        !files.iter().any(|f| f.ends_with("top.js")),
+        "generated/top.js must be excluded (matches *generated literally), got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("nested.js")),
+        "a/generated/nested.js must be excluded too — globset's `*` crosses \
+         `/` and absorbs the a/ prefix (the correct post-walk GlobSet \
+         fallback dialect for a literal containing a wildcard). If \
+         `is_dialect_safe_prune_pattern` wrongly routed this pattern to the \
+         walk-time Override instead, gitignore-line anchoring would NOT \
+         cross the a/ component and this file would wrongly survive, got {:?}",
+        files
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("kept.js")),
+        "gen2/kept.js does not match *generated, must survive, got {:?}",
+        files
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.ts")),
+        "src/keep.ts must survive, got {:?}",
+        files
+    );
+    assert_eq!(files.len(), 2, "got {:?}", files);
+    let _ = std::fs::remove_dir_all(&dir);
+}
