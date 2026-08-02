@@ -100,18 +100,42 @@ fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override,
 /// used is the trailing `**`. Verified empirically against globset 0.4.19
 /// and ignore 0.4.31 before writing this fix.
 ///
+/// #34 T2 extends this to the shape `**/<literal>/**` (e.g.
+/// `**/node_modules/**`, `DEFAULT_EXCLUDES`) for the SAME reason, by the
+/// SAME method: `globset`'s doc for a leading `**` component ("a sequence
+/// of `**` ... matches zero or more path components") and the gitignore
+/// spec's identical rule for a leading `**/` ("a leading '**' followed by a
+/// slash means match in all directories") describe the SAME semantics —
+/// "match this literal component at any depth" — and the trailing `/**`
+/// still contributes the same "everything inside, infinite depth" reading
+/// analyzed above. No single `*` is present in either dialect's reading of
+/// this shape, so point 2 above still never applies. Verified empirically
+/// against the same two pinned crate versions:
+/// `globset::Glob::new("**/node_modules/**")` matches
+/// `packages/x/node_modules/e.js` and `a/b/c/node_modules/deep/e.js` but
+/// not a bare `node_modules` entry or an unrelated `not_node_modules/e.js`;
+/// an `ignore::overrides::Override` built from `"!**/node_modules/**"`
+/// prunes descent into `packages/x/node_modules/` and `a/b/c/node_modules/`
+/// during a real walk, for the identical match set. This matters beyond
+/// the identical result set: `MAX_WALK_ENTRIES` counts every entry the
+/// walker VISITS, regardless of where it lands afterward — a nested
+/// `node_modules/` (an npm workspace shape a root-anchored
+/// `node_modules/**` alone does not reach) large enough to exceed the cap
+/// would still trip it under a fallback-only match, since the fallback
+/// only filters AFTER the walker has already visited (and counted) every
+/// entry underneath it.
+///
 /// Every other exclude pattern shape is routed to the post-walk `GlobSet`
 /// fallback instead (same code path as pre-#96, byte-identical by
 /// construction) rather than the walk-time `Override`.
 fn is_dialect_safe_prune_pattern(pattern: &str) -> bool {
-    match pattern.strip_suffix("/**") {
-        Some(prefix) => {
-            !prefix.is_empty()
-                && !prefix.contains(['*', '?', '[', ']', '!', '{', '}'])
-                && prefix.split('/').all(|segment| !segment.is_empty())
-        }
-        None => false,
-    }
+    let Some(prefix) = pattern.strip_suffix("/**") else {
+        return false;
+    };
+    let literal = prefix.strip_prefix("**/").unwrap_or(prefix);
+    !literal.is_empty()
+        && !literal.contains(['*', '?', '[', ']', '!', '{', '}'])
+        && literal.split('/').all(|segment| !segment.is_empty())
 }
 
 /// Splits `exclude` into the walk-time-prunable subset (dialect-safe) and

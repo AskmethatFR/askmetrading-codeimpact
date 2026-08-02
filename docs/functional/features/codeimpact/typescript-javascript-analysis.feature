@@ -40,7 +40,7 @@ Feature: TypeScript / JavaScript analysis support
     Then the import resolves to a real file-dependency edge
     And configured sourceRoots are honored when set
 
-  @wip @scenario:S5
+  @scenario:S5
   Scenario: Common non-source directories are excluded by default
     Given a TypeScript/JavaScript project containing node_modules/, dist/, and minified files
     When the project is analyzed with default settings
