@@ -305,6 +305,7 @@ fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
 // literal carrying ANSI escape sequences (`ESC[2J` clears the screen,
 // `ESC[1;31m` recolors), a shape unreachable via Rust/C# identifier syntax
 // before this ticket's tree-sitter adapter. The real CLI console output
+// @scenario: typescript-javascript-analysis/S6
 // must contain no raw ESC byte.
 #[test]
 fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape_byte() {
@@ -358,6 +359,7 @@ fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape
 // stayed unsanitized. This fixture has BOTH: nested loops (triggers
 // NestedLoops) and an in-loop I/O call (triggers an I/O-in-loop entry),
 // on a hostile method name — reproduced against BOTH the single-file and
+// @scenario: typescript-javascript-analysis/S6
 // the project (`--path`) surfaces, matching Dev-B's own repro.
 #[test]
 fn e2e_analyze_javascript_file_with_nested_loop_and_io_prints_no_raw_escape_byte_on_either_surface()
@@ -418,6 +420,7 @@ fn e2e_analyze_javascript_file_with_nested_loop_and_io_prints_no_raw_escape_byte
 // perfectly benign FUNCTION name, hostile only in `io_call` (which
 // `IoInLoopWarning` carries independently) — proves the fix covers
 // `io_call` on its own, not merely "whenever `function` happens to be
+// @scenario: typescript-javascript-analysis/S6
 // hostile too".
 #[test]
 fn e2e_analyze_javascript_file_with_hostile_computed_member_io_call_prints_no_raw_escape_byte() {
@@ -456,6 +459,7 @@ fn e2e_analyze_javascript_file_with_hostile_computed_member_io_call_prints_no_ra
 
 // BLOCKING 2 — U+202E (Trojan Source RLO) through a method name, the same
 // vector as the ESC payload but a DIFFERENT Unicode category (Cf, not Cc)
+// @scenario: typescript-javascript-analysis/S6
 // — must be neutralized end-to-end too, not just at the unit level.
 #[test]
 fn e2e_analyze_javascript_file_with_bidi_override_method_name_prints_no_raw_bidi_char() {
@@ -545,6 +549,7 @@ fn e2e_analyze_javascript_file_with_zwsp_method_name_prints_visibly_distinct_rep
 // byte except `/` and NUL, so a hostile repo can ship a file whose NAME
 // (not a symbol inside it) carries a raw ESC byte and forges the console
 // report exactly the way a hostile method name did. Verified on BOTH the
+// @scenario: typescript-javascript-analysis/S6
 // single-file and the project (`--path`) surfaces.
 #[test]
 fn e2e_analyze_file_with_ansi_escape_in_its_own_name_prints_no_raw_escape_byte_on_either_surface() {

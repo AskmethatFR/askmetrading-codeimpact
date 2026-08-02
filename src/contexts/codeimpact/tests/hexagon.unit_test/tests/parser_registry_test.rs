@@ -103,6 +103,7 @@ fn four_language_registry() -> ParserRegistry {
         .register(Language::TypeScript, Box::new(typescript_parser()))
         .register(Language::JavaScript, Box::new(javascript_parser()))
 }
+// @scenario: typescript-javascript-analysis/S2
 
 #[test]
 fn dispatch_routes_typescript_and_javascript_extensions_and_refuses_tsx() {
@@ -123,6 +124,7 @@ fn dispatch_routes_typescript_and_javascript_extensions_and_refuses_tsx() {
     // A2 (human-approved ruling): `.tsx` is deliberately out of v1 scope.
     assert!(registry.dispatch(Path::new("a.tsx")).is_none());
 }
+// @scenario: typescript-javascript-analysis/S2
 
 #[test]
 fn extensions_union_includes_typescript_and_javascript_extensions() {

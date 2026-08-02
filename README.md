@@ -31,6 +31,7 @@ Voir [docs/architecture.md](docs/architecture.md) pour le détail.
 | ✅ | US11 | Détection des patterns de complexité |
 | ✅ | US12 | Rapport enrichi (pattern, warnings par fichier) |
 | ✅ | US13 | Graphe de consommation des fichiers |
+| 🔄 | US17 | Support TypeScript / JavaScript (T1 livré : analyse de bout en bout) |
 | 🔲 | US7 | Rapport HTML |
 | 🔲 | US8 | Seuils d'alerte personnalisés |
 
