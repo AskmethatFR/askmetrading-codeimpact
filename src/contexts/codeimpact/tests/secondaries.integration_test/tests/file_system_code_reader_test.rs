@@ -817,3 +817,109 @@ fn walk_exceeding_the_entry_cap_aborts_early_naming_the_limit_under_both_gitigno
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// #34 T2 (US17) — DEFAULT_EXCLUDES (FileFilter::unrestricted()/new(), #34 T2)
+// wired through the real filesystem walk: `node_modules/` (any depth),
+// `dist/` (root only, by ruling), and `*.min.js` (any depth) must never be
+// analyzed, with or without a `.codeimpact.json`.
+//
+// Test List:
+// 1. a project tree containing node_modules/, dist/, a *.min.js file, a
+//    nested packages/x/node_modules/, and a real source file -> only the
+//    real source file is listed, via FileFilter::unrestricted() (the
+//    no-config path). `list_source_files` does not care whether a filter
+//    came from unrestricted() or new() — both funnel through the same
+//    exclude() getter — so this single adapter-level test is sufficient
+//    proof that the union reaches the walk; new()'s own union behavior is
+//    already pinned at the VO level in file_filter_test.rs.
+// 2. the real proof of WHY this matters (MAX_WALK_ENTRIES, #34 T2 tech
+//    spec): a NESTED node_modules/ (packages/x/node_modules/) holding more
+//    files than MAX_WALK_ENTRIES must NOT abort the walk — only reachable
+//    if `**/node_modules/**` is pruned at WALK TIME (is_dialect_safe_
+//    prune_pattern's new `**/<literal>/**` shape), since a post-walk-only
+//    fallback would still visit (and count) every file underneath it
+//    before filtering, tripping the cap. This is the test that actually
+//    discriminates the `**/<literal>/**` extension — test 1 above would
+//    stay green even without it, since the post-walk `GlobSet` fallback
+//    already matches `**/node_modules/**` correctly for a small fixture.
+
+#[test]
+fn default_excludes_drop_node_modules_dist_and_minified_files_via_unrestricted_filter() {
+    let dir = isolated_walk_dir("default_excludes");
+    std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+    std::fs::write(dir.join("node_modules").join("a.js"), "var a=1;").unwrap();
+    std::fs::create_dir_all(dir.join("dist")).unwrap();
+    std::fs::write(dir.join("dist").join("b.js"), "var b=1;").unwrap();
+    std::fs::write(dir.join("c.min.js"), "var c=1;").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("d.ts"), "const d = 1;").unwrap();
+    std::fs::create_dir_all(dir.join("packages").join("x").join("node_modules")).unwrap();
+    std::fs::write(
+        dir.join("packages")
+            .join("x")
+            .join("node_modules")
+            .join("e.js"),
+        "var e=1;",
+    )
+    .unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["js", "ts"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("d.ts")),
+        "src/d.ts must survive, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only src/d.ts should survive the default excludes, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn populate_flat_files_with_extension(dir: &Path, count: usize, extension: &str) {
+    for i in 0..count {
+        std::fs::write(dir.join(format!("f{i}.{extension}")), "").expect("create fixture file");
+    }
+}
+
+#[test]
+fn a_nested_node_modules_over_the_entry_cap_is_pruned_at_walk_time_not_counted() {
+    let dir = isolated_walk_dir("nested_node_modules_over_cap");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.ts"), "const keep = 1;").unwrap();
+    let nested_node_modules = dir.join("packages").join("x").join("node_modules");
+    std::fs::create_dir_all(&nested_node_modules).unwrap();
+    // One entry OVER MAX_WALK_ENTRIES (50_000, production) — if this
+    // subtree were only filtered post-walk (not pruned during descent),
+    // the walker would still visit every one of these entries and abort
+    // before src/keep.ts is ever reached.
+    populate_flat_files_with_extension(&nested_node_modules, 50_001, "js");
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["js", "ts"], &FileFilter::unrestricted())
+        .expect(
+            "a nested node_modules/ over MAX_WALK_ENTRIES must be pruned at \
+             walk time, not fully enumerated then filtered — the walk must \
+             succeed",
+        );
+
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.ts")),
+        "src/keep.ts must survive, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only src/keep.ts should survive, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

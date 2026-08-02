@@ -363,7 +363,39 @@ fn include_exclude_and_respect_gitignore_are_parsed_into_the_filter() {
         .expect("read should succeed")
         .expect("file was present");
     assert_eq!(config.file_filter().include(), &["src/**".to_string()]);
-    assert_eq!(config.file_filter().exclude(), &["target/**".to_string()]);
+    // #34 T2: exclude is now the UNION of the config file's own list with
+    // the standing DEFAULT_EXCLUDES — a config file cannot opt out of them.
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "target/**"));
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "node_modules/**"));
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "**/node_modules/**"));
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "dist/**"));
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "**/*.min.js"));
+    assert_eq!(
+        config.file_filter().exclude().len(),
+        5,
+        "got {:?}",
+        config.file_filter().exclude()
+    );
     assert!(!config.file_filter().respect_gitignore());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -507,7 +539,20 @@ fn syntactically_odd_but_shape_valid_glob_parses_successfully_here() {
     let config = result
         .expect("read should succeed — glob syntax is validated at walk time, not here")
         .expect("file was present");
-    assert_eq!(config.file_filter().exclude(), &["src/[".to_string()]);
+    // #34 T2: the union still carries the odd-but-valid-shape user pattern
+    // AND the standing defaults.
+    assert!(config.file_filter().exclude().iter().any(|p| p == "src/["));
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "node_modules/**"));
+    assert_eq!(
+        config.file_filter().exclude().len(),
+        5,
+        "got {:?}",
+        config.file_filter().exclude()
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
