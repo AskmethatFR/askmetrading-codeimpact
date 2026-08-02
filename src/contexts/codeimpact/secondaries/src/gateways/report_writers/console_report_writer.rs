@@ -406,6 +406,17 @@ impl ConsoleReportWriter {
 
         writeln!(writer, "=== Résumé du projet ===").unwrap();
         writeln!(writer, "Fichiers analysés: {}", aggregated.total_files).unwrap();
+        // #34 T2 MED-1 (ADR-0010): never skipped, even when 0 — a file
+        // dropped by a standing default (node_modules/, dist/, target/, a
+        // minified file) is exactly the kind of unmeasured thing this tool
+        // must say out loud, and "0" is itself an honest, meaningful
+        // answer ("nothing was excluded by default here").
+        writeln!(
+            writer,
+            "Fichiers exclus par défaut: {}",
+            aggregated.default_excluded_files_count
+        )
+        .unwrap();
         writeln!(
             writer,
             "Dépendances totales: {}",

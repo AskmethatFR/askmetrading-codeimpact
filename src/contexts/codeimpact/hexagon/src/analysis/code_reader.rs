@@ -4,6 +4,46 @@ use super::analysis_target::AnalysisTarget;
 use super::errors::AnalysisError;
 use super::file_filter::FileFilter;
 
+/// The result of walking a directory for source files (#34 T2 MED-1,
+/// ADR-0010): alongside the file list itself, surfaces how many walk
+/// entries were dropped specifically because of a `DEFAULT_EXCLUDES`
+/// pattern — a file skipped by a standing default (`node_modules/`,
+/// `dist/`, `target/`, a minified file) is precisely the kind of
+/// unmeasured thing ADR-0010 says the tool must say out loud, not pass
+/// over in silence.
+///
+/// `default_excluded_count` is a COUNT OF PRUNED WALK ENTRIES, not a file
+/// count: a walk-time-pruned directory (an entire `node_modules/`, say)
+/// counts as ONE entry regardless of how many files live inside it,
+/// because pruning means its contents are never enumerated to begin with
+/// — the tool cannot honestly report a file count it never computed. A
+/// file dropped by the post-walk fallback (e.g. `**/*.min.js`, which is
+/// never walk-time-safe) IS counted individually, since that one file is
+/// known precisely. Either way the count only includes entries that would
+/// otherwise have been eligible (matching extension/include) — a file
+/// dropped for an unrelated reason (wrong extension, excluded by the
+/// user's OWN pattern) is not attributed to the standing defaults.
+///
+/// `Deref<Target = Vec<PathBuf>>` (deliberate): this struct replaces
+/// `list_source_files`'s previous bare `Vec<PathBuf>` return value, and
+/// every pre-existing call site across the codebase only ever read the
+/// file list itself (`.iter()`, `.len()`, indexing) — Deref lets those
+/// keep compiling and behaving identically, while the one new field is
+/// reached explicitly by the handful of call sites that actually need it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceFileListing {
+    pub files: Vec<PathBuf>,
+    pub default_excluded_count: usize,
+}
+
+impl std::ops::Deref for SourceFileListing {
+    type Target = Vec<PathBuf>;
+
+    fn deref(&self) -> &Vec<PathBuf> {
+        &self.files
+    }
+}
+
 pub trait CodeReader: Send + Sync {
     fn read_source(&self, target: &AnalysisTarget) -> Result<String, AnalysisError>;
 
@@ -14,16 +54,19 @@ pub trait CodeReader: Send + Sync {
     /// preserve today's behavior exactly. `filter` (US31) additionally
     /// restricts the walk to files matching `include` (when non-empty) and
     /// not matching `exclude`, and optionally honors `.gitignore`.
-    /// `FileFilter::unrestricted()` reproduces the pre-US31 walk exactly
-    /// (D4). The two filters compose: a file is kept iff its extension is
-    /// in `extensions` AND `filter`'s include/exclude/gitignore predicate
-    /// holds.
+    /// `FileFilter::unrestricted()` no longer reproduces the pre-US31 walk
+    /// byte-for-byte (F2/F3, #34 T2 review sweep): it carries no *user*
+    /// restriction, but it DOES carry the standing `DEFAULT_EXCLUDES`
+    /// (#34 T2) — vendored/generated/build-artifact output is excluded
+    /// even with no config file at all. The two filters compose: a file is
+    /// kept iff its extension is in `extensions` AND `filter`'s
+    /// include/exclude/gitignore predicate holds.
     fn list_source_files(
         &self,
         dir: &Path,
         extensions: &[&str],
         filter: &FileFilter,
-    ) -> Result<Vec<PathBuf>, AnalysisError>;
+    ) -> Result<SourceFileListing, AnalysisError>;
 
     /// Resolves `dir` to the SAME canonical representation
     /// `list_source_files` returns its paths in (US16 T5, Security

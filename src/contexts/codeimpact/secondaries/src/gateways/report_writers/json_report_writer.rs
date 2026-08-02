@@ -68,6 +68,14 @@ struct MetricsDto {
     /// ("no file failed"), unlike an omitted array which would leave the
     /// count implicit.
     unmeasurable_files_count: usize,
+    /// Count of walk entries dropped by a standing `DEFAULT_EXCLUDES`
+    /// pattern (#34 T2 MED-1, ADR-0010) — never skipped, same "0 is an
+    /// honest answer" convention as `unmeasurable_files_count`. Always 0
+    /// for a single-file report (D3, #50-style: no notion of a directory
+    /// walk at all for one file). See
+    /// `SourceFileListing::default_excluded_count` for the exact
+    /// entries-vs-files semantics.
+    default_excluded_files_count: usize,
     /// Loop-nested calls whose receiver could not be classified at all
     /// (#56 T2, `IoClassification::Unknown`) — an aggregate signal only
     /// (ADR-0010/ADR-0014 §4). `None` (T3 #33) exactly when `io_in_loops`
@@ -435,6 +443,7 @@ pub fn serialize_metrics(
             // measure — that is a project-level concept (D3, #50).
             unmeasurable_files: vec![],
             unmeasurable_files_count: 0,
+            default_excluded_files_count: 0,
             unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(metrics.threshold_report()),
             metric_support: metric_support_dto(metrics.capabilities()),
@@ -511,6 +520,7 @@ pub fn serialize_project_metrics(
             io_in_loops,
             unmeasurable_files_count: unmeasurable_files.len(),
             unmeasurable_files,
+            default_excluded_files_count: aggregated.default_excluded_files_count,
             unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(graph.threshold_report()),
             metric_support: metric_support_dto_from_aggregate(&aggregated.metric_support),

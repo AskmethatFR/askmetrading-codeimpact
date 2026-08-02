@@ -46,6 +46,13 @@ pub struct FileConsumptionGraph {
     /// (distinct from `Some(report)` with an empty `breaches()`, which
     /// means thresholds WERE evaluated and none breached).
     threshold_report: Option<ThresholdReport>,
+    /// Count of walk entries dropped by a standing `DEFAULT_EXCLUDES`
+    /// pattern (#34 T2 MED-1, ADR-0010) — see
+    /// `SourceFileListing::default_excluded_count` for the exact
+    /// entries-vs-files semantics. Zero by default (no calling use case
+    /// ever attached one — a stub-backed `CodeReader` in a unit test,
+    /// say).
+    default_excluded_count: usize,
 }
 
 impl FileConsumptionGraph {
@@ -117,6 +124,7 @@ impl FileConsumptionGraph {
             max_depth,
             unmeasurable_files: Vec::new(),
             threshold_report: None,
+            default_excluded_count: 0,
         })
     }
 
@@ -131,6 +139,21 @@ impl FileConsumptionGraph {
     /// Files that could not be measured — see `UnmeasurableFile`.
     pub fn unmeasurable_files(&self) -> &[UnmeasurableFile] {
         &self.unmeasurable_files
+    }
+
+    /// Attaches the count of walk entries a standing `DEFAULT_EXCLUDES`
+    /// pattern dropped (#34 T2 MED-1) — builder style, mirroring
+    /// `with_unmeasurable_files`.
+    pub fn with_default_excluded_count(mut self, count: usize) -> Self {
+        self.default_excluded_count = count;
+        self
+    }
+
+    /// Count of walk entries dropped by a standing default exclude — see
+    /// `SourceFileListing::default_excluded_count` for the exact
+    /// entries-vs-files semantics.
+    pub fn default_excluded_count(&self) -> usize {
+        self.default_excluded_count
     }
 
     /// Attaches the outcome of evaluating this project's aggregate impact
@@ -248,6 +271,7 @@ impl FileConsumptionGraph {
             total_economic_impact,
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
+            default_excluded_files_count: self.default_excluded_count,
             median_file_cyclomatic_complexity: median_cyclomatic_complexity(&self.per_file_metrics),
             metric_support: AggregateMetricSupport::fold(
                 self.per_file_metrics.values().map(|m| m.capabilities()),
@@ -456,6 +480,14 @@ pub struct ProjectMetrics {
     /// `total_files` keeps its existing meaning (MEASURED files only): this
     /// is a separate counter, not folded into it (D3, #50).
     pub unmeasurable_files: usize,
+    /// Count of walk entries dropped by a standing `DEFAULT_EXCLUDES`
+    /// pattern (#34 T2 MED-1, ADR-0010: the tool must say what it did not
+    /// measure — a file skipped by default is exactly that). A COUNT OF
+    /// PRUNED WALK ENTRIES, not a file count — see
+    /// `SourceFileListing::default_excluded_count` for why a walk-time-
+    /// pruned directory counts as ONE entry regardless of how many files
+    /// live inside it.
+    pub default_excluded_files_count: usize,
     /// Median of MEASURED files' `cyclomatic_complexity()` — the number
     /// `complexity_level()` judges, not `total_cyclomatic_complexity`. The
     /// total is off the per-file scale `complexity_level_for` was

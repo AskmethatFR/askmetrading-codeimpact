@@ -4,6 +4,7 @@ use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
+use codeimpact_hexagon::analysis::SourceFileListing;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
@@ -192,7 +193,7 @@ impl CodeReader for FileSystemCodeReader {
         dir: &Path,
         extensions: &[&str],
         filter: &FileFilter,
-    ) -> Result<Vec<PathBuf>, AnalysisError> {
+    ) -> Result<SourceFileListing, AnalysisError> {
         let canonical_root = std::fs::canonicalize(dir)
             .map_err(|_| AnalysisError::IoError("dossier introuvable".to_string()))?;
 
@@ -203,8 +204,26 @@ impl CodeReader for FileSystemCodeReader {
         let fallback_exclude_set = build_glob_set(&fallback_exclude)?;
         let fallback_exclude_is_empty = fallback_exclude.is_empty();
         let exclude_overrides = build_exclude_overrides(&canonical_root, &walk_time_exclude)?;
+        // #34 T2 MED-1 (ADR-0010): a SEPARATE, additive glob check over
+        // JUST the DEFAULT_EXCLUDES-derived subset of `exclude()` — built
+        // once here, checked (read-only) alongside the EXISTING exclusion
+        // decisions below, never replacing them. Matching against the full
+        // relative path works uniformly for both a real file (the
+        // **/*.min.js case, never walk-time-safe) and a directory PROBED
+        // with a synthetic trailing component (see the walk loop below) —
+        // globset's own `<literal>/**` / `**/<literal>/**` semantics
+        // require "something after the literal" to match, which a bare
+        // directory path never has on its own.
+        let default_exclude_patterns: Vec<String> = filter
+            .default_exclude_patterns()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let default_exclude_set = build_glob_set(&default_exclude_patterns)?;
+        let default_exclude_is_empty = default_exclude_patterns.is_empty();
 
         let mut files = Vec::new();
+        let mut default_excluded_count: usize = 0;
         let mut entries_visited: usize = 0;
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
@@ -252,6 +271,32 @@ impl CodeReader for FileSystemCodeReader {
                 Ok(entry) => {
                     let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
                     if !is_file {
+                        // #34 T2 MED-1: a DIRECTORY entry reaching here is
+                        // either a normal directory the walker is about to
+                        // descend into, or one whose contents were just
+                        // PRUNED by a walk-time Override match (the walker
+                        // still yields the directory entry itself, per
+                        // `ignore`'s own traversal order, even though it
+                        // never recurses into it — confirmed empirically).
+                        // A bare directory path never satisfies a
+                        // `<literal>/**` glob on its own (the trailing
+                        // `/**` requires "something after"), so probe with
+                        // a synthetic child component to ask "would
+                        // anything under here match a default exclude" —
+                        // if yes, this ONE walk entry represents an entire
+                        // subtree pruned because of a standing default;
+                        // count the ENTRY, not a file count we never
+                        // computed (that's the whole point of pruning).
+                        if !default_exclude_is_empty {
+                            let relative = entry
+                                .path()
+                                .strip_prefix(&canonical_root)
+                                .unwrap_or(entry.path());
+                            let probe = relative.join("__codeimpact_default_excluded_probe__");
+                            if default_exclude_set.is_match(&probe) {
+                                default_excluded_count += 1;
+                            }
+                        }
                         continue;
                     }
                     let path = entry.path();
@@ -271,6 +316,13 @@ impl CodeReader for FileSystemCodeReader {
                     // pattern NOT dialect-safe for walk-time pruning still
                     // gets the pre-#96 post-walk globset check here.
                     if !fallback_exclude_is_empty && fallback_exclude_set.is_match(relative) {
+                        // #34 T2 MED-1: this FILE (not a pruned subtree —
+                        // an exact, precisely-known entry) is additionally
+                        // attributable to a standing default when its
+                        // path ALSO matches the default-only subset.
+                        if !default_exclude_is_empty && default_exclude_set.is_match(relative) {
+                            default_excluded_count += 1;
+                        }
                         continue;
                     }
                     match std::fs::metadata(path) {
@@ -297,7 +349,10 @@ impl CodeReader for FileSystemCodeReader {
             }
         }
 
-        Ok(files)
+        Ok(SourceFileListing {
+            files,
+            default_excluded_count,
+        })
     }
 
     /// Real canonicalization (US16 T5, Security CRITICAL retry #1) —
