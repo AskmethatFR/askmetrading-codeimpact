@@ -843,6 +843,7 @@ fn walk_exceeding_the_entry_cap_aborts_early_naming_the_limit_under_both_gitigno
 //    stay green even without it, since the post-walk `GlobSet` fallback
 //    already matches `**/node_modules/**` correctly for a small fixture.
 
+// @scenario: typescript-javascript-analysis/S5
 #[test]
 fn default_excludes_drop_node_modules_dist_and_minified_files_via_unrestricted_filter() {
     let dir = isolated_walk_dir("default_excludes");
@@ -888,6 +889,7 @@ fn populate_flat_files_with_extension(dir: &Path, count: usize, extension: &str)
     }
 }
 
+// @scenario: typescript-javascript-analysis/S5
 #[test]
 fn a_nested_node_modules_over_the_entry_cap_is_pruned_at_walk_time_not_counted() {
     let dir = isolated_walk_dir("nested_node_modules_over_cap");
