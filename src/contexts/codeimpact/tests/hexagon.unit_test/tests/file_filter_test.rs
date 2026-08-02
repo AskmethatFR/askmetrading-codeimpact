@@ -46,6 +46,23 @@ use codeimpact_hexagon::analysis::{FileFilter, FileFilterError};
 //     `target/**` dropped from the list is not good enough)
 // 13. the MAX_PATTERN_COUNT boundary moves again with 5 defaults (251, not
 //     252) — updated deliberately below, visible in the diff
+//
+// Test List (#34 T2 review sweep, LOW-2 — Security reproduced: a nested
+// build dir, e.g. `services/api/target/` in a polyglot monorepo, still
+// blows MAX_WALK_ENTRIES because only the root-anchored `target/**` was
+// added, not its nested twin — the exact gap `node_modules/**` already
+// closed with `**/node_modules/**`. `dist/**` stays root-only by explicit
+// ruling; `target/**`'s justification (build artifacts exhaust the walk
+// cap) is depth-independent, unlike dist's):
+// 14. `**/target/**` is present too (per-entry, same bar) — MAX_PATTERN_COUNT
+//     moves ONE MORE TIME (six defaults -> 250 room-for-defaults boundary)
+//
+// Test List (#34 T2 review sweep, F6/LOW-1 — Dev-B AND Security both flagged
+// the TooManyPatterns message as opaque: a user who wrote 251 patterns sees
+// a raw total that appears nowhere in their own file and has to reverse-
+// engineer the default-count subtraction themselves):
+// 15. the error names user-supplied count + defaults-added count + total,
+//     not just the opaque total
 
 #[test]
 fn unrestricted_has_no_include_patterns_and_gitignore_off() {
@@ -85,9 +102,17 @@ fn unrestricted_carries_every_default_exclude_entry() {
          MAX_WALK_ENTRIES for a built Rust repo), got {:?}",
         filter.exclude()
     );
+    assert!(
+        filter.exclude().iter().any(|p| p == "**/target/**"),
+        "missing **/target/** (LOW-2 — a nested build dir, e.g. \
+         services/api/target/, blows MAX_WALK_ENTRIES the same way a \
+         nested node_modules/ did before **/node_modules/** closed that \
+         gap), got {:?}",
+        filter.exclude()
+    );
     assert_eq!(
         filter.exclude().len(),
-        5,
+        6,
         "no unexpected extra entries, got {:?}",
         filter.exclude()
     );
@@ -109,7 +134,8 @@ fn new_with_valid_patterns_exposes_include_and_unions_exclude_with_defaults() {
     assert!(filter.exclude().iter().any(|p| p == "dist/**"));
     assert!(filter.exclude().iter().any(|p| p == "**/*.min.js"));
     assert!(filter.exclude().iter().any(|p| p == "target/**"));
-    assert_eq!(filter.exclude().len(), 6, "got {:?}", filter.exclude());
+    assert!(filter.exclude().iter().any(|p| p == "**/target/**"));
+    assert_eq!(filter.exclude().len(), 7, "got {:?}", filter.exclude());
     assert!(filter.respect_gitignore());
 }
 
@@ -126,7 +152,12 @@ fn new_with_empty_exclude_still_carries_every_default_exclude_entry() {
         "missing target/**, got {:?}",
         filter.exclude()
     );
-    assert_eq!(filter.exclude().len(), 5, "got {:?}", filter.exclude());
+    assert!(
+        filter.exclude().iter().any(|p| p == "**/target/**"),
+        "missing **/target/**, got {:?}",
+        filter.exclude()
+    );
+    assert_eq!(filter.exclude().len(), 6, "got {:?}", filter.exclude());
 }
 
 #[test]
@@ -143,8 +174,8 @@ fn new_does_not_duplicate_a_user_pattern_that_already_equals_a_default_exclude()
     );
     assert_eq!(
         filter.exclude().len(),
-        5,
-        "the union must still total exactly the 5 DEFAULT_EXCLUDES entries \
+        6,
+        "the union must still total exactly the 6 DEFAULT_EXCLUDES entries \
          (the user's dist/** collapsed into the matching default), got {:?}",
         filter.exclude()
     );
@@ -194,10 +225,18 @@ fn too_many_patterns_is_rejected_even_when_each_pattern_is_individually_valid() 
     let include: Vec<String> = (0..257).map(|i| format!("src/mod_{}/**", i)).collect();
     let result = FileFilter::new(include, vec![], false);
     match result {
-        // 257 user include patterns + 5 unioned DEFAULT_EXCLUDES = 262: the
+        // 257 user include patterns + 6 unioned DEFAULT_EXCLUDES = 263: the
         // cap is enforced on the UNION, not the user's list alone (#34 T2).
-        Err(FileFilterError::TooManyPatterns(count)) => assert_eq!(count, 262),
-        other => panic!("expected TooManyPatterns(262), got {:?}", other),
+        Err(FileFilterError::TooManyPatterns {
+            user_supplied,
+            defaults_added,
+            total,
+        }) => {
+            assert_eq!(user_supplied, 257);
+            assert_eq!(defaults_added, 6);
+            assert_eq!(total, 263);
+        }
+        other => panic!("expected TooManyPatterns{{257, 6, 263}}, got {:?}", other),
     }
 }
 
@@ -215,38 +254,71 @@ fn pattern_of_exactly_the_max_length_is_still_accepted() {
 
 #[test]
 fn user_pattern_count_leaving_exact_room_for_the_defaults_is_still_accepted() {
-    // 256 (cap) - 5 (DEFAULT_EXCLUDES, now including target/**) = 251: the
-    // union lands exactly at the cap, discriminating a `>=` vs `>` mutant
-    // the same way the pre-#34 boundary test used to, but against the
-    // UNIONED total (#34 T2, moved again by the operator's target/** ruling).
-    let include: Vec<String> = (0..251).map(|i| format!("src/mod_{}/**", i)).collect();
+    // 256 (cap) - 6 (DEFAULT_EXCLUDES, now including **/target/**) = 250:
+    // the union lands exactly at the cap, discriminating a `>=` vs `>`
+    // mutant the same way the pre-#34 boundary test used to, but against
+    // the UNIONED total (#34 T2, moved again by the LOW-2 review sweep).
+    let include: Vec<String> = (0..250).map(|i| format!("src/mod_{}/**", i)).collect();
     let result = FileFilter::new(include.clone(), vec![], false);
     assert!(
         result.is_ok(),
-        "251 user patterns + 5 defaults = 256 (exact cap) must be accepted, got {:?}",
+        "250 user patterns + 6 defaults = 256 (exact cap) must be accepted, got {:?}",
         result
     );
-    assert_eq!(result.unwrap().include().len(), 251);
+    assert_eq!(result.unwrap().include().len(), 250);
 }
 
 #[test]
 fn a_user_pattern_count_at_the_former_exact_cap_now_fails_once_defaults_are_unioned() {
     // Pre-#34, 256 user patterns with no exclude sat exactly at the cap and
     // was accepted (see the old exactly_the_max_pattern_count_is_still_accepted
-    // test). Folding DEFAULT_EXCLUDES into new() adds 5 more entries to the
-    // union (now including target/**), pushing the total to 261 — this is
-    // the exact regression the tech spec calls out and requires pinning
+    // test). Folding DEFAULT_EXCLUDES into new() adds 6 more entries to the
+    // union (now including **/target/**), pushing the total to 262 — this
+    // is the exact regression the tech spec calls out and requires pinning
     // with a test.
     let include: Vec<String> = (0..256).map(|i| format!("src/mod_{}/**", i)).collect();
     let result = FileFilter::new(include, vec![], false);
     match result {
-        Err(FileFilterError::TooManyPatterns(count)) => assert_eq!(count, 261),
+        Err(FileFilterError::TooManyPatterns {
+            user_supplied,
+            defaults_added,
+            total,
+        }) => {
+            assert_eq!(user_supplied, 256);
+            assert_eq!(defaults_added, 6);
+            assert_eq!(total, 262);
+        }
         other => panic!(
-            "256 user patterns + 5 unioned defaults must now exceed the cap \
-             with TooManyPatterns(261), got {:?}",
+            "256 user patterns + 6 unioned defaults must now exceed the cap \
+             with TooManyPatterns{{256, 6, 262}}, got {:?}",
             other
         ),
     }
+}
+
+#[test]
+fn too_many_patterns_error_message_shows_the_user_vs_default_breakdown() {
+    // F6/LOW-1 (Dev-B + Security, #34 T2 review sweep) — the raw total
+    // alone is opaque: a user who wrote 251 patterns and sees "257" has to
+    // reverse-engineer the default-count subtraction themselves.
+    let include: Vec<String> = (0..251).map(|i| format!("src/mod_{}/**", i)).collect();
+    let err = FileFilter::new(include, vec![], false).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("251 fournis"),
+        "must show the user-supplied count as \"251 fournis\", got: {}",
+        message
+    );
+    assert!(
+        message.contains("6 exclusions par défaut"),
+        "must show the defaults-added count as \"6 exclusions par défaut\", got: {}",
+        message
+    );
+    assert!(
+        message.contains("= 257"),
+        "must show the total as \"= 257\", got: {}",
+        message
+    );
 }
 
 #[test]

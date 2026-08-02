@@ -134,6 +134,42 @@ fn write_project_report_without_impacts() {
     assert!(result.is_ok());
 }
 
+// MED-1 (#34 T2 review sweep, Security MEDIUM, ADR-0010) — never skipped,
+// even when 0 (see console_report_writer.rs's own comment on the same
+// convention `unmeasurable_files_count`/`default_excluded_files_count`
+// already follow in the JSON writer).
+#[test]
+fn write_project_report_shows_default_excluded_count() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_default_excluded_count(4);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Fichiers exclus par défaut: 4"),
+        "expected the exact count in the summary, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_shows_zero_default_excluded_count_by_default() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Fichiers exclus par défaut: 0"),
+        "zero must still be printed (never skipped), got: {}",
+        output
+    );
+}
+
 #[test]
 fn write_console_with_io_in_loops() {
     let writer = ConsoleReportWriter::new();
