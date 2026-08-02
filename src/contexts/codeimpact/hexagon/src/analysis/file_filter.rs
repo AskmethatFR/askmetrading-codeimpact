@@ -9,8 +9,8 @@ const MAX_PATTERN_LENGTH: usize = 512;
 /// adapter would pay compiling `include` + `exclude` together.
 const MAX_PATTERN_COUNT: usize = 256;
 
-/// Standing default excludes (#34 T2, US17): vendored and generated
-/// JS/TS output that must never be analyzed, whether or not a
+/// Standing default excludes (#34 T2, US17): vendored, generated, and
+/// build-artifact output that must never be analyzed, whether or not a
 /// `.codeimpact.json` is present. `node_modules/**` covers a
 /// project-root-level `node_modules/`; `**/node_modules/**` additionally
 /// covers a nested one (`packages/a/node_modules/`, a real npm workspace
@@ -21,14 +21,26 @@ const MAX_PATTERN_COUNT: usize = 256;
 /// nested `dist/` is not implied by this ticket and is left to the user's
 /// own `exclude` list. `**/*.min.js` matches a minified file at any depth;
 /// `Path::extension()`'s single-segment semantics mean this can only ever
-/// be reached via a glob, never an extension check. `target/**` is
-/// deliberately NOT here (operator ruling): it would silently change
-/// behavior for existing Rust projects.
+/// be reached via a glob, never an extension check.
+///
+/// `target/**` (#34 T2 follow-up, operator ruling): the original tech spec
+/// excluded it deliberately, reasoning it would silently change behavior
+/// for existing Rust projects. Dogfooding this repository at FULL scale
+/// (`codeimpact analyze --path .`, not just the ticket's named
+/// `node_modules`-heavy subtree) showed the opposite — `target/`, a Rust
+/// build directory, is what actually exhausts `MAX_WALK_ENTRIES` for any
+/// already-built Rust repo, before the walk ever reaches real sources.
+/// The "behavior change" the original ruling worried about IS analyzing
+/// generated build artifacts, which is exactly what nobody wants. It is a
+/// root-anchored `<literal>/**` shape, so it is already walk-time-prunable
+/// through the existing `is_dialect_safe_prune_pattern` predicate with no
+/// change needed there.
 pub const DEFAULT_EXCLUDES: &[&str] = &[
     "node_modules/**",
     "**/node_modules/**",
     "dist/**",
     "**/*.min.js",
+    "target/**",
 ];
 
 /// Order-preserving union of `user_exclude` with `DEFAULT_EXCLUDES`: every
@@ -36,6 +48,10 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
 /// (exact string match) is appended once. Shared by `unrestricted()` and
 /// `new()` (ddd-value-object: the invariant is enforced AT construction so
 /// neither caller can bypass it — see #34 T2).
+///
+/// User patterns are deliberately kept FIRST: a user reading their
+/// effective exclude list back should see what THEY wrote at the top, not
+/// have their own intent buried underneath the standing defaults.
 fn union_with_default_excludes(user_exclude: Vec<String>) -> Vec<String> {
     let mut union = user_exclude;
     for default in DEFAULT_EXCLUDES {
