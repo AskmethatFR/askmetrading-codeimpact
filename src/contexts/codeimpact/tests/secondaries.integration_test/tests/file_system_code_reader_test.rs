@@ -1214,15 +1214,23 @@ fn default_excluded_count_reflects_pruned_entries_not_a_file_count() {
     // (3) a minified file — post-walk fallback (never walk-time-safe),
     // counted as one precise file.
     std::fs::write(dir.join("app.min.js"), "var x=1;").unwrap();
-    // (4) a file excluded by the USER's own pattern, not a default — must
-    // NOT be attributed to default_excluded_count.
-    std::fs::create_dir_all(dir.join("custom_excluded")).unwrap();
-    std::fs::write(dir.join("custom_excluded").join("d.ts"), "const d=1;").unwrap();
+    // (4) a file excluded by the USER's own (non-default) pattern, NOT
+    // walk-time-safe (contains a wildcard, so it reaches the SAME
+    // post-walk fallback check as app.min.js above) — must NOT be
+    // attributed to default_excluded_count. Deliberately routed through
+    // the fallback path, not walk-time pruning: `!default_exclude_is_empty`
+    // is always true (6 standing defaults always present), so a mutant
+    // replacing the `&&` in that check with `||` would wrongly count
+    // ANY fallback-matched file, default or not — this row is what
+    // actually discriminates that mutant (a custom_excluded/**-style
+    // walk-time-safe pattern never reaches the fallback check at all,
+    // so it could not have caught it).
+    std::fs::write(dir.join("weird.custom.ts"), "const d=1;").unwrap();
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src").join("keep.ts"), "const keep=1;").unwrap();
 
     let reader = FileSystemCodeReader::new();
-    let filter = FileFilter::new(vec![], vec!["custom_excluded/**".to_string()], false).unwrap();
+    let filter = FileFilter::new(vec![], vec!["**/*.custom.ts".to_string()], false).unwrap();
     let listing = reader
         .list_source_files(&dir, &["js", "ts"], &filter)
         .expect("walk should succeed");
@@ -1242,8 +1250,8 @@ fn default_excluded_count_reflects_pruned_entries_not_a_file_count() {
         listing.default_excluded_count, 3,
         "expected exactly 3 (node_modules/ pruned as ONE entry + dist/ \
          pruned as ONE entry + app.min.js counted as one file) — \
-         custom_excluded/ must NOT be counted (it's the user's own \
-         pattern, not a default), got {}",
+         weird.custom.ts must NOT be counted (it's the user's own \
+         non-default fallback pattern), got {}",
         listing.default_excluded_count
     );
 }
