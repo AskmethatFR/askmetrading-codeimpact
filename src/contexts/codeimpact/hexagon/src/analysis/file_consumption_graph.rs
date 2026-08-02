@@ -143,17 +143,17 @@ impl FileConsumptionGraph {
 
     /// Attaches the count of walk entries a standing `DEFAULT_EXCLUDES`
     /// pattern dropped (#34 T2 MED-1) — builder style, mirroring
-    /// `with_unmeasurable_files`.
+    /// `with_unmeasurable_files`. No standalone getter (mutation gate,
+    /// #34 T2 review sweep, cc-yagni): unlike `unmeasurable_files()`,
+    /// which exposes a DETAILED LIST no other surface carries, this value
+    /// is a plain count already fully exposed via
+    /// `aggregated_metrics().default_excluded_files_count` — a second
+    /// accessor for the exact same number had no calling use case and
+    /// mutation-tested as dead (both `replace ... with 0` and `with 1`
+    /// survived, because nothing ever called it).
     pub fn with_default_excluded_count(mut self, count: usize) -> Self {
         self.default_excluded_count = count;
         self
-    }
-
-    /// Count of walk entries dropped by a standing default exclude — see
-    /// `SourceFileListing::default_excluded_count` for the exact
-    /// entries-vs-files semantics.
-    pub fn default_excluded_count(&self) -> usize {
-        self.default_excluded_count
     }
 
     /// Attaches the outcome of evaluating this project's aggregate impact
