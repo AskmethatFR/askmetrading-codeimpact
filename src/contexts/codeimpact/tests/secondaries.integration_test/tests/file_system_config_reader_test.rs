@@ -547,9 +547,14 @@ fn syntactically_odd_but_shape_valid_glob_parses_successfully_here() {
         .exclude()
         .iter()
         .any(|p| p == "node_modules/**"));
+    assert!(config
+        .file_filter()
+        .exclude()
+        .iter()
+        .any(|p| p == "target/**"));
     assert_eq!(
         config.file_filter().exclude().len(),
-        5,
+        6,
         "got {:?}",
         config.file_filter().exclude()
     );

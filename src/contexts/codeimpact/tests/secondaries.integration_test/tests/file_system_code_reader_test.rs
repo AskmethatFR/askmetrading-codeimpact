@@ -568,16 +568,21 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     // dramatically cheaper than fully enumerating it — if it is only
     // filtered post-walk (the pre-#96 bug), both walks pay the same
     // directory-descent cost and the ratio collapses to ~1.
-    // Nested two levels deep (target/dN/eM/), not flat: the walk-time win
-    // comes from PRUNING descent past the first excluded level, so the
-    // fixture must have enough sub-levels below that first match for a
-    // regression (full recursive descent) to actually cost extra directory
-    // reads. A flat "target/<20000 single-file dirs>" shape under-measures
-    // this, since both walks pay the same single readdir into `target`
-    // either way.
+    // Nested two levels deep (perf_fixture_subtree/dN/eM/), not flat: the
+    // walk-time win comes from PRUNING descent past the first excluded
+    // level, so the fixture must have enough sub-levels below that first
+    // match for a regression (full recursive descent) to actually cost
+    // extra directory reads. A flat "<subtree>/<20000 single-file dirs>"
+    // shape under-measures this, since both walks pay the same single
+    // readdir into the subtree either way.
+    //
+    // Deliberately NOT named "target" (#34 T2 follow-up): target/** is now
+    // itself a DEFAULT_EXCLUDES entry, so FileFilter::unrestricted() below
+    // — this test's "full enumeration" BASELINE — would silently exclude
+    // it too, collapsing the comparison to 1 vs 1 instead of 1 vs 2501.
     let dir = isolated_walk_dir("exclude_perf_smoke");
     std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
-    let excluded_root = dir.join("target");
+    let excluded_root = dir.join("perf_fixture_subtree");
     for i in 0..50 {
         for j in 0..50 {
             let sub = excluded_root.join(format!("d{i}")).join(format!("e{j}"));
@@ -587,7 +592,8 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     }
 
     let reader = FileSystemCodeReader::new();
-    let exclude_filter = FileFilter::new(vec![], vec!["target/**".to_string()], false).unwrap();
+    let exclude_filter =
+        FileFilter::new(vec![], vec!["perf_fixture_subtree/**".to_string()], false).unwrap();
 
     let excluded_start = std::time::Instant::now();
     let excluded_files = reader
