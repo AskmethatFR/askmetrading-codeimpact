@@ -708,10 +708,24 @@ fn handle_project_produces_a_report_when_a_dependency_target_is_unmeasurable() {
         calls_in_loops: vec![],
     }])
     .with_resolved_dependencies(Ok(vec![PathBuf::from("src/huge.cs")]));
-    let csharp_parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
-        "OVERSIZED",
-        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
-    );
+    // MAJOR-1 (Dev B, retry 1) — huge.cs also resolves a dependency of its
+    // OWN, onto the known-good file, even though it never made it into
+    // per_file. `run_analysis`'s per-file loop calls resolve_dependencies
+    // unconditionally after the analyze match, whether analyze succeeded or
+    // not (run_analysis.rs:112-170), so a file that failed analysis can
+    // still be an edge's `from` — this is the production trajectory a C#
+    // file over 1 MiB actually takes: source_guard refuses it for metrics,
+    // but the real tree-sitter parser resolves its `using`s regardless.
+    // Without this second edge, only the `to`-side of the filter's `&&` is
+    // ever exercised (good.rs -> huge.cs), and cargo-mutants cannot isolate
+    // the `from` clause on its own (no mutant removes a single `&&`
+    // operand) — the gate stayed green with this whole clause untested.
+    let csharp_parser = CodeParserStub::with_functions(vec![])
+        .with_resolved_dependencies(Ok(vec![PathBuf::from("src/good.rs")]))
+        .failing_when_source_contains(
+            "OVERSIZED",
+            AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+        );
 
     let registry = ParserRegistry::new()
         .register(Language::Rust, Box::new(rust_parser))
