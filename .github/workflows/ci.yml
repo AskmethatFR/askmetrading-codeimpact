@@ -33,6 +33,39 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  feature-combos:
+    name: feature-combos
+    runs-on: ubuntu-latest
+    # #122: every other job here resolves the DEFAULT feature set, so a
+    # regression that only breaks an isolated language feature is invisible
+    # to CI. That is not hypothetical — #34 T1 shipped a diff where
+    # `--no-default-features --features lang-csharp` failed with 4 errors on
+    # a combination that compiled on main; the QA lane missed it precisely
+    # because it ran exactly what CI runs, and only the code-review lane
+    # caught it. `secondaries/Cargo.toml` declares per-language features as
+    # a design contract; this job is what makes that contract checkable.
+    # `cargo check` (not build/test): a compile regression is the failure
+    # mode being guarded, and it keeps the job short.
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "lang-rust", "lang-csharp", "lang-typescript"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: check (features:${{ matrix.features }})
+        run: |
+          set -euo pipefail
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo check -p codeimpact_secondaries --no-default-features --all-targets
+          else
+            cargo check -p codeimpact_secondaries --no-default-features \
+              --features "${{ matrix.features }}" --all-targets
+          fi
+
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-latest
