@@ -686,9 +686,9 @@ fn project_json_marks_oversized_file_source_too_large() {
 // `handle_project_html` (share `build_project_graph_with_source_roots`,
 // mirrored right after).
 
+// @scenario: dependency-graph-integrity/S1
 #[test]
 fn handle_project_produces_a_report_when_a_dependency_target_is_unmeasurable() {
-    // @scenario: dependency-graph-integrity/S1
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
     reader.add_source(PathBuf::from("src/huge.cs"), "OVERSIZED".into());
@@ -745,9 +745,9 @@ fn handle_project_produces_a_report_when_a_dependency_target_is_unmeasurable() {
     assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceTooLarge);
 }
 
+// @scenario: dependency-graph-integrity/S1
 #[test]
 fn handle_project_json_produces_a_report_when_a_dependency_target_is_unmeasurable() {
-    // @scenario: dependency-graph-integrity/S1
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
     reader.add_source(PathBuf::from("src/huge.cs"), "OVERSIZED".into());
