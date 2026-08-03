@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
+use codeimpact_hexagon::analysis::SourceFileListing;
 
 #[derive(Default)]
 pub struct CodeReaderStub {
@@ -42,7 +43,10 @@ impl CodeReader for CodeReaderStub {
         _dir: &Path,
         _extensions: &[&str],
         _filter: &FileFilter,
-    ) -> Result<Vec<PathBuf>, AnalysisError> {
-        Ok(self.source_files.clone())
+    ) -> Result<SourceFileListing, AnalysisError> {
+        Ok(SourceFileListing {
+            files: self.source_files.clone(),
+            default_excluded_count: 0,
+        })
     }
 }

@@ -2245,6 +2245,56 @@ fn e2e_analyze_path_strict_without_breach_exits_0() {
     );
 }
 
+// MED-1 (#34 T2 review sweep, Security CRITICAL) — a project where every
+// file is dropped by a standing default exclude (here: the whole fixture
+// tree lives under dist/) previously reported an empty project and
+// `--strict` silently exited 0, exactly as if the gate had genuinely
+// evaluated a clean project. A hard error is the correct behavior — this
+// is an input/setup problem (nothing measured), not a threshold
+// @scenario: typescript-javascript-analysis/S7
+// evaluation, so it must NEVER read as "0" the way a real non-breach does.
+#[test]
+fn e2e_analyze_path_strict_on_zero_measured_files_does_not_exit_0() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_zero_measured_files_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("dist")).expect("create isolated dir");
+    std::fs::write(dir.join("dist").join("only.rs"), "fn only() {}").expect("write fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a project with zero measured files (every file under dist/, a \
+         standing default exclude) must NOT exit 0 under --strict — that \
+         reads identically to a genuinely clean, evaluated project. \
+         stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files could be analyzed"),
+        "the error must honestly say nothing could be analyzed, got stderr: {}",
+        stderr
+    );
+}
+
 // ── US31 (#31) — include/exclude/respectGitignore in `.codeimpact.json` ──
 //
 // The console writer prints "Fichiers analysés: N" (aggregated.total_files)

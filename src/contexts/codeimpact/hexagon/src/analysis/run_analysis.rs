@@ -147,7 +147,7 @@ impl RunAnalysis {
                 }
             }
 
-            let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.clone())
+            let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.to_vec())
                 .with_file_sources(Arc::clone(&file_sources))
                 .with_source_roots(source_roots.clone());
             match parser.resolve_dependencies(source, &ctx) {
@@ -169,8 +169,24 @@ impl RunAnalysis {
             }
         }
 
-        let graph =
-            FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable);
+        // MED-1 (#34 T2 review sweep, Security CRITICAL: --strict silently
+        // exited 0 on a zero-file analysis, e.g. every file filtered out by
+        // a default/user exclude) — mirrors the SAME guard
+        // `build_project_graph_with_source_roots` (JSON/HTML paths) already
+        // had; the console path was the one gap. A hard error, not a loud
+        // warning: this is an input/setup problem (nothing to measure), a
+        // DIFFERENT thing from a strict THRESHOLD breach (exit 3) — main.rs
+        // maps any Err to exit 1 regardless of --strict, so the CLI can
+        // never read "0" out of an analysis that measured nothing.
+        if per_file.is_empty() {
+            return Err(AnalysisError::AnalysisFailed(
+                "no files could be analyzed in the project".into(),
+            ));
+        }
+
+        let graph = FileConsumptionGraph::build(&per_file, all_deps)?
+            .with_unmeasurable_files(unmeasurable)
+            .with_default_excluded_count(files.default_excluded_count);
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_project_report(&graph)?;
@@ -409,7 +425,7 @@ impl RunAnalysis {
                 }
             }
 
-            let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.clone())
+            let ctx = DependencyContext::new(file.clone(), project_root.clone(), files.to_vec())
                 .with_file_sources(Arc::clone(&file_sources))
                 .with_source_roots(source_roots.clone());
             if let Ok(resolved) = parser.resolve_dependencies(source, &ctx) {
@@ -428,7 +444,9 @@ impl RunAnalysis {
             ));
         }
 
-        Ok(FileConsumptionGraph::build(&per_file, all_deps)?.with_unmeasurable_files(unmeasurable))
+        Ok(FileConsumptionGraph::build(&per_file, all_deps)?
+            .with_unmeasurable_files(unmeasurable)
+            .with_default_excluded_count(files.default_excluded_count))
     }
 }
 

@@ -41,7 +41,7 @@ pub use call_graph::CallGraph;
 pub use code_location::CodeLocation;
 pub use code_metrics::{complexity_level_for, CodeMetrics, FunctionDetail};
 pub use code_parser::{CodeParser, DependencyContext, LoopCall, ParsedFunction};
-pub use code_reader::CodeReader;
+pub use code_reader::{CodeReader, SourceFileListing};
 pub use complexity_detector::{
     ComplexityDetector, ComplexityWarning, DetectionConfig, WarningPattern, WarningSeverity,
 };

@@ -568,16 +568,21 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     // dramatically cheaper than fully enumerating it — if it is only
     // filtered post-walk (the pre-#96 bug), both walks pay the same
     // directory-descent cost and the ratio collapses to ~1.
-    // Nested two levels deep (target/dN/eM/), not flat: the walk-time win
-    // comes from PRUNING descent past the first excluded level, so the
-    // fixture must have enough sub-levels below that first match for a
-    // regression (full recursive descent) to actually cost extra directory
-    // reads. A flat "target/<20000 single-file dirs>" shape under-measures
-    // this, since both walks pay the same single readdir into `target`
-    // either way.
+    // Nested two levels deep (perf_fixture_subtree/dN/eM/), not flat: the
+    // walk-time win comes from PRUNING descent past the first excluded
+    // level, so the fixture must have enough sub-levels below that first
+    // match for a regression (full recursive descent) to actually cost
+    // extra directory reads. A flat "<subtree>/<20000 single-file dirs>"
+    // shape under-measures this, since both walks pay the same single
+    // readdir into the subtree either way.
+    //
+    // Deliberately NOT named "target" (#34 T2 follow-up): target/** is now
+    // itself a DEFAULT_EXCLUDES entry, so FileFilter::unrestricted() below
+    // — this test's "full enumeration" BASELINE — would silently exclude
+    // it too, collapsing the comparison to 1 vs 1 instead of 1 vs 2501.
     let dir = isolated_walk_dir("exclude_perf_smoke");
     std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
-    let excluded_root = dir.join("target");
+    let excluded_root = dir.join("perf_fixture_subtree");
     for i in 0..50 {
         for j in 0..50 {
             let sub = excluded_root.join(format!("d{i}")).join(format!("e{j}"));
@@ -587,7 +592,8 @@ fn exclude_prunes_a_large_nested_subtree_relative_to_full_enumeration() {
     }
 
     let reader = FileSystemCodeReader::new();
-    let exclude_filter = FileFilter::new(vec![], vec!["target/**".to_string()], false).unwrap();
+    let exclude_filter =
+        FileFilter::new(vec![], vec!["perf_fixture_subtree/**".to_string()], false).unwrap();
 
     let excluded_start = std::time::Instant::now();
     let excluded_files = reader
@@ -816,4 +822,456 @@ fn walk_exceeding_the_entry_cap_aborts_early_naming_the_limit_under_both_gitigno
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// #34 T2 (US17) — DEFAULT_EXCLUDES (FileFilter::unrestricted()/new(), #34 T2)
+// wired through the real filesystem walk: `node_modules/` (any depth),
+// `dist/` (root only, by ruling), and `*.min.js` (any depth) must never be
+// analyzed, with or without a `.codeimpact.json`.
+//
+// Test List:
+// 1. a project tree containing node_modules/, dist/, a *.min.js file, a
+//    nested packages/x/node_modules/, and a real source file -> only the
+//    real source file is listed, via FileFilter::unrestricted() (the
+//    no-config path). `list_source_files` does not care whether a filter
+//    came from unrestricted() or new() — both funnel through the same
+//    exclude() getter — so this single adapter-level test is sufficient
+//    proof that the union reaches the walk; new()'s own union behavior is
+//    already pinned at the VO level in file_filter_test.rs.
+// 2. the real proof of WHY this matters (MAX_WALK_ENTRIES, #34 T2 tech
+//    spec): a NESTED node_modules/ (packages/x/node_modules/) holding more
+//    files than MAX_WALK_ENTRIES must NOT abort the walk — only reachable
+//    if `**/node_modules/**` is pruned at WALK TIME (is_dialect_safe_
+//    prune_pattern's new `**/<literal>/**` shape), since a post-walk-only
+//    fallback would still visit (and count) every file underneath it
+//    before filtering, tripping the cap. This is the test that actually
+//    discriminates the `**/<literal>/**` extension — test 1 above would
+//    stay green even without it, since the post-walk `GlobSet` fallback
+//    already matches `**/node_modules/**` correctly for a small fixture.
+
+// @scenario: typescript-javascript-analysis/S5
+#[test]
+fn default_excludes_drop_node_modules_dist_and_minified_files_via_unrestricted_filter() {
+    let dir = isolated_walk_dir("default_excludes");
+    std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+    std::fs::write(dir.join("node_modules").join("a.js"), "var a=1;").unwrap();
+    std::fs::create_dir_all(dir.join("dist")).unwrap();
+    std::fs::write(dir.join("dist").join("b.js"), "var b=1;").unwrap();
+    std::fs::write(dir.join("c.min.js"), "var c=1;").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("d.ts"), "const d = 1;").unwrap();
+    std::fs::create_dir_all(dir.join("packages").join("x").join("node_modules")).unwrap();
+    std::fs::write(
+        dir.join("packages")
+            .join("x")
+            .join("node_modules")
+            .join("e.js"),
+        "var e=1;",
+    )
+    .unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["js", "ts"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("d.ts")),
+        "src/d.ts must survive, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only src/d.ts should survive the default excludes, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn populate_flat_files_with_extension(dir: &Path, count: usize, extension: &str) {
+    for i in 0..count {
+        std::fs::write(dir.join(format!("f{i}.{extension}")), "").expect("create fixture file");
+    }
+}
+
+// @scenario: typescript-javascript-analysis/S5
+#[test]
+fn a_nested_node_modules_over_the_entry_cap_is_pruned_at_walk_time_not_counted() {
+    let dir = isolated_walk_dir("nested_node_modules_over_cap");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.ts"), "const keep = 1;").unwrap();
+    let nested_node_modules = dir.join("packages").join("x").join("node_modules");
+    std::fs::create_dir_all(&nested_node_modules).unwrap();
+    // One entry OVER MAX_WALK_ENTRIES (50_000, production) — if this
+    // subtree were only filtered post-walk (not pruned during descent),
+    // the walker would still visit every one of these entries and abort
+    // before src/keep.ts is ever reached.
+    populate_flat_files_with_extension(&nested_node_modules, 50_001, "js");
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["js", "ts"], &FileFilter::unrestricted())
+        .expect(
+            "a nested node_modules/ over MAX_WALK_ENTRIES must be pruned at \
+             walk time, not fully enumerated then filtered — the walk must \
+             succeed",
+        );
+
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.ts")),
+        "src/keep.ts must survive, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only src/keep.ts should survive, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// #34 T2 review sweep, LOW-2 (Security reproduced): a nested build dir in a
+// polyglot monorepo, e.g. services/api/target/ (Rust) sitting alongside a
+// TypeScript service, still blew MAX_WALK_ENTRIES because only the
+// root-anchored target/** was added — the exact gap **/node_modules/**
+// already closed for node_modules. **/target/** closes the same gap for
+// target/, mirroring a_nested_node_modules_over_the_entry_cap_is_pruned_
+// at_walk_time_not_counted exactly.
+//
+// Test List:
+// 1. a nested target/ (services/api/target/) holding more files than
+//    MAX_WALK_ENTRIES must NOT abort the walk — only reachable if
+//    **/target/** is pruned at walk time.
+
+#[test]
+fn a_nested_target_dir_over_the_entry_cap_is_pruned_at_walk_time_not_counted() {
+    let dir = isolated_walk_dir("nested_target_over_cap");
+    std::fs::create_dir_all(dir.join("services").join("api").join("src")).unwrap();
+    std::fs::write(
+        dir.join("services").join("api").join("src").join("keep.rs"),
+        "fn keep() {}",
+    )
+    .unwrap();
+    let nested_target = dir.join("services").join("api").join("target");
+    std::fs::create_dir_all(&nested_target).unwrap();
+    // One entry OVER MAX_WALK_ENTRIES (50_000, production) — mirrors the
+    // node_modules twin above exactly.
+    populate_flat_files_with_extension(&nested_target, 50_001, "rs");
+
+    let reader = FileSystemCodeReader::new();
+    let files = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect(
+            "a nested target/ over MAX_WALK_ENTRIES must be pruned at walk \
+             time, not fully enumerated then filtered — the walk must \
+             succeed",
+        );
+
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.rs")),
+        "services/api/src/keep.rs must survive, got {:?}",
+        files
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "only services/api/src/keep.rs should survive, got {:?}",
+        files
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Mutation-gate follow-up (#34 T2, blocking --in-diff): `cargo mutants`
+// survived both `&&` -> `||` mutants inside `is_dialect_safe_prune_pattern`'s
+// three-condition boolean chain (`!literal.is_empty() &&
+// !literal.contains([...]) && literal.split('/').all(...)`), because every
+// existing exclude pattern fed through it up to this point was EITHER a
+// clean literal (all three conditions true either way — AND and OR agree)
+// OR failed the earlier `strip_suffix("/**")` guard entirely (never reaches
+// the chain). Neither shape can tell AND from OR.
+//
+// A pattern whose literal CONTAINS a wildcard char (so `contains(...)` is
+// true, the middle conjunct is false) is required to discriminate — under
+// `&&` it must be correctly rejected as dialect-unsafe and fall back to the
+// post-walk `GlobSet`; under either mutated `||` it gets wrongly accepted as
+// walk-time-safe. That misclassification is only OBSERVABLE (not just
+// structurally different) when the two dialects actually disagree on the
+// match for a real path — verified empirically (same two pinned crate
+// versions, same method as the shape-equivalence proofs above):
+// `*generated/**` against `a/generated/x.js` — globset's `*` crosses `/`
+// (`literal_separator=false` by default), so the whole-path match ABSORBS
+// `a/` before `generated` and excludes it; the walk-time `Override`
+// (gitignore-line syntax) anchors the pattern component-by-component from
+// the relative-path root, so `*generated` never aligns with the `a`
+// component and `a/generated/x.js` survives instead. This is the SAME root
+// cause already documented in `partition_exclude_patterns`'s doc comment
+// (single `*` crossing `/` in globset but not gitignore-line syntax),
+// applied to a LEADING star instead of a trailing one.
+//
+// Test List:
+// 1. a literal containing a wildcard (`*generated/**`) must still exclude
+//    via the post-walk `GlobSet` dialect (globset's `*` crossing `/`),
+//    proving `is_dialect_safe_prune_pattern` correctly refused to route it
+//    to the walk-time `Override` — kills both survived `&&`->`||` mutants
+//    at once, since either one would wrongly keep a/generated/x.js instead
+
+#[test]
+fn wildcard_literal_before_the_trailing_star_star_uses_the_globset_fallback_not_walk_time_override()
+{
+    let dir = isolated_walk_dir("wildcard_literal_dialect_parity");
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("generated").join("top.js"), "var x=1;").unwrap();
+    std::fs::create_dir_all(dir.join("a").join("generated")).unwrap();
+    std::fs::write(
+        dir.join("a").join("generated").join("nested.js"),
+        "var x=1;",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("gen2")).unwrap();
+    std::fs::write(dir.join("gen2").join("kept.js"), "var x=1;").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.ts"), "const keep = 1;").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["*generated/**".to_string()], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["js", "ts"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        !files.iter().any(|f| f.ends_with("top.js")),
+        "generated/top.js must be excluded (matches *generated literally), got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("nested.js")),
+        "a/generated/nested.js must be excluded too — globset's `*` crosses \
+         `/` and absorbs the a/ prefix (the correct post-walk GlobSet \
+         fallback dialect for a literal containing a wildcard). If \
+         `is_dialect_safe_prune_pattern` wrongly routed this pattern to the \
+         walk-time Override instead, gitignore-line anchoring would NOT \
+         cross the a/ component and this file would wrongly survive, got {:?}",
+        files
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("kept.js")),
+        "gen2/kept.js does not match *generated, must survive, got {:?}",
+        files
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("keep.ts")),
+        "src/keep.ts must survive, got {:?}",
+        files
+    );
+    assert_eq!(files.len(), 2, "got {:?}", files);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// F4 (Dev-B minor, #34 T2 review sweep) — is_dialect_safe_prune_pattern's
+// guard-character array (`* ? [ ] ! { }`) only had `*` pinned by a
+// discriminating test (the one above). Dev-B's concrete claim: dropping
+// `?` from the array would let `**/a?b/**` become walk-time-prunable,
+// where globset (literal_separator=false, `?` crosses `/` exactly like
+// `*` does) and the gitignore-dialect Override genuinely disagree.
+// Verified empirically (same two pinned crate versions, same method as
+// the `*` proof above): `Glob::new("**/a?b/**").is_match("a/b/x")` is
+// true (the `?` matches the literal `/`), so this is a REAL,
+// result-changing divergence — a?b/** in a directory literally named
+// "a/b" mirrors the *generated/** case exactly, just with the single-char
+// wildcard instead of the zero-or-more one.
+
+#[test]
+fn single_char_wildcard_before_the_trailing_star_star_uses_the_globset_fallback_not_walk_time_override(
+) {
+    let dir = isolated_walk_dir("single_char_wildcard_dialect_parity");
+    std::fs::create_dir_all(dir.join("a").join("b")).unwrap();
+    std::fs::write(dir.join("a").join("b").join("nested.js"), "var x=1;").unwrap();
+    std::fs::create_dir_all(dir.join("axb")).unwrap();
+    std::fs::write(dir.join("axb").join("top.js"), "var x=1;").unwrap();
+    std::fs::create_dir_all(dir.join("other")).unwrap();
+    std::fs::write(dir.join("other").join("kept.js"), "var x=1;").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["**/a?b/**".to_string()], false).unwrap();
+    let files = reader
+        .list_source_files(&dir, &["js"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        !files.iter().any(|f| f.ends_with("top.js")),
+        "axb/top.js must be excluded (direct single-char match), got {:?}",
+        files
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("nested.js")),
+        "a/b/nested.js must be excluded too — globset's `?` crosses `/` \
+         under literal_separator=false, exactly like `*` does (the correct \
+         post-walk GlobSet fallback dialect). If is_dialect_safe_prune_ \
+         pattern wrongly routed this pattern to the walk-time Override \
+         instead, gitignore-line syntax's `?` (which never crosses `/`) \
+         would wrongly keep this file, got {:?}",
+        files
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("kept.js")),
+        "other/kept.js does not match a?b, must survive, got {:?}",
+        files
+    );
+    assert_eq!(files.len(), 1, "got {:?}", files);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// F4 continued — the remaining five guard characters (`[ ] ! { }`).
+// Empirically probed (same two pinned crate versions) for the SAME kind of
+// crossing-`/` divergence `*`/`?` exhibit: character classes (`[xy]`,
+// `[!x]`) and brace alternation (`{b,c}`) enumerate LITERAL characters and
+// never absorb `/` in globset's dialect either (unlike `*`/`?`, which
+// match "any/zero-or-more chars" and therefore CAN swallow a `/` under
+// literal_separator=false); a bare `!` mid-pattern is literal in both
+// dialects. Both dialects were also found to agree on accept/reject for
+// every syntax-edge case tried (unclosed `[`/`{`, a stray `]`/`}`). No
+// result-changing divergence was found for these five, honestly — these
+// rows are a CORRECTNESS regression net (the filter still behaves
+// correctly end-to-end for a literal containing each character), not a
+// proven mutation-kill the way `*`/`?` above are.
+
+#[test]
+fn remaining_guard_characters_still_exclude_correctly_via_fallback() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        // (label, pattern, matching file name, non-matching file name)
+        ("bracket_class", "**/a[xy]b/**", "axb", "azb"),
+        ("negated_class", "**/a[!x]b/**", "ayb", "axb"),
+        ("brace_alternation", "**/a{b,c}d/**", "abd", "aed"),
+        ("bare_bang", "**/a!b/**", "a!b", "a_b"),
+    ];
+
+    for (label, pattern, matching_dir, non_matching_dir) in cases {
+        let dir = isolated_walk_dir(&format!("guard_char_{label}"));
+        std::fs::create_dir_all(dir.join(matching_dir)).unwrap();
+        std::fs::write(dir.join(matching_dir).join("dropped.js"), "var x=1;").unwrap();
+        std::fs::create_dir_all(dir.join(non_matching_dir)).unwrap();
+        std::fs::write(dir.join(non_matching_dir).join("kept.js"), "var x=1;").unwrap();
+
+        let reader = FileSystemCodeReader::new();
+        let filter = FileFilter::new(vec![], vec![pattern.to_string()], false).unwrap();
+        let files = reader
+            .list_source_files(&dir, &["js"], &filter)
+            .unwrap_or_else(|e| panic!("walk should succeed for pattern {pattern}, got {e:?}"));
+
+        assert!(
+            !files.iter().any(|f| f.ends_with("dropped.js")),
+            "[{label}] {matching_dir}/dropped.js must be excluded by {pattern}, got {:?}",
+            files
+        );
+        assert!(
+            files.iter().any(|f| f.ends_with("kept.js")),
+            "[{label}] {non_matching_dir}/kept.js must survive {pattern}, got {:?}",
+            files
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// MED-1 (#34 T2 review sweep, Security MEDIUM): T2 silently removed an
+// integrity property from the gate — a file dropped by a standing default
+// vanished with zero trace (no console line, no JSON field,
+// unmeasurable_files_count stayed 0). `SourceFileListing::
+// default_excluded_count` surfaces this. Per its own doc: a COUNT OF
+// PRUNED WALK ENTRIES, not a file count — pin the NUMBER (mutation
+// mindset), not just "greater than zero".
+//
+// Test List:
+// 1. a walk-time-pruned default directory (node_modules/) counts as
+//    exactly ONE entry, regardless of how many files it contains
+// 2. a second, independently pruned default directory (dist/) adds
+//    exactly one more
+// 3. a post-walk-fallback-matched default file (*.min.js, never
+//    walk-time-safe) is counted individually — one file, one increment
+// 4. a file excluded by the USER's OWN (non-default) exclude pattern is
+//    NOT attributed to default_excluded_count — only standing defaults
+//    count here, the user already knows about their own exclude list
+// 5. zero exclusions -> count is exactly 0 (not "falsy", the literal
+//    number a test can assert on)
+// @scenario: typescript-javascript-analysis/S7
+
+#[test]
+fn default_excluded_count_reflects_pruned_entries_not_a_file_count() {
+    let dir = isolated_walk_dir("default_excluded_count");
+    // (1) node_modules/ — walk-time-pruned, MULTIPLE files inside, must
+    // still count as exactly ONE entry (the pruned directory itself).
+    std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+    for i in 0..5 {
+        std::fs::write(
+            dir.join("node_modules").join(format!("f{i}.js")),
+            "var x=1;",
+        )
+        .unwrap();
+    }
+    // (2) dist/ — a SECOND, independently pruned default directory.
+    std::fs::create_dir_all(dir.join("dist")).unwrap();
+    std::fs::write(dir.join("dist").join("bundle.js"), "var x=1;").unwrap();
+    // (3) a minified file — post-walk fallback (never walk-time-safe),
+    // counted as one precise file.
+    std::fs::write(dir.join("app.min.js"), "var x=1;").unwrap();
+    // (4) a file excluded by the USER's own (non-default) pattern, NOT
+    // walk-time-safe (contains a wildcard, so it reaches the SAME
+    // post-walk fallback check as app.min.js above) — must NOT be
+    // attributed to default_excluded_count. Deliberately routed through
+    // the fallback path, not walk-time pruning: `!default_exclude_is_empty`
+    // is always true (6 standing defaults always present), so a mutant
+    // replacing the `&&` in that check with `||` would wrongly count
+    // ANY fallback-matched file, default or not — this row is what
+    // actually discriminates that mutant (a custom_excluded/**-style
+    // walk-time-safe pattern never reaches the fallback check at all,
+    // so it could not have caught it).
+    std::fs::write(dir.join("weird.custom.ts"), "const d=1;").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.ts"), "const keep=1;").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["**/*.custom.ts".to_string()], false).unwrap();
+    let listing = reader
+        .list_source_files(&dir, &["js", "ts"], &filter)
+        .expect("walk should succeed");
+
+    assert!(
+        listing.files.iter().any(|f| f.ends_with("keep.ts")),
+        "src/keep.ts must survive, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.files.len(),
+        1,
+        "only src/keep.ts should survive, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.default_excluded_count, 3,
+        "expected exactly 3 (node_modules/ pruned as ONE entry + dist/ \
+         pruned as ONE entry + app.min.js counted as one file) — \
+         weird.custom.ts must NOT be counted (it's the user's own \
+         non-default fallback pattern), got {}",
+        listing.default_excluded_count
+    );
+}
+
+#[test]
+fn default_excluded_count_is_exactly_zero_when_nothing_is_excluded_by_default() {
+    let dir = isolated_walk_dir("default_excluded_count_zero");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.ts"), "const keep=1;").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["ts"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.default_excluded_count, 0,
+        "nothing in this fixture matches a default, count must be exactly \
+         0, got {}",
+        listing.default_excluded_count
+    );
 }

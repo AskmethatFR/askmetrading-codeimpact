@@ -278,6 +278,53 @@ fn project_json_includes_unmeasurable_files_and_keeps_existing_fields_unchanged(
     assert_eq!(json["metrics"]["unmeasurable_files_count"], 1);
 }
 
+// MED-1 (#34 T2 review sweep, ADR-0010) — next to unmeasurable_files_count,
+// never skipped (0 is an honest answer, same convention).
+#[test]
+fn project_json_includes_default_excluded_files_count() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_default_excluded_count(7);
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["default_excluded_files_count"], 7);
+}
+
+#[test]
+fn project_json_reports_zero_default_excluded_files_by_default() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["default_excluded_files_count"], 0);
+}
+
+#[test]
+fn file_json_reports_zero_default_excluded_files() {
+    let writer = JsonReportWriter::new();
+    let metrics = make_metrics_with_impacts();
+
+    let json_str = writer.write_json(&metrics, "test.rs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["default_excluded_files_count"], 0);
+}
+
 #[test]
 fn file_json_reports_zero_unmeasurable_files() {
     let writer = JsonReportWriter::new();

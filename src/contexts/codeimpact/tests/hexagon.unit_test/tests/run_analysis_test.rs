@@ -33,7 +33,15 @@ fn analysis_target_project_has_correct_type() {
 
 #[test]
 fn analyze_project_target_returns_ok() {
-    let reader = CodeReaderStub::new();
+    // #34 T2 MED-1 — this test's original fixture had ZERO source files
+    // configured on the stub at all, which is now a hard error (a project
+    // with nothing to measure must not silently succeed). Giving it one
+    // real file preserves this test's actual intent — "a Project target
+    // is dispatched and handled correctly" — without colliding with the
+    // MED-1 zero-measured-files guard (see the dedicated test below).
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("test.rs"), "fn test() {}".into());
+    reader.add_source_file(PathBuf::from("test.rs"));
     let writer = SharedReportWriterStub::new();
     let parser = CodeParserStub::with_functions(vec![]);
     let use_case = RunAnalysis::new(
@@ -48,6 +56,36 @@ fn analyze_project_target_returns_ok() {
         &AnalysisConfig::defaults(),
     );
     assert!(result.is_ok(), "project target should return Ok(())");
+}
+
+// #34 T2 MED-1 (Security CRITICAL) — a project with literally zero source
+// files (no config error, no filter surprise, just nothing to walk) must
+// error the same way a project where every file failed to parse does (see
+// handle_project_with_zero_measured_files_errors_instead_of_silently_
+// succeeding below) — the two are the SAME defect class: --strict must
+// never read "0" out of an analysis that measured nothing.
+#[test]
+fn analyze_project_target_with_zero_files_at_all_errors() {
+    let reader = CodeReaderStub::new();
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+    assert!(
+        result.is_err(),
+        "a project with zero source files must error, not silently \
+         succeed with an empty report — got {:?}",
+        result
+    );
 }
 
 #[test]
@@ -257,6 +295,71 @@ fn handle_project_continues_on_read_error() {
 
 #[test]
 fn handle_project_continues_on_parse_error() {
+    // #34 T2 MED-1 — this test's ORIGINAL fixture had exactly one file,
+    // and that one file failed to parse, so `per_file` ended up EMPTY.
+    // That is precisely the "zero measured files" case the MED-1 hard
+    // error now catches deliberately (a project where nothing could be
+    // analyzed must not silently succeed under --strict). Two files now:
+    // good.rs parses fine, main.rs is marked to fail — preserving this
+    // test's actual intent ("one bad file must not sink the whole
+    // project") with a genuinely non-empty per_file result.
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source(PathBuf::from("src/main.rs"), "BROKEN fn main() {}".into());
+    reader.add_source_file(PathBuf::from("src/main.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "BROKEN",
+        AnalysisError::AnalysisFailed("parse error".to_string()),
+    );
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer.clone()),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+    assert!(
+        result.is_ok(),
+        "project analysis should continue despite one file's parse error"
+    );
+
+    let graph = writer.last_graph.lock().unwrap();
+    assert!(
+        graph.is_some(),
+        "write_project_report should have been called"
+    );
+    let graph = graph.as_ref().unwrap();
+    assert!(
+        graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/good.rs")),
+        "good.rs should have metrics despite main.rs's parse failure"
+    );
+    assert!(
+        !graph
+            .per_file_metrics()
+            .contains_key(&PathBuf::from("src/main.rs")),
+        "main.rs must not have metrics — it failed to parse"
+    );
+}
+
+// #34 T2 MED-1 (Security CRITICAL, #34 T2 review sweep): --strict silently
+// exited 0 on a zero-measured-files analysis — moving every file into
+// dist/ (or, here, having every file fail to parse) removed it from the
+// gate with no observable trace. A hard error, not a loud warning: this is
+// an input/setup problem (nothing to measure), distinct from a strict
+// THRESHOLD breach (exit 3) — main.rs maps any Err to exit 1 regardless of
+// --strict, so the CLI can never read "0" out of an analysis that measured
+// nothing.
+#[test]
+fn handle_project_with_zero_measured_files_errors_instead_of_silently_succeeding() {
     let mut reader = CodeReaderStub::new();
     reader.add_source(PathBuf::from("src/main.rs"), "fn main() {}".into());
     reader.add_source_file(PathBuf::from("src/main.rs"));
@@ -277,19 +380,10 @@ fn handle_project_continues_on_parse_error() {
         &AnalysisConfig::defaults(),
     );
     assert!(
-        result.is_ok(),
-        "project analysis should continue despite parse errors"
-    );
-
-    let graph = writer.last_graph.lock().unwrap();
-    assert!(
-        graph.is_some(),
-        "write_project_report should have been called"
-    );
-    let graph = graph.as_ref().unwrap();
-    assert!(
-        graph.per_file_metrics().is_empty(),
-        "no metrics when all files fail to parse"
+        result.is_err(),
+        "a project where every file fails to parse must error, not \
+         silently succeed with an empty report — got {:?}",
+        result
     );
 }
 
@@ -713,14 +807,19 @@ fn handle_project_energy_threshold_discriminates_joules_from_kwh() {
     );
 }
 
-// AC7 / ADR-0010 honesty, at the use-case level (the VO-level gate is
-// already pinned directly in alert_thresholds_test.rs): when every file in
-// the project failed to measure, aggregated_metrics().total_ecological_impact
-// is None (D3, #50) — evaluate() must receive None, not a fabricated 0, and
-// must therefore never report a breach even with a maximally strict
-// threshold configured.
+// #34 T2 MED-1 (Security CRITICAL, #34 T2 review sweep) SUPERSEDES this
+// test's original assertion. The original intent (AC7/ADR-0010 honesty:
+// when nothing measured, evaluate() must receive None and never fabricate
+// a breach) is STILL correct at the VO level and is already pinned
+// directly in alert_thresholds_test.rs, per this test's own prior comment
+// — but at the USE-CASE level, "every file in the project failed to
+// measure" is now caught earlier and harder: MED-1 established that
+// silently returning Ok() with no breach on a zero-measured-files project
+// is exactly the indefensible "--strict exits 0 on an empty run" behavior
+// the operator ruled against. This project never reaches evaluate() at
+// all any more — it errors first.
 #[test]
-fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_threshold() {
+fn handle_project_with_every_file_unmeasurable_errors_instead_of_silently_succeeding() {
     let mut reader = CodeReaderStub::new();
     reader.add_source_file(PathBuf::from("src/bad.rs")); // no source configured -> read fails
 
@@ -741,23 +840,11 @@ fn handle_project_with_every_file_unmeasurable_never_breaches_despite_strict_thr
         &[AnalysisRule::CyclomaticComplexity],
         &thresholds,
     );
-    assert!(result.is_ok(), "got {:?}", result);
-
-    let graph = writer.last_graph.lock().unwrap();
-    let graph = graph
-        .as_ref()
-        .expect("write_project_report should have been called");
-    assert_eq!(
-        graph.aggregated_metrics().total_ecological_impact,
-        None,
-        "precondition: every file failed to measure, there is no aggregate to breach"
-    );
-    let report = graph
-        .threshold_report()
-        .expect("thresholds were configured, evaluate() must still have run");
     assert!(
-        !report.has_breach(),
-        "an absent (unmeasured) aggregate must never count as a breach, however strict the threshold"
+        result.is_err(),
+        "a project where every file is unmeasurable must error, not \
+         silently succeed with 'no breach' — got {:?}",
+        result
     );
 }
 

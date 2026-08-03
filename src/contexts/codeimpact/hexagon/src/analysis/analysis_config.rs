@@ -64,8 +64,11 @@ pub struct AnalysisConfig {
 }
 
 impl AnalysisConfig {
-    /// No thresholds configured, no file filtering, no source roots (D4:
-    /// absent config file reproduces today's behavior byte-for-byte).
+    /// No thresholds configured, no *user* file filtering, no source roots
+    /// (D4: absent config file — thresholds/source roots reproduce today's
+    /// behavior byte-for-byte). The file filter no longer does (F2/F3, #34
+    /// T2 review sweep): `FileFilter::unrestricted()` carries the standing
+    /// `DEFAULT_EXCLUDES` (#34 T2) even with no config file present.
     pub fn defaults() -> Self {
         Self {
             thresholds: AlertThresholds::none(),

@@ -40,11 +40,29 @@ Feature: TypeScript / JavaScript analysis support
     Then the import resolves to a real file-dependency edge
     And configured sourceRoots are honored when set
 
-  @wip @scenario:S5
-  Scenario: Common non-source directories are excluded by default
-    Given a TypeScript/JavaScript project containing node_modules/, dist/, and minified files
+  # AMENDED (#34 T2). `target/` joined the default set once measurement showed the
+  # tool could not analyze its own repository: a Rust build directory (6.9 GB here)
+  # blows MAX_WALK_ENTRIES long before the walk reaches any source. Nested twins
+  # (`**/node_modules/**`, `**/target/**`) cover monorepos; `dist/` stays root-only.
+  @scenario:S5
+  Scenario: Vendored and generated directories are excluded by default
+    Given a project containing node_modules/, dist/, target/ and minified files
+    And some of those directories are nested rather than at the project root
     When the project is analyzed with default settings
     Then those paths are excluded from analysis by default
+    And a user-supplied exclude list is added to the defaults rather than replacing them
+
+  # Added in #34 T2. Excluding by default silently removes files from a gate that can
+  # exit 3 on a threshold breach: the same file scored differently depending only on
+  # which directory it sat in, with nothing in the report saying so. Excluding is
+  # ordinary ergonomics; doing it invisibly is not (ADR-0010 — the tool states what it
+  # did not measure).
+  @scenario:S7
+  Scenario: The report states what the default exclusions removed
+    Given a project where files are excluded by the standing default patterns
+    When the analysis report is produced
+    Then it states how many entries were excluded by default
+    And an analysis that measured no file at all does not report success under --strict
 
   # Added in #34 T1. The tool ingests sources the operator does not control, and the
   # report IS the product: a name able to forge what the operator reads defeats the
