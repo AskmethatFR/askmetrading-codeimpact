@@ -667,6 +667,143 @@ fn project_json_marks_oversized_file_source_too_large() {
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
 }
 
+// #34 T4.2, AD-5 — `FileConsumptionGraph::build` rightly refuses a
+// dependency edge whose endpoint is not a known file, but dependency
+// resolution is anchored on every file that was READ (`file_sources`)
+// while the graph is built only from files that were analyzed
+// SUCCESSFULLY (`per_file`). Those two sets diverge the moment a read file
+// turns out unmeasurable (oversized here) while another file depends on
+// it — before this fix, `run_analysis` propagated the graph's
+// `AnalysisFailed` instead of producing a report. `run_analysis` is the
+// only layer that knows both sets, so the dangling edge must be dropped
+// there, not inside the graph — and dropping it is not a measurement
+// silence, since the endpoint is already named in `unmeasurable_files`
+// (ADR-0010).
+//
+// Both call sites get their own test — T1's review barrier on this same
+// ticket caught a fix applied to one site and not its symmetric twin:
+// `handle_project` (console, below) and `handle_project_json`/
+// `handle_project_html` (share `build_project_graph_with_source_roots`,
+// mirrored right after).
+
+#[test]
+fn handle_project_produces_a_report_when_a_dependency_target_is_unmeasurable() {
+    // @scenario: dependency-graph-integrity/S1
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/huge.cs"), "OVERSIZED".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/huge.cs"));
+
+    let writer = SharedReportWriterStub::new();
+    let rust_parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        branch_arms: 0,
+        calls_in_loops: vec![],
+    }])
+    .with_resolved_dependencies(Ok(vec![PathBuf::from("src/huge.cs")]));
+    let csharp_parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "OVERSIZED",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+    );
+
+    let registry = ParserRegistry::new()
+        .register(Language::Rust, Box::new(rust_parser))
+        .register(Language::CSharp, Box::new(csharp_parser));
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), registry);
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "a dependency on an unmeasurable file must not fail the whole scan, got {:?}",
+        result
+    );
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_report should have been called");
+    assert_eq!(
+        graph.total_dependencies(),
+        0,
+        "no edge should be recorded for a dependency on an unmeasurable file"
+    );
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/huge.cs"));
+    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceTooLarge);
+}
+
+#[test]
+fn handle_project_json_produces_a_report_when_a_dependency_target_is_unmeasurable() {
+    // @scenario: dependency-graph-integrity/S1
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/huge.cs"), "OVERSIZED".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/huge.cs"));
+
+    let writer = SharedReportWriterStub::new();
+    let rust_parser = CodeParserStub::with_functions(vec![ParsedFunction {
+        name: "good".to_string(),
+        start_line: 1,
+        calls: vec![],
+        has_loop: false,
+        has_nested_loop: false,
+        decision_points: 1,
+        depth: 0,
+        branch_arms: 0,
+        calls_in_loops: vec![],
+    }])
+    .with_resolved_dependencies(Ok(vec![PathBuf::from("src/huge.cs")]));
+    let csharp_parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "OVERSIZED",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+    );
+
+    let registry = ParserRegistry::new()
+        .register(Language::Rust, Box::new(rust_parser))
+        .register(Language::CSharp, Box::new(csharp_parser));
+    let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer.clone()), registry);
+
+    let result = use_case.handle_project_json(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "a dependency on an unmeasurable file must not fail the whole scan, got {:?}",
+        result
+    );
+
+    let graph = writer.last_graph.lock().unwrap();
+    let graph = graph
+        .as_ref()
+        .expect("write_project_json should have been called");
+    assert_eq!(
+        graph.total_dependencies(),
+        0,
+        "no edge should be recorded for a dependency on an unmeasurable file"
+    );
+    let unmeasurable = graph.unmeasurable_files();
+    assert_eq!(unmeasurable.len(), 1, "got {:?}", unmeasurable);
+    assert_eq!(unmeasurable[0].path, PathBuf::from("src/huge.cs"));
+    assert_eq!(unmeasurable[0].reason, UnmeasurableReason::SourceTooLarge);
+}
+
 // US8 slice 1 — the calling use case for AlertThresholds::evaluate (AD-1):
 // handle_project evaluates the project's aggregate energy/CO2 impact
 // against the configured thresholds and attaches the outcome to the graph
