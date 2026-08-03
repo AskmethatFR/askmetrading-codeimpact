@@ -13,7 +13,7 @@ Feature: Inter-file dependency graph integrity
   # producing a report. Latent for C# since US16; T4's relative imports make it probable,
   # so it is closed before that slice lands. Dropping the edge is not a measurement
   # silence: the file is already named in the report's unmeasurable list (ADR-0010).
-  @wip @scenario:S1
+  @scenario:S1
   Scenario: A dependency on a file that could not be analyzed does not fail the whole scan
     Given a project where one file is read but cannot be analyzed
     And another file in that project depends on it
