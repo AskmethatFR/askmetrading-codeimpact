@@ -1,5 +1,28 @@
 use codeimpact_hexagon::analysis::MetricSupport;
 
+/// How this language's adapter resolves `resolve_dependencies` (US17 T4.1,
+/// AD-1) — data on the profile, never a `match self.language` branch in
+/// `resolve_dependencies` itself. A `match self.language` would have worked
+/// for two strategies and decomposed at the third (ADR-0029 already counts
+/// this generalization among US17's real costs); a 5th language extends by
+/// writing a profile, never by touching `resolve_dependencies`
+/// (`/Users/alexteixeira/.claude/knowledge-base/solid/ocp.md`; Strategy as
+/// data over a trait object —
+/// `/Users/alexteixeira/.claude/knowledge-base/design-patterns/catalog.md`,
+/// there being no per-strategy behavior beyond which arm runs).
+/// `pub` and reachable through `pub mod language_profile` regardless of
+/// which `lang-*` feature is enabled, so neither variant trips `dead_code`
+/// under a single-feature build.
+pub enum DepsStrategy {
+    /// C#'s `using`/namespace resolution (ADR-0023): a project-global
+    /// `namespace -> declaring-files` index built once per scan.
+    NamespaceIndex,
+    /// TypeScript/JavaScript's relative-`import`/`require` resolution.
+    /// Empty in T4.1 (`resolve_dependencies` returns no edge for either
+    /// language yet) — T4.3 fills this strategy in.
+    RelativePath,
+}
+
 /// Everything `TreeSitterCodeParser` needs to parse one grammar: the
 /// compiled `tree-sitter` language, the `.scm` query that captures the
 /// constructs the range-containment post-processor turns into
@@ -40,6 +63,9 @@ pub struct LanguageProfile {
     /// `LanguageProfile` is the only thing a new language needs to touch
     /// to answer the capabilities question.
     pub degradations: CapabilityDegradations,
+    /// Which strategy `resolve_dependencies` dispatches to for this
+    /// language (US17 T4.1, AD-1) — see `DepsStrategy`.
+    pub deps: DepsStrategy,
 }
 
 /// The three metrics whose fidelity `TreeSitterCodeParser::capabilities()`
