@@ -184,6 +184,7 @@ impl RunAnalysis {
             ));
         }
 
+        let all_deps = Self::drop_edges_to_unmeasurable_files(&per_file, all_deps);
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count);
@@ -269,6 +270,33 @@ impl RunAnalysis {
         let co2 = ecological.map(|e| e.co2_grams());
         let report = thresholds.evaluate(energy_kwh, co2);
         metrics.with_threshold_report(report)
+    }
+
+    /// Drops every dependency edge whose `from` or `to` endpoint is not
+    /// among the files that were analyzed SUCCESSFULLY (#34 T4.2, AD-5).
+    ///
+    /// `FileConsumptionGraph::build` rightly refuses an edge pointing
+    /// outside its file list — but dependency resolution above is anchored
+    /// on every file that was READ (`file_sources`), a strictly larger set
+    /// than the one that made it into `per_file` (a read file can still
+    /// turn out unmeasurable: oversized, unparseable, ...). Left alone,
+    /// that mismatch turns a routine unmeasurable file into a hard
+    /// `AnalysisFailed` for the whole scan the moment anything depends on
+    /// it. `run_analysis` is the only layer that knows both sets, so the
+    /// filter belongs here, not inside the graph's precondition (which
+    /// stays exactly as strict). Dropping the edge is not a measurement
+    /// silence: its endpoint is already named in `unmeasurable_files`
+    /// (ADR-0010).
+    fn drop_edges_to_unmeasurable_files(
+        per_file: &[(PathBuf, CodeMetrics)],
+        dependencies: Vec<super::file_consumption_graph::FileDependency>,
+    ) -> Vec<super::file_consumption_graph::FileDependency> {
+        let known_files: std::collections::HashSet<&PathBuf> =
+            per_file.iter().map(|(path, _)| path).collect();
+        dependencies
+            .into_iter()
+            .filter(|dep| known_files.contains(&dep.from) && known_files.contains(&dep.to))
+            .collect()
     }
 
     fn set_file_paths(metrics: CodeMetrics, path: &Path) -> CodeMetrics {
@@ -444,6 +472,7 @@ impl RunAnalysis {
             ));
         }
 
+        let all_deps = Self::drop_edges_to_unmeasurable_files(&per_file, all_deps);
         Ok(FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count))
