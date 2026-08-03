@@ -7,6 +7,7 @@ use codeimpact_hexagon::analysis::EconomicImpact;
 use codeimpact_hexagon::analysis::EfficiencyClass;
 use codeimpact_hexagon::analysis::FileConsumptionGraph;
 use codeimpact_hexagon::analysis::FileDependency;
+use codeimpact_hexagon::analysis::FunctionDetail;
 use codeimpact_hexagon::analysis::IoInLoopWarning;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::LanguageCapabilities;
@@ -670,4 +671,363 @@ fn write_project_report_breaching_threshold_report_shows_warning_with_the_number
         "the warning must name the breached metric, got: {}",
         output
     );
+}
+
+// US17 T1 retry (Security MEDIUM, CWE-117/CWE-150, BLOCKING 2) — a JS/TS
+// string-literal method name can carry raw ANSI escape sequences (a
+// closed character set for Rust/C# identifiers, impossible before the
+// tree-sitter TS/JS adapter). Both console print sites (single-file
+// `write_console_to` and per-file `write_project_report_to`) must
+// neutralize control characters in a function's name before printing it —
+// the JSON payload (a separate writer, separately verified safe) must
+// keep the real name; this test asserts only on the CONSOLE writer.
+//
+// Test List:
+//   1. write_console_to's "=== Détails par fonction ===" line neutralizes
+//      an ANSI-escape-laden function name.
+//   2. write_project_report_to's per-file function-detail line does the
+//      same (a DIFFERENT print site, its own assertion).
+
+fn function_detail_named(name: &str) -> FunctionDetail {
+    FunctionDetail::new(
+        name.to_string(),
+        CodeLocation::new("a.js".into(), 1, 1),
+        0,
+        0,
+        1,
+        false,
+    )
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_sequences_in_a_function_name() {
+    let writer = ConsoleReportWriter::new();
+    let hostile_name = "\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m";
+    let metrics =
+        CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console output — the sanitizer did not run: {:?}",
+        output
+    );
+    assert!(
+        output.contains("\\u{1b}[2J"),
+        "the escape sequence should still be visible, just neutralized: {:?}",
+        output
+    );
+}
+
+// US17 T1 retry 2 (BLOCKING 1 — Dev-B + Security convergent) — four MORE
+// unsanitized sinks were reported alongside the two round-1 fixed:
+// ComplexityWarning.function/.message and IoInLoopWarning.function/
+// .io_call, printed at both the single-file "Avertissements"/"I/O dans
+// boucles" sections AND their project-report twins. `io_call` is an
+// INDEPENDENT vector from `function` — a computed member behind a
+// legitimate confident prefix (`fs.promises["<ESC>..."]`) still carries a
+// hostile payload even with a perfectly benign function name, so each
+// field gets its own row rather than being asserted together.
+
+fn hostile_warning(function: &str, message: &str) -> ComplexityWarning {
+    ComplexityWarning {
+        pattern: WarningPattern::NestedLoops,
+        severity: WarningSeverity::Critical,
+        function: function.to_string(),
+        location: CodeLocation::new("evil.js".into(), 1, 1),
+        message: message.to_string(),
+        suggestion: "n/a".to_string(),
+    }
+}
+
+fn hostile_io_warning(function: &str, io_call: &str) -> IoInLoopWarning {
+    IoInLoopWarning {
+        function: function.to_string(),
+        io_call: io_call.to_string(),
+        location: CodeLocation::new("evil.js".into(), 1, 1),
+    }
+}
+
+const ESC_PAYLOAD: &str = "\x1b[2J\x1b[1;31mPWNED\x1b[0m";
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_warning_function_and_message() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_warnings(vec![hostile_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the single-file \"Avertissements\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_io_in_loop_function_and_io_call() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_io_in_loops(vec![hostile_io_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the single-file \"I/O dans boucles\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_io_call_alone_behind_a_benign_function_name() {
+    // Security's independent-vector proof: a computed member expression
+    // behind a legitimate confident prefix carries the payload even when
+    // the FUNCTION name is entirely benign — `io_call` must be sanitized
+    // on its own, not merely "whenever function happens to be hostile
+    // too".
+    let writer = ConsoleReportWriter::new();
+    let hostile_io_call = format!("fs.promises[\"{}\"]", ESC_PAYLOAD);
+    let metrics =
+        CodeMetrics::new(1).with_io_in_loops(vec![hostile_io_warning("f", &hostile_io_call)]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via io_call alone: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_warning_function_and_message() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_warnings(vec![hostile_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let files = vec![(path("evil.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project \"avertissements\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_io_in_loop_function_and_io_call() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::new(1).with_io_in_loops(vec![hostile_io_warning(ESC_PAYLOAD, ESC_PAYLOAD)]);
+    let files = vec![(path("evil.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project \"I/O dans boucles\" section: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_sequences_in_a_function_name() {
+    let writer = ConsoleReportWriter::new();
+    let hostile_name = "\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m";
+    let metrics =
+        CodeMetrics::new(1).with_function_details(vec![function_detail_named(hostile_name)]);
+    let files = vec![(path("src/evil.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project console output — the sanitizer did not run: {:?}",
+        output
+    );
+    assert!(
+        output.contains("\\u{1b}[2J"),
+        "the escape sequence should still be visible, just neutralized: {:?}",
+        output
+    );
+}
+
+// Sweep, item 4 (Dev-B + Security, folded in per the operator's rule —
+// same shape, same file, sanitizer already exists) — FS PATHS are
+// analyzed-repo-derived input exactly like a method name: on Unix a
+// filename may contain any byte except `/` and NUL, so `0x1b` is
+// reachable through a hostile file NAME, not just a hostile SYMBOL name.
+// `path.display()`, `CodeLocation`'s embedded `file_path`, and the
+// `file_stem`-derived consumption-chain labels are all path-derived
+// console strings that need the same treatment as `function`/`message`/
+// `io_call` did in the earlier sweep.
+
+const HOSTILE_PATH_ESC: &str = "\x1b[2J\x1b[1;31mPWNED\x1b[0m.js";
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_the_per_file_path_header() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path(HOSTILE_PATH_ESC), CodeMetrics::new(1))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the project per-file path header: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_console_neutralizes_ansi_escape_in_the_function_detail_location_path() {
+    let writer = ConsoleReportWriter::new();
+    let detail = FunctionDetail::new(
+        "f".to_string(),
+        CodeLocation::new(HOSTILE_PATH_ESC.into(), 1, 1),
+        0,
+        0,
+        1,
+        false,
+    );
+    let metrics = CodeMetrics::new(1).with_function_details(vec![detail]);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a function detail's CodeLocation path: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_a_warning_location_path() {
+    let writer = ConsoleReportWriter::new();
+    let warning = hostile_warning("f", "boucles imbriquées détectées");
+    let metrics = CodeMetrics::new(1).with_warnings(vec![ComplexityWarning {
+        location: CodeLocation::new(HOSTILE_PATH_ESC.into(), 1, 1),
+        ..warning
+    }]);
+    let files = vec![(path("clean.js"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a warning's CodeLocation path: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_the_consumption_chain_file_stem() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.js"), CodeMetrics::new(1)),
+        (path(HOSTILE_PATH_ESC), CodeMetrics::new(1)),
+    ];
+    let deps = vec![FileDependency {
+        from: path("a.js"),
+        to: path(HOSTILE_PATH_ESC),
+    }];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a consumption-chain file_stem: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_a_cycle_path() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.js"), CodeMetrics::new(1)),
+        (path(HOSTILE_PATH_ESC), CodeMetrics::new(1)),
+    ];
+    let deps = vec![
+        FileDependency {
+            from: path("a.js"),
+            to: path(HOSTILE_PATH_ESC),
+        },
+        FileDependency {
+            from: path(HOSTILE_PATH_ESC),
+            to: path("a.js"),
+        },
+    ];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via a cycle's path: {:?}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_neutralizes_ansi_escape_in_an_unmeasurable_file_path() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("clean.js"), CodeMetrics::new(1))];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unmeasurable_files(vec![UnmeasurableFile {
+            path: path(HOSTILE_PATH_ESC),
+            reason: UnmeasurableReason::SourceUnparseable,
+        }]);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b'),
+        "a raw ESC byte reached the console via an unmeasurable file's path: {:?}",
+        output
+    );
+}
+
+// The pre-existing (Security INFO, confirmed unrelated to this diff)
+// `file_stem().unwrap().to_str().unwrap()` panic risk on the SAME line
+// being sanitized: a path ending in `..` has no `file_stem()`. Fixed in
+// the same pass rather than leaving a reachable panic behind a fix.
+#[test]
+fn write_project_report_does_not_panic_on_a_consumption_chain_path_with_no_file_stem() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![
+        (path("a.js"), CodeMetrics::new(1)),
+        (path("dir/.."), CodeMetrics::new(1)),
+    ];
+    let deps = vec![FileDependency {
+        from: path("a.js"),
+        to: path("dir/.."),
+    }];
+    let graph = FileConsumptionGraph::build(&files, deps).unwrap();
+    let mut buf = Vec::new();
+    // Must not panic.
+    writer.write_project_report_to(&mut buf, &graph);
 }

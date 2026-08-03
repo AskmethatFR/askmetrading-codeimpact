@@ -176,6 +176,426 @@ fn e2e_analyze_csharp_file_exits_0() {
     );
 }
 
+// US17 T1 — TypeScript/JavaScript, a second/third `CodeParser` adapter
+// sharing `TreeSitterCodeParser` with C# (ADR-0018). Test List:
+//   1. e2e_analyze_typescript_file_exits_0 / e2e_analyze_javascript_file_
+//      exits_0 — the slice's own behavioral test, `@scenario:
+//      typescript-javascript-analysis/S1` (complexity/loops/patterns/
+//      impact half only — S1 stays @wip, the dependency-graph half is T4):
+//      a .ts/.js file that previously produced nothing now reports
+//      functions + nonzero complexity, exactly like any other supported
+//      language.
+//   2. --format json on a .ts file reports metric_support honestly (Q4).
+
+// @scenario: typescript-javascript-analysis/S1
+#[test]
+fn e2e_analyze_typescript_file_exits_0() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.ts");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Complexité directe"),
+        "missing complexity: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("compute"),
+        "missing function name: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Complexité directe: 0"),
+        "expected a nonzero complexity for a file with an if+for+ternary: {}",
+        stdout
+    );
+}
+
+// @scenario: typescript-javascript-analysis/S1
+#[test]
+fn e2e_analyze_javascript_file_exits_0() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.js");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Complexité directe"),
+        "missing complexity: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("compute"),
+        "missing function name: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Complexité directe: 0"),
+        "expected a nonzero complexity for a file with an if+for+ternary: {}",
+        stdout
+    );
+}
+
+// @scenario: typescript-javascript-analysis/S1 — Q4's honest degradation
+// surfaces through the existing JSON writer (ADR-0021/ADR-0026), no writer
+// change needed: `MetricSupportDto` renders `io_in_loops`/`call_graph`
+// (both `Degraded`, Q4) but has no `cross_file_dependencies` field at all
+// today — that axis is not JSON-rendered for ANY language yet (a
+// pre-existing gap, out of this ticket's scope; see Open Questions).
+#[test]
+fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
+    let binary = binary_path();
+    let fixture = fixtures_dir().join("sample.ts");
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to execute binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let io_in_loops = json["metrics"]["metric_support"]["io_in_loops"]
+        .as_str()
+        .expect("io_in_loops must be a string");
+    assert!(
+        io_in_loops.starts_with("degraded:") && io_in_loops.contains("dynamic import"),
+        "Q4: io_in_loops must honestly report the dynamic-import abstention, got: {}",
+        stdout
+    );
+    let call_graph = json["metrics"]["metric_support"]["call_graph"]
+        .as_str()
+        .expect("call_graph must be a string");
+    assert!(
+        call_graph.starts_with("degraded:")
+            && call_graph.contains("merges into a single call-graph node"),
+        "Q4/retry (Dev-B F2): call_graph must honestly report that anonymous \
+         functions MERGE (corrupting derived metrics), not merely \"resolve no \
+         edge\", got: {}",
+        stdout
+    );
+}
+
+// US17 T1 retry (Security MEDIUM, CWE-117/CWE-150, BLOCKING 2) — the exact
+// exploit fixture Security used: a JS class whose method name is a string
+// literal carrying ANSI escape sequences (`ESC[2J` clears the screen,
+// `ESC[1;31m` recolors), a shape unreachable via Rust/C# identifier syntax
+// before this ticket's tree-sitter adapter. The real CLI console output
+// @scenario: typescript-javascript-analysis/S6
+// must contain no raw ESC byte.
+#[test]
+fn e2e_analyze_javascript_file_with_ansi_escape_method_name_prints_no_raw_escape_byte() {
+    let binary = binary_path();
+    let dir =
+        std::env::temp_dir().join(format!("codeimpact_e2e_ansi_escape_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("esc2.js");
+    // A RAW ESC byte (0x1B), not the 4-character text `\x1b` — tree-sitter
+    // returns verbatim source bytes for a string-literal node, it never
+    // evaluates JS escape sequences, so only an actual control byte in
+    // the source reproduces the exploit (a textual `\x1b` would parse as
+    // four harmless printable characters and never reach this path).
+    std::fs::write(
+        &fixture,
+        "class C { \"\x1b[2J\x1b[1;31mCRITICAL: system compromised\x1b[0m\"() {} }",
+    )
+    .expect("write hostile fixture");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let stdout_bytes = &output.stdout;
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {} stderr: {}",
+        String::from_utf8_lossy(stdout_bytes),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !stdout_bytes.contains(&0x1bu8),
+        "a raw ESC byte reached the console output — the sanitizer did not run: {:?}",
+        String::from_utf8_lossy(stdout_bytes)
+    );
+    let stdout = String::from_utf8_lossy(stdout_bytes);
+    assert!(
+        stdout.contains("\\u{1b}[2J"),
+        "the escape sequence should still be visible, just neutralized: {}",
+        stdout
+    );
+}
+
+// US17 T1 retry 2 (BLOCKING 1, Dev-B + Security convergent) — round 1's
+// `esc2.js` fixture has no loop and no I/O, so it never triggers a
+// ComplexityWarning/IoInLoopWarning at all — exactly why the round-1
+// fixes to `d.name()` alone went green while the warning print sites
+// stayed unsanitized. This fixture has BOTH: nested loops (triggers
+// NestedLoops) and an in-loop I/O call (triggers an I/O-in-loop entry),
+// on a hostile method name — reproduced against BOTH the single-file and
+// @scenario: typescript-javascript-analysis/S6
+// the project (`--path`) surfaces, matching Dev-B's own repro.
+#[test]
+fn e2e_analyze_javascript_file_with_nested_loop_and_io_prints_no_raw_escape_byte_on_either_surface()
+{
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_ansi_escape_warnings_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("esc_warnings.js");
+    std::fs::write(
+        &fixture,
+        "class C { \"\x1b[2J\x1b[1;31mPWNED\x1b[0m\"() { \
+         for (let i = 0; i < 10; i++) { \
+         for (let j = 0; j < 10; j++) { \
+         fs.readFileSync(String(j)); \
+         } } } }",
+    )
+    .expect("write hostile fixture");
+
+    // Single-file surface.
+    let single_file_output = Command::new(&binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    assert!(
+        single_file_output.status.success(),
+        "exit 0 expected (single file). stderr: {}",
+        String::from_utf8_lossy(&single_file_output.stderr)
+    );
+    assert!(
+        !single_file_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte reached the single-file console output: {:?}",
+        String::from_utf8_lossy(&single_file_output.stdout)
+    );
+
+    // Project surface (--path).
+    let project_output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        project_output.status.success(),
+        "exit 0 expected (project). stderr: {}",
+        String::from_utf8_lossy(&project_output.stderr)
+    );
+    assert!(
+        !project_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte reached the project console output: {:?}",
+        String::from_utf8_lossy(&project_output.stdout)
+    );
+}
+
+// The computed-member-behind-a-benign-confident-prefix vector: a
+// perfectly benign FUNCTION name, hostile only in `io_call` (which
+// `IoInLoopWarning` carries independently) — proves the fix covers
+// `io_call` on its own, not merely "whenever `function` happens to be
+// @scenario: typescript-javascript-analysis/S6
+// hostile too".
+#[test]
+fn e2e_analyze_javascript_file_with_hostile_computed_member_io_call_prints_no_raw_escape_byte() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_ansi_escape_io_call_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("esc_io_call.js");
+    std::fs::write(
+        &fixture,
+        "function f(xs) { for (const x of xs) { \
+         fs.promises[\"\x1b[2J\x1b[1;32mNO I/O FOUND\x1b[0m\"](x); \
+         } }",
+    )
+    .expect("write hostile fixture");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.stdout.contains(&0x1bu8),
+        "a raw ESC byte reached the console via a computed-member io_call: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+// BLOCKING 2 — U+202E (Trojan Source RLO) through a method name, the same
+// vector as the ESC payload but a DIFFERENT Unicode category (Cf, not Cc)
+// @scenario: typescript-javascript-analysis/S6
+// — must be neutralized end-to-end too, not just at the unit level.
+#[test]
+fn e2e_analyze_javascript_file_with_bidi_override_method_name_prints_no_raw_bidi_char() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_bidi_override_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let fixture = dir.join("bidi.js");
+    std::fs::write(&fixture, "class C { \"safe\u{202E}evil\"() {} }").expect("write fixture");
+
+    let output = Command::new(binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains('\u{202E}'),
+        "a raw U+202E (RLO) reached the console output: {}",
+        stdout
+    );
+}
+
+// Sweep (Dev-B MINOR B, Security MEDIUM, both lanes) — a ZWSP-carrying
+// method name must render VISIBLY DISTINCT from its clean twin, not
+// collapse to the same report line the way `char::is_control` alone
+// (round 1) and the bidi-only class (round 2) both left it.
+#[test]
+fn e2e_analyze_javascript_file_with_zwsp_method_name_prints_visibly_distinct_report_line() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!("codeimpact_e2e_zwsp_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let clean_fixture = dir.join("clean.js");
+    let hostile_fixture = dir.join("hostile.js");
+    std::fs::write(&clean_fixture, "class C { \"authenticate\"() {} }")
+        .expect("write clean fixture");
+    std::fs::write(
+        &hostile_fixture,
+        "class C { \"auth\u{200B}enticate\"() {} }",
+    )
+    .expect("write hostile fixture");
+
+    let clean_output = Command::new(&binary)
+        .args(["analyze", clean_fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let hostile_output = Command::new(&binary)
+        .args(["analyze", hostile_fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(clean_output.status.success());
+    assert!(hostile_output.status.success());
+    let clean_stdout = String::from_utf8_lossy(&clean_output.stdout);
+    let hostile_stdout = String::from_utf8_lossy(&hostile_output.stdout);
+    assert!(
+        !hostile_stdout.contains('\u{200B}'),
+        "a raw ZWSP reached the console output: {}",
+        hostile_stdout
+    );
+    let clean_detail_line = clean_stdout
+        .lines()
+        .find(|l| l.contains("authenticate"))
+        .expect("clean detail line must exist");
+    let hostile_detail_line = hostile_stdout
+        .lines()
+        .find(|l| l.contains("auth"))
+        .expect("hostile detail line must exist");
+    assert_ne!(
+        clean_detail_line, hostile_detail_line,
+        "the ZWSP-carrying name must render visibly distinct from its clean twin, \
+         not collapse to the same report line"
+    );
+}
+
+// Sweep, item 4 (Dev-B + Security) — on Unix a filename may contain any
+// byte except `/` and NUL, so a hostile repo can ship a file whose NAME
+// (not a symbol inside it) carries a raw ESC byte and forges the console
+// report exactly the way a hostile method name did. Verified on BOTH the
+// @scenario: typescript-javascript-analysis/S6
+// single-file and the project (`--path`) surfaces.
+#[test]
+fn e2e_analyze_file_with_ansi_escape_in_its_own_name_prints_no_raw_escape_byte_on_either_surface() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_hostile_filename_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+    let hostile_name = "\x1b[2J\x1b[1;31mPWNED\x1b[0m.js";
+    let fixture = dir.join(hostile_name);
+    std::fs::write(&fixture, "function f() {}").expect("write fixture with a hostile filename");
+
+    let single_file_output = Command::new(&binary)
+        .args(["analyze", fixture.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    assert!(
+        single_file_output.status.success(),
+        "exit 0 expected (single file). stderr: {}",
+        String::from_utf8_lossy(&single_file_output.stderr)
+    );
+    assert!(
+        !single_file_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte from the FILE NAME reached the single-file console output: {:?}",
+        String::from_utf8_lossy(&single_file_output.stdout)
+    );
+
+    let project_output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        project_output.status.success(),
+        "exit 0 expected (project). stderr: {}",
+        String::from_utf8_lossy(&project_output.stderr)
+    );
+    assert!(
+        !project_output.stdout.contains(&0x1bu8),
+        "a raw ESC byte from the FILE NAME reached the project console output: {:?}",
+        String::from_utf8_lossy(&project_output.stdout)
+    );
+}
+
 #[test]
 fn e2e_analyze_path_with_mixed_rust_and_csharp_files_measures_both() {
     let binary = binary_path();

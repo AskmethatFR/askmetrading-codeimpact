@@ -16,6 +16,14 @@ use codeimpact_secondaries::gateways::code_parsers::code_parser_stub::CodeParser
 //      behavior from #1 (adds the extension->Language step), own cycle.
 //   3. extensions() is the union of every registered language's own
 //      extensions — its own behavior.
+//
+// Test List (US17 T1 — TypeScript/JavaScript registered like any other
+// language, no registry change):
+//   4. dispatch resolves .ts/.js/.jsx to their registered parser, and
+//      refuses .tsx (A2 ruling: out of v1 scope) — one behavior (routing),
+//      divergent rows, one cycle.
+//   5. extensions() union includes the new TypeScript/JavaScript
+//      extensions alongside the existing ones.
 
 fn rust_parser() -> CodeParserStub {
     CodeParserStub::new(Err(AnalysisError::AnalysisFailed("rust-marker".into())))
@@ -76,4 +84,56 @@ fn extensions_is_the_union_of_every_registered_language() {
     let mut extensions = registry.extensions();
     extensions.sort();
     assert_eq!(extensions, vec!["cs", "rs"]);
+}
+
+fn typescript_parser() -> CodeParserStub {
+    CodeParserStub::new(Err(AnalysisError::AnalysisFailed(
+        "typescript-marker".into(),
+    )))
+}
+
+fn javascript_parser() -> CodeParserStub {
+    CodeParserStub::new(Err(AnalysisError::AnalysisFailed(
+        "javascript-marker".into(),
+    )))
+}
+
+fn four_language_registry() -> ParserRegistry {
+    two_language_registry()
+        .register(Language::TypeScript, Box::new(typescript_parser()))
+        .register(Language::JavaScript, Box::new(javascript_parser()))
+}
+// @scenario: typescript-javascript-analysis/S2
+
+#[test]
+fn dispatch_routes_typescript_and_javascript_extensions_and_refuses_tsx() {
+    let registry = four_language_registry();
+
+    assert_eq!(
+        marker_of(registry.dispatch(Path::new("a.ts")).unwrap()),
+        "typescript-marker"
+    );
+    assert_eq!(
+        marker_of(registry.dispatch(Path::new("a.js")).unwrap()),
+        "javascript-marker"
+    );
+    assert_eq!(
+        marker_of(registry.dispatch(Path::new("a.jsx")).unwrap()),
+        "javascript-marker"
+    );
+    // A2 (human-approved ruling): `.tsx` is deliberately out of v1 scope.
+    assert!(registry.dispatch(Path::new("a.tsx")).is_none());
+}
+// @scenario: typescript-javascript-analysis/S2
+
+#[test]
+fn extensions_union_includes_typescript_and_javascript_extensions() {
+    let registry = four_language_registry();
+
+    let mut extensions = registry.extensions();
+    extensions.sort();
+    assert_eq!(
+        extensions,
+        vec!["cjs", "cs", "cts", "js", "jsx", "mjs", "mts", "rs", "ts"]
+    );
 }
