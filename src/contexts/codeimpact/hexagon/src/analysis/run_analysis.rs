@@ -184,7 +184,7 @@ impl RunAnalysis {
             ));
         }
 
-        let all_deps = Self::drop_edges_to_unmeasurable_files(&per_file, all_deps);
+        let all_deps = Self::drop_dangling_edges(&per_file, all_deps);
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count);
@@ -287,7 +287,7 @@ impl RunAnalysis {
     /// stays exactly as strict). Dropping the edge is not a measurement
     /// silence: its endpoint is already named in `unmeasurable_files`
     /// (ADR-0010).
-    fn drop_edges_to_unmeasurable_files(
+    fn drop_dangling_edges(
         per_file: &[(PathBuf, CodeMetrics)],
         dependencies: Vec<super::file_consumption_graph::FileDependency>,
     ) -> Vec<super::file_consumption_graph::FileDependency> {
@@ -472,7 +472,7 @@ impl RunAnalysis {
             ));
         }
 
-        let all_deps = Self::drop_edges_to_unmeasurable_files(&per_file, all_deps);
+        let all_deps = Self::drop_dangling_edges(&per_file, all_deps);
         Ok(FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count))
