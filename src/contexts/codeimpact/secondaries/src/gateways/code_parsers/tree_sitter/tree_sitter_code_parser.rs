@@ -67,8 +67,12 @@ const MAX_NESTING_DEPTH: u32 = 2_000;
 const MAX_QUADRATIC_CAPTURES_PER_FUNCTION: usize = 2_000;
 
 /// `namespace -> declaring-files` (US16 T5) — named so `DepsIndex`'s field
-/// stays readable.
-type NamespaceIndex = HashMap<String, Vec<PathBuf>>;
+/// stays readable. Named `NamespaceDeclarers` (US17 T4.1 sweep, Dev-B
+/// MINOR-1), not `NamespaceIndex`, to stay distinct from the unrelated
+/// `DepsStrategy::NamespaceIndex` variant — the same identifier naming two
+/// different things in this file was exactly the ambiguity `cc-clear-naming`
+/// exists to catch.
+type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 
 /// The project-global pre-pass's full output (US16 T5, Security MEDIUM
 /// retry #1): the `namespace -> declaring-files` index AND every file's
@@ -76,12 +80,14 @@ type NamespaceIndex = HashMap<String, Vec<PathBuf>>;
 /// `resolve_dependencies` looks its own file up in `file_references`
 /// instead of re-parsing `source` a second time (once here, once in the
 /// pre-pass, for the SAME file, on every single call). `namespace_declarers`
-/// stays `NamespaceIndex`-specific (C#'s `using`/namespace resolution,
-/// ADR-0023); `file_references` (renamed from `file_usings`, US17 T4.1 —
-/// `usings` holding a relative path string like `"./x"` would be a name
-/// that lies) is generalized across both `DepsStrategy` variants.
+/// stays specific to `DepsStrategy::NamespaceIndex` (C#'s `using`/namespace
+/// resolution, ADR-0023); `file_references` (renamed from `file_usings`,
+/// US17 T4.1 — `usings` holding a relative path string like `"./x"` would
+/// be a name that lies) is named neutrally so T4.3's `RelativePath` arm can
+/// consume it too — today it is populated for every extractable file but
+/// only ever READ by the `NamespaceIndex` arm.
 struct DepsIndex {
-    namespace_declarers: NamespaceIndex,
+    namespace_declarers: NamespaceDeclarers,
     file_references: HashMap<PathBuf, Vec<String>>,
 }
 
@@ -330,7 +336,11 @@ impl CodeParser for TreeSitterCodeParser {
     /// never populated it).
     ///
     /// `DepsStrategy::RelativePath` (TypeScript/JavaScript) returns no edge
-    /// yet — T4.3 fills this arm in; T4.1 only opens the seam.
+    /// yet — T4.3 fills this arm in; T4.1 only opens the seam. Whatever
+    /// structure T4.3 needs to resolve a relative import MUST be built
+    /// once in `build_deps_index` and read here through the memoized
+    /// `deps_index(ctx)` — never rebuilt per call (AD-2, ADR-0024): this
+    /// exact path already relapsed into a per-call rebuild once (#123).
     fn resolve_dependencies(
         &self,
         source: &str,
@@ -420,7 +430,7 @@ fn build_deps_index(
     file_sources: &[(PathBuf, String)],
     source_roots: &[PathBuf],
 ) -> DepsIndex {
-    let mut namespace_declarers: NamespaceIndex = HashMap::new();
+    let mut namespace_declarers: NamespaceDeclarers = HashMap::new();
     let mut file_references: HashMap<PathBuf, Vec<String>> = HashMap::new();
 
     for (path, source) in file_sources {
