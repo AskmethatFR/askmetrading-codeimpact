@@ -45,10 +45,11 @@ pub struct LanguageProfile {
     /// metric-extraction query): the two run over the same file for
     /// different purposes, at different times (`deps_scm` is also run,
     /// once per file, over every OTHER project file during the pre-pass).
-    /// US17 T1: TypeScript/JavaScript's `deps_scm` is an EMPTY query —
-    /// `resolve_dependencies` therefore returns empty for TS/JS, the same
-    /// honest staging ADR-0020 used for C# in T2 (ruling A3 — real
-    /// dependency resolution is T4).
+    /// US17 T1 staged this as an EMPTY query (ruling A3 — real dependency
+    /// resolution deferred to T4). US17 T4.3 fills it in for TypeScript/
+    /// JavaScript: `queries/ecmascript_deps.scm` captures literal-only
+    /// `import`/`export ... from`/`require(...)` specifiers, resolved by
+    /// `DepsStrategy::RelativePath`.
     pub deps_scm: &'static str,
     pub io_table: Vec<String>,
     /// The confident/suspicious split's suspicious half (US16 T4.2) — text

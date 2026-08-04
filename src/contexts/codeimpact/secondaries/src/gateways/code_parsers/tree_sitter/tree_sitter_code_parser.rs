@@ -83,12 +83,16 @@ type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 /// stays specific to `DepsStrategy::NamespaceIndex` (C#'s `using`/namespace
 /// resolution, ADR-0023); `file_references` (renamed from `file_usings`,
 /// US17 T4.1 — `usings` holding a relative path string like `"./x"` would
-/// be a name that lies) is named neutrally so T4.3's `RelativePath` arm can
-/// consume it too — today it is populated for every extractable file but
-/// only ever READ by the `NamespaceIndex` arm.
+/// be a name that lies) is named neutrally, and is now also consumed by
+/// `RelativePath` (US17 T4.3). `resolvable_targets` (US17 T4.3, AD-2/AD-3)
+/// is the admissible-edge-target SET `RelativePath` resolves candidates
+/// against — every key of `file_sources`, independent of extraction
+/// success (a file too large to extract from is still a legitimate graph
+/// node) and independent of `source_roots` (T4.4 adds that gate).
 struct DepsIndex {
     namespace_declarers: NamespaceDeclarers,
     file_references: HashMap<PathBuf, Vec<String>>,
+    resolvable_targets: HashSet<PathBuf>,
 }
 
 /// The `deps_index_cache`'s memoized entry (#90 T5 retry #1): the exact
@@ -160,10 +164,10 @@ impl TreeSitterCodeParser {
     /// US17 T1 — TypeScript, a second `LanguageProfile` sharing the entire
     /// pipeline C# already exercises (`parse_source`,
     /// `assign_captures_to_functions`, etc. are unchanged by this ticket).
-    /// `deps_scm` is an EMPTY query (ruling A3): `resolve_dependencies`
-    /// therefore returns empty for TypeScript in T1, the same honest
-    /// staging ADR-0020 used for C# in T2 — real dependency resolution is
-    /// T4.
+    /// T1 staged `deps_scm` as an EMPTY query (ruling A3): `resolve_
+    /// dependencies` returned empty for TypeScript until T4.3, which fills
+    /// it in with real literal-relative-import resolution (`ecmascript_
+    /// deps.scm`, `DepsStrategy::RelativePath`).
     #[cfg(feature = "lang-typescript")]
     pub fn typescript(extra_prefixes: Vec<String>) -> Self {
         Self::ecmascript(
@@ -211,7 +215,7 @@ impl TreeSitterCodeParser {
             profile: LanguageProfile {
                 grammar,
                 scm: include_str!("queries/ecmascript.scm"),
-                deps_scm: "",
+                deps_scm: include_str!("queries/ecmascript_deps.scm"),
                 io_table,
                 suspicious_markers: io_signatures::typescript::SUSPICIOUS_RECEIVER_MARKERS
                     .iter()
@@ -228,7 +232,17 @@ impl TreeSitterCodeParser {
                          precise naming is deferred"
                             .to_string(),
                     ),
-                    cross_file_dependencies: MetricSupport::Unsupported,
+                    // US17 T4.3 — flips from T1's `Unsupported` now that real
+                    // (if literal-only) resolution exists. Deliberately
+                    // longer than C#'s three strings (AD-6): this axis has
+                    // more blind spots, and the operator relies on this
+                    // exact text to decide whether to trust the graph.
+                    cross_file_dependencies: MetricSupport::Degraded(
+                        "literal relative specifiers only (import, export-from, require); \
+                         computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
+                         imports produce no edge, and .tsx targets are not analyzed"
+                            .to_string(),
+                    ),
                 },
                 deps: DepsStrategy::RelativePath,
             },
@@ -335,12 +349,20 @@ impl CodeParser for TreeSitterCodeParser {
     /// a hand-built `DependencyContext` in a test, or a real caller that
     /// never populated it).
     ///
-    /// `DepsStrategy::RelativePath` (TypeScript/JavaScript) returns no edge
-    /// yet — T4.3 fills this arm in; T4.1 only opens the seam. Whatever
-    /// structure T4.3 needs to resolve a relative import MUST be built
-    /// once in `build_deps_index` and read here through the memoized
-    /// `deps_index(ctx)` — never rebuilt per call (AD-2, ADR-0024): this
-    /// exact path already relapsed into a per-call rebuild once (#123).
+    /// `DepsStrategy::RelativePath` (TypeScript/JavaScript, US17 T4.3) —
+    /// each referenced specifier of `current_file` that starts with `./` or
+    /// `../` is joined to `current_file`'s parent directory, normalized
+    /// lexically (`.`/`..` resolved in memory, never via `std::fs` — AD-4),
+    /// and matched against `index.resolvable_targets` (`build_deps_index`,
+    /// AD-2 — one pre-pass, one index, built once, never rebuilt per call:
+    /// this exact path already relapsed into a per-call rebuild once,
+    /// #123). The admissible target SET is the project's own scanned files
+    /// (AD-3): a specifier escaping it (`../../../etc/passwd`, a bare
+    /// import, an absolute path, a protocol URL) produces no edge because
+    /// it does not belong to that set, never because a filter recognized
+    /// it. A specifier with no analyzable-extension candidate present in
+    /// `resolvable_targets` (e.g. only a `.tsx` twin exists) contributes no
+    /// edge — same "absent, never an error" contract as `NamespaceIndex`.
     fn resolve_dependencies(
         &self,
         source: &str,
@@ -380,7 +402,40 @@ impl CodeParser for TreeSitterCodeParser {
                 }
                 Ok(resolved)
             }
-            DepsStrategy::RelativePath => Ok(Vec::new()),
+            DepsStrategy::RelativePath => {
+                let index = self.deps_index(ctx);
+                let referenced = match index.file_references.get(&ctx.current_file) {
+                    Some(referenced) => referenced.clone(),
+                    None => {
+                        extract_deps_safe(&self.profile, source)
+                            .ok_or(AnalysisError::Unmeasurable(
+                                UnmeasurableReason::SourceTooComplex,
+                            ))?
+                            .referenced
+                    }
+                };
+
+                let Some(base) = ctx.current_file.parent() else {
+                    return Ok(Vec::new());
+                };
+
+                let mut resolved: Vec<PathBuf> = Vec::new();
+                let mut seen: HashSet<PathBuf> = HashSet::new();
+                for specifier in &referenced {
+                    if !(specifier.starts_with("./") || specifier.starts_with("../")) {
+                        continue;
+                    }
+                    let Some(target) =
+                        resolve_relative_specifier(base, specifier, &index.resolvable_targets)
+                    else {
+                        continue;
+                    };
+                    if target != ctx.current_file && seen.insert(target.clone()) {
+                        resolved.push(target);
+                    }
+                }
+                Ok(resolved)
+            }
         }
     }
 }
@@ -425,6 +480,12 @@ fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
 /// by contrast, is scoped to `under_any_root` — `source_roots` bounds
 /// which files may act as a namespace's DECLARER, not which files may
 /// REQUEST resolution.
+///
+/// `resolvable_targets` (US17 T4.3, AD-2/AD-3) is built here too, from
+/// EVERY key of `file_sources` — independent of `extract_deps_safe`
+/// succeeding (a file too large/pathological to extract from is still a
+/// legitimate graph node) and independent of `source_roots` (T4.4 adds
+/// that gate; T4.3 deliberately does not).
 fn build_deps_index(
     profile: &LanguageProfile,
     file_sources: &[(PathBuf, String)],
@@ -432,6 +493,8 @@ fn build_deps_index(
 ) -> DepsIndex {
     let mut namespace_declarers: NamespaceDeclarers = HashMap::new();
     let mut file_references: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    let resolvable_targets: HashSet<PathBuf> =
+        file_sources.iter().map(|(path, _)| path.clone()).collect();
 
     for (path, source) in file_sources {
         let Some(extraction) = extract_deps_safe(profile, source) else {
@@ -452,6 +515,103 @@ fn build_deps_index(
     DepsIndex {
         namespace_declarers,
         file_references,
+        resolvable_targets,
+    }
+}
+
+/// The extensions T4.3's relative-import resolution will ever propose as a
+/// candidate (Q-A, operator-approved order — see `candidate_paths`).
+/// Deliberately excludes `.tsx` (#118 — never listed, never a candidate,
+/// never a target: `.tsx` never enters `file_sources` in the first place)
+/// and `.d.ts` (a types-only dependency is not a runtime one).
+const CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION: [&str; 7] =
+    ["ts", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+
+/// Resolves one `specifier` (already confirmed `./`- or `../`-prefixed by
+/// the caller) against `base` (US17 T4.3, AD-3/AD-4) — `base.join`, then a
+/// purely lexical `.`/`..` normalization (no `std::fs` call, ever: no
+/// `exists`, no `canonicalize`, no `read_link` — symlinks are never
+/// followed), then the operator-approved candidate list (AD-9, ADR-0030),
+/// first member present in `resolvable_targets` wins.
+fn resolve_relative_specifier(
+    base: &Path,
+    specifier: &str,
+    resolvable_targets: &HashSet<PathBuf>,
+) -> Option<PathBuf> {
+    let normalized = normalize_lexically(&base.join(specifier))?;
+    candidate_paths(&normalized)
+        .into_iter()
+        .find(|candidate| resolvable_targets.contains(candidate))
+}
+
+/// Purely lexical `.`/`..` normalization (US17 T4.3, AD-4) — `CurDir`
+/// components are dropped, a `ParentDir` pops the last pushed component,
+/// and a `ParentDir` that would pop past the root (nothing left to pop, or
+/// the last component is not an ordinary `Normal` segment) abandons the
+/// candidate entirely (`None`) rather than escaping the joined path's
+/// bounds. No filesystem access — this is string/component manipulation
+/// only, matching AD-4's "no disk access driven by import text" invariant.
+fn normalize_lexically(path: &Path) -> Option<PathBuf> {
+    let mut stack: Vec<std::path::Component> = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(stack.last(), Some(std::path::Component::Normal(_))) {
+                    stack.pop();
+                } else {
+                    return None;
+                }
+            }
+            other => stack.push(other),
+        }
+    }
+    Some(stack.into_iter().collect())
+}
+
+/// The operator-approved candidate order for one normalized, already-joined
+/// path (US17 T4.3, AD-9 — this exact order MUST be reproduced verbatim in
+/// ADR-0030 at Phase 5; T1 arbitrated this once, recorded only that it had
+/// been decided, and the content was lost).
+///
+/// A specifier that already carries an analyzable extension proposes at
+/// most 2 candidates: the exact path, then its TypeScript source twin for
+/// the `.js` family (the NodeNext idiom — TS sources are imported under
+/// their emitted `.js`/`.mjs`/`.cjs` name). An extension-less specifier
+/// proposes up to 16: 7 direct extensions, then the same 7 under an
+/// `index` child directory.
+fn candidate_paths(normalized: &Path) -> Vec<PathBuf> {
+    let extension = normalized.extension().and_then(|ext| ext.to_str());
+    match extension {
+        Some(extension) if CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION.contains(&extension) => {
+            let mut candidates = vec![normalized.to_path_buf()];
+            if let Some(typescript_twin) = typescript_source_twin(extension) {
+                candidates.push(normalized.with_extension(typescript_twin));
+            }
+            candidates
+        }
+        _ => CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
+            .iter()
+            .map(|ext| normalized.with_extension(ext))
+            .chain(
+                CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
+                    .iter()
+                    .map(|ext| normalized.join("index").with_extension(ext)),
+            )
+            .collect(),
+    }
+}
+
+/// The NodeNext idiom (US17 T4.3): a `.js`/`.mjs`/`.cjs` specifier may name
+/// the TypeScript SOURCE file under its emitted extension. `.ts`/`.mts`/
+/// `.cts`/`.jsx` have no such twin (a `.jsx` specifier is already a real
+/// runtime extension with nothing else to try).
+fn typescript_source_twin(extension: &str) -> Option<&'static str> {
+    match extension {
+        "js" => Some("ts"),
+        "mjs" => Some("mts"),
+        "cjs" => Some("cts"),
+        _ => None,
     }
 }
 
@@ -475,8 +635,13 @@ fn extract_deps_safe(profile: &LanguageProfile, source: &str) -> Option<DepsExtr
 /// — `None` when parse/query is cancelled by `deadline` (mirrors
 /// `run_pipeline`'s own budget contract). The query's own capture names
 /// (`@namespace`/`@using`, C#-specific — `queries/csharp_deps.scm`) are
-/// unchanged by US17 T4.1; only this function's Rust-side vocabulary is
-/// generalized.
+/// unchanged by US17 T4.1. US17 T4.3 adds `@import`
+/// (`queries/ecmascript_deps.scm`, TypeScript/JavaScript's `import`/
+/// `export ... from`/`require(...)` specifiers) alongside them — a third
+/// capture name in the SAME dispatch, not a fork: `@_callee` (the `#eq?`
+/// predicate's binding on `require`'s callee) is deliberately unhandled
+/// here and falls through the wildcard arm, since the predicate has
+/// already done its job by the time a match reaches Rust.
 fn extract_deps(
     profile: &LanguageProfile,
     source: &str,
@@ -534,6 +699,11 @@ fn extract_deps(
                         referenced.push(text);
                     }
                 }
+                "import" => {
+                    if let Some(text) = string_literal_text(&capture.node, bytes) {
+                        referenced.push(text);
+                    }
+                }
                 _ => {}
             }
         }
@@ -581,6 +751,37 @@ fn field_text_opt(node: &Node, field: &str, source: &[u8]) -> Option<String> {
     node.child_by_field_name(field)
         .and_then(|n| n.utf8_text(source).ok())
         .map(|s| s.to_string())
+}
+
+/// The literal text a TypeScript/JavaScript `string` node spells out (US17
+/// T4.3, `@import`) — `node` here IS the `string` node itself (the query
+/// captures `(string) @import` directly), and its raw `utf8_text` would be
+/// wrong: it still carries the surrounding quotes. The real text lives on
+/// the `string_fragment` child instead. AD-8 (abstain, never guess, never
+/// fail): this function returns `None` — no capture consumed, no edge, no
+/// error — whenever the string is not a single plain fragment: zero or
+/// more than one `string_fragment` child (an empty string, or one split by
+/// an interior `html_character_reference`), or a nested `escape_sequence`
+/// child at all (`'./\x78'` must never be decoded into a path — the
+/// decoded byte could name a file the raw source text never mentions).
+fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    let mut fragment: Option<Node> = None;
+    let mut fragment_count = 0usize;
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "string_fragment" => {
+                fragment_count += 1;
+                fragment = Some(child);
+            }
+            "escape_sequence" => return None,
+            _ => {}
+        }
+    }
+    if fragment_count != 1 {
+        return None;
+    }
+    fragment?.utf8_text(source).ok().map(|s| s.to_string())
 }
 
 /// Runs the parse+query+assign pipeline inside `catch_unwind` (Q2: defense
