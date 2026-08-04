@@ -2326,8 +2326,8 @@ mod tests {
                 .is_empty());
         }
 
-        #[test]
         // @scenario: typescript-javascript-analysis/S3
+        #[test]
         fn an_external_import_produces_no_edge_while_a_relative_import_in_the_same_file_does() {
             let x_ts = "export const x = 1;";
             let entry = "import React from 'react';\nimport './x';\n";
@@ -2343,8 +2343,8 @@ mod tests {
             }
         }
 
-        #[test]
         // @scenario: typescript-javascript-analysis/S4
+        #[test]
         fn export_from_a_relative_path_resolves_to_a_real_edge() {
             let y_ts = "export const y = 1;";
             let entry = "export * from './y';\n";
@@ -2355,8 +2355,8 @@ mod tests {
             assert_eq!(resolved, vec![PathBuf::from("y.ts")]);
         }
 
-        #[test]
         // @scenario: typescript-javascript-analysis/S4
+        #[test]
         fn a_relative_import_prefers_the_ts_candidate_over_the_js_candidate() {
             let x_ts = "export const x = 1;";
             let x_js = "module.exports.x = 1;";
@@ -2372,8 +2372,8 @@ mod tests {
             assert_eq!(resolved, vec![PathBuf::from("x.ts")]);
         }
 
-        #[test]
         // @scenario: typescript-javascript-analysis/S4
+        #[test]
         fn a_relative_import_falls_back_to_the_index_file_when_no_direct_candidate_exists() {
             let index_ts = "export const x = 1;";
             let entry = "import './x';\n";
@@ -2388,8 +2388,8 @@ mod tests {
             assert_eq!(resolved, vec![PathBuf::from("x/index.ts")]);
         }
 
-        #[test]
         // @scenario: typescript-javascript-analysis/S4
+        #[test]
         fn an_extension_carrying_import_resolves_to_its_typescript_source_twin() {
             let x_ts = "export const x = 1;";
             let entry = "import './x.js';\n";
