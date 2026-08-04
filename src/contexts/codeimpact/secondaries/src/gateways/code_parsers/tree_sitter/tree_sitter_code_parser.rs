@@ -1950,12 +1950,52 @@ mod tests {
         //   10. the shared ecmascript.scm query compiles against BOTH grammars
         //       (a non-compiling query panics inside Query::new, so parsing an
         //       empty source with each parser IS the guard).
-        //   11. resolve_dependencies always returns empty for TS/JS (A3) even
-        //       when the source contains import statements.
+        //   11. (US17 T4.1) resolve_dependencies always returned empty for
+        //       TS/JS (A3) even when the source contained import statements
+        //       — SUPERSEDED by US17 T4.3's Test List below, which replaces
+        //       this item with real relative-import resolution.
         //   12. the IIFE grammar-precondition test (tech spec step 8): a
         //       call_expression sharing its exact start_byte with the nested
         //       @function it wraps must still be attributed to the OUTER
         //       function, not silently dropped.
+        //
+        // ── Test List (US17 T4.3 — real relative-import resolution,
+        //    replacing item 11 above) ───────────────────────────────────
+        //   13. deps_scm compiles against both grammars (deps twin of #10).
+        //   14. an external/bare import produces no edge, alongside a real
+        //       relative import in the SAME file (S3 + positive control —
+        //       every negative assertion below pairs a positive control in
+        //       the same test, per the tech spec's closing warning: a
+        //       negative-only assertion passes trivially the moment
+        //       extraction is broken end-to-end).
+        //   15. `export * from './y'` -> edge.
+        //   16. precedence: `./x` resolves to `x.ts` over `x.js` when both
+        //       exist.
+        //   17. index fallback: `./x` -> `x/index.ts` when no `x.ts` exists.
+        //   18. NodeNext twin: `./x.js` -> `x.ts` when only `x.ts` exists.
+        //   19. `require('./x')` -> `x.ts`, same candidate list/precedence
+        //       as `import`, proven with `x.js` also present.
+        //   20. paired test: `require('./a')` (literal) and `require(name)`
+        //       (computed) in ONE file -> exactly one edge, to `a.ts` —
+        //       same shape for a template literal and string concatenation.
+        //   21. `notRequire('./x')` -> no edge (pins the `#eq?` predicate),
+        //       paired with a real `require` resolving in the same file.
+        //   22. `require('./\x78')` (an escape-sequence literal) -> no
+        //       edge, no error, paired with a real import resolving.
+        //   23. `import x = require('./y')` in a `.ts` file -> no edge, and
+        //       the suite stays green (the shared query was not widened),
+        //       paired with a real import resolving in the same file.
+        //   24. absolute/protocol/bare specifiers (`../../../../etc/passwd`,
+        //       `@scope/pkg`, `/abs`, `http://…`, `data:…`) -> no edge, one
+        //       parameterized cycle (same behavior: the `./`/`../` prefix
+        //       gate), paired with a real relative import resolving.
+        //   25. `./x` where only `x.tsx` exists -> no edge (`.tsx` is never
+        //       a candidate).
+        //   26. no self-edge.
+        //   27. the same target imported twice — once via `import`, once
+        //       via `require` — dedupes to exactly one edge.
+        //   28. `capabilities().cross_file_dependencies() == Degraded(msg)`
+        //       with an assertion on the message's CONTENT (AD-6).
 
         fn ts_parser() -> TreeSitterCodeParser {
             TreeSitterCodeParser::typescript(Vec::new())
@@ -2010,27 +2050,27 @@ mod tests {
                     }
                     other => panic!("expected call_graph to be Degraded, got {:?}", other),
                 }
-                // Q4 (human-approved ruling): cross_file_dependencies is
-                // Unsupported in T1 — real dependency resolution is T4, and
-                // reporting Degraded before the code exists would be a
-                // measurement lie (ADR-0010).
-                assert_eq!(
-                    *capabilities.cross_file_dependencies(),
-                    MetricSupport::Unsupported
-                );
+                // US17 T4.3 (item 28 of the Test List above, AD-6): flips
+                // from T1's Unsupported now that real (literal-only)
+                // resolution exists — asserted on CONTENT, not merely the
+                // variant, so a stale string (AD-6's invariant) would fail
+                // this test even if the variant stayed Degraded.
+                match capabilities.cross_file_dependencies() {
+                    MetricSupport::Degraded(reason) => {
+                        assert!(
+                            reason.contains("literal relative specifiers only")
+                                && reason.contains("require")
+                                && reason.contains(".tsx"),
+                            "expected the literal-only-resolution reason (AD-6), got: {}",
+                            reason
+                        );
+                    }
+                    other => panic!(
+                        "expected cross_file_dependencies to be Degraded, got {:?}",
+                        other
+                    ),
+                }
             }
-        }
-
-        #[test]
-        fn resolve_dependencies_is_always_empty_for_typescript_and_javascript() {
-            let source = "import { x } from './x';\nimport React from 'react';\nfunction f() {}";
-            let ctx = DependencyContext::new(PathBuf::from("a.ts"), PathBuf::from("."), vec![]);
-            let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
-            assert!(
-                resolved.is_empty(),
-                "A3: deps_scm is an empty query in T1 — no edge is ever produced yet, got {:?}",
-                resolved
-            );
         }
 
         #[test]
@@ -2042,6 +2082,273 @@ mod tests {
             // for both grammars sharing the same `ecmascript.scm`.
             assert!(ts_parser().parse("").unwrap().is_empty());
             assert!(js_parser().parse("").unwrap().is_empty());
+        }
+
+        // ── resolve_dependencies tests (US17 T4.3 — the TS/JS relative-
+        // import resolver, item 13 onward of the Test List above). Item 11
+        // (`resolve_dependencies_is_always_empty_for_typescript_and_
+        // javascript`, T4.1) is REPLACED by its inverse below, extended to
+        // both parsers per Dev-B's T4.1-barrier boy-scout note. ──
+
+        fn deps_ctx(
+            current_file: &str,
+            file_sources: &[(&str, &str)],
+            source_roots: &[&str],
+        ) -> DependencyContext {
+            let available_files: Vec<PathBuf> =
+                file_sources.iter().map(|(p, _)| PathBuf::from(p)).collect();
+            DependencyContext::new(
+                PathBuf::from(current_file),
+                PathBuf::from("."),
+                available_files,
+            )
+            .with_file_sources(Arc::new(
+                file_sources
+                    .iter()
+                    .map(|(p, s)| (PathBuf::from(*p), s.to_string()))
+                    .collect(),
+            ))
+            .with_source_roots(source_roots.iter().map(PathBuf::from).collect())
+        }
+
+        #[test]
+        fn ecmascript_deps_query_compiles_against_both_grammars() {
+            let ctx = deps_ctx("a.ts", &[("a.ts", "")], &[]);
+            assert!(ts_parser()
+                .resolve_dependencies("", &ctx)
+                .unwrap()
+                .is_empty());
+            let ctx = deps_ctx("a.js", &[("a.js", "")], &[]);
+            assert!(js_parser()
+                .resolve_dependencies("", &ctx)
+                .unwrap()
+                .is_empty());
+        }
+
+        #[test]
+        // @scenario: typescript-javascript-analysis/S3
+        fn an_external_import_produces_no_edge_while_a_relative_import_in_the_same_file_does() {
+            let x_ts = "export const x = 1;";
+            let entry = "import React from 'react';\nimport './x';\n";
+            for parser in ecmascript_parsers() {
+                let ctx = deps_ctx("entry.ts", &[("entry.ts", entry), ("x.ts", x_ts)], &[]);
+                let resolved = parser.resolve_dependencies(entry, &ctx).unwrap();
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("x.ts")],
+                    "external import must not resolve, and the paired relative import must \
+                     resolve exactly once"
+                );
+            }
+        }
+
+        #[test]
+        // @scenario: typescript-javascript-analysis/S4
+        fn export_from_a_relative_path_resolves_to_a_real_edge() {
+            let y_ts = "export const y = 1;";
+            let entry = "export * from './y';\n";
+            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry), ("y.ts", y_ts)], &[]);
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("y.ts")]);
+        }
+
+        #[test]
+        // @scenario: typescript-javascript-analysis/S4
+        fn a_relative_import_prefers_the_ts_candidate_over_the_js_candidate() {
+            let x_ts = "export const x = 1;";
+            let x_js = "module.exports.x = 1;";
+            let entry = "import './x';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("x.ts", x_ts), ("x.js", x_js)],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("x.ts")]);
+        }
+
+        #[test]
+        // @scenario: typescript-javascript-analysis/S4
+        fn a_relative_import_falls_back_to_the_index_file_when_no_direct_candidate_exists() {
+            let index_ts = "export const x = 1;";
+            let entry = "import './x';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("x/index.ts", index_ts)],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("x/index.ts")]);
+        }
+
+        #[test]
+        // @scenario: typescript-javascript-analysis/S4
+        fn an_extension_carrying_import_resolves_to_its_typescript_source_twin() {
+            let x_ts = "export const x = 1;";
+            let entry = "import './x.js';\n";
+            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry), ("x.ts", x_ts)], &[]);
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("x.ts")]);
+        }
+
+        #[test]
+        fn a_literal_require_resolves_with_the_same_candidate_precedence_as_import() {
+            let x_ts = "export const x = 1;";
+            let x_js = "module.exports.x = 1;";
+            let entry = "const x = require('./x');\n";
+            for parser in ecmascript_parsers() {
+                let ctx = deps_ctx(
+                    "entry.js",
+                    &[("entry.js", entry), ("x.ts", x_ts), ("x.js", x_js)],
+                    &[],
+                );
+                let resolved = parser.resolve_dependencies(entry, &ctx).unwrap();
+                assert_eq!(resolved, vec![PathBuf::from("x.ts")]);
+            }
+        }
+
+        #[test]
+        fn a_computed_require_produces_no_edge_while_a_literal_require_in_the_same_file_does() {
+            let a_ts = "export const a = 1;";
+            let cases = [
+                "const name = './a';\nrequire('./a');\nrequire(name);\n",
+                "const n = 'a';\nrequire('./a');\nrequire(`./${n}`);\n",
+                "const n = 'a';\nrequire('./a');\nrequire('./' + n);\n",
+            ];
+            for source in cases {
+                let ctx = deps_ctx("entry.js", &[("entry.js", source), ("a.ts", a_ts)], &[]);
+                let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("a.ts")],
+                    "source: {} — the computed require must abstain while the literal \
+                     require in the same file still resolves",
+                    source
+                );
+            }
+        }
+
+        #[test]
+        fn a_non_require_call_named_similarly_produces_no_edge_while_a_real_require_does() {
+            let a_ts = "export const a = 1;";
+            let source = "require('./a');\nnotRequire('./b');\n";
+            let ctx = deps_ctx("entry.js", &[("entry.js", source), ("a.ts", a_ts)], &[]);
+
+            let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("a.ts")],
+                "the #eq? predicate must reject notRequire while a real require still resolves"
+            );
+        }
+
+        #[test]
+        fn a_require_with_an_escape_sequence_literal_produces_no_edge_and_no_error() {
+            let a_ts = "export const a = 1;";
+            let b_ts = "export const b = 1;";
+            // The `\x00` sits right AFTER a complete-looking path fragment
+            // ("./a") so that a buggy extraction merely taking the fragment
+            // BEFORE the escape (ignoring the escape's presence entirely)
+            // would coincidentally still resolve to a REAL file — proving
+            // the abstention is load-bearing, not an accident of `a.ts`
+            // simply not existing.
+            let source = "require('./a\\x00');\nrequire('./b');\n";
+            let ctx = deps_ctx(
+                "entry.js",
+                &[("entry.js", source), ("a.ts", a_ts), ("b.ts", b_ts)],
+                &[],
+            );
+
+            let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("b.ts")],
+                "an escape-sequence literal must abstain (no edge to a.ts, no error) even \
+                 though a.ts exists, while the plain literal require in the same file still \
+                 resolves"
+            );
+        }
+
+        #[test]
+        fn legacy_ts_import_equals_require_produces_no_edge_and_the_suite_stays_green() {
+            let y_ts = "export const y = 1;";
+            let source = "import x = require('./y');\nimport './y';\n";
+            let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("y.ts", y_ts)], &[]);
+
+            let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("y.ts")],
+                "import_require_clause must contribute no edge of its own — the shared query \
+                 was not widened to capture it — while the ordinary import in the same file \
+                 still resolves"
+            );
+        }
+
+        #[test]
+        fn non_relative_specifiers_produce_no_edge_while_a_relative_import_in_the_same_file_does() {
+            let x_ts = "export const x = 1;";
+            let cases = [
+                "import '../../../../etc/passwd';\nimport './x';\n",
+                "import '@scope/pkg';\nimport './x';\n",
+                "import '/abs';\nimport './x';\n",
+                "import 'http://example.com/x';\nimport './x';\n",
+                "import 'data:text/plain;base64,';\nimport './x';\n",
+            ];
+            for source in cases {
+                let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("x.ts", x_ts)], &[]);
+                let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("x.ts")],
+                    "source: {} — the non-relative specifier must not resolve while the \
+                     paired relative import still does",
+                    source
+                );
+            }
+        }
+
+        #[test]
+        fn a_relative_import_with_only_a_tsx_target_produces_no_edge() {
+            let x_tsx = "export const X = () => null;";
+            let entry = "import './x';\n";
+            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry), ("x.tsx", x_tsx)], &[]);
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert!(resolved.is_empty());
+        }
+
+        #[test]
+        fn a_file_importing_itself_does_not_link_to_itself() {
+            let entry = "import './entry';\n";
+            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry)], &[]);
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert!(resolved.is_empty());
+        }
+
+        #[test]
+        fn the_same_target_imported_via_import_and_require_dedupes_to_one_edge() {
+            let x_ts = "export const x = 1;";
+            let entry = "import './x';\nrequire('./x');\n";
+            let ctx = deps_ctx("entry.js", &[("entry.js", entry), ("x.ts", x_ts)], &[]);
+
+            let resolved = js_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("x.ts")]);
         }
 
         #[test]
