@@ -3,6 +3,7 @@ Cargo.lock
 lcov.info
 *.profraw
 mutants.out/
+mutants.out.old/
 .mutation-gate/
 
 # Agent-written memory/scratch files, not source (repo hygiene sweep,

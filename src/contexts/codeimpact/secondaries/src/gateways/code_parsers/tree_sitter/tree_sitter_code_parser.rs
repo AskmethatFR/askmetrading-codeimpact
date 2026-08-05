@@ -593,8 +593,12 @@ fn normalize_lexically(path: &Path) -> Option<PathBuf> {
 /// most 2 candidates: the exact path, then its TypeScript source twin for
 /// the `.js` family (the NodeNext idiom — TS sources are imported under
 /// their emitted `.js`/`.mjs`/`.cjs` name). An extension-less specifier
-/// proposes up to 16: 7 direct extensions, then the same 7 under an
-/// `index` child directory.
+/// proposes 14: 7 direct extensions, then the same 7 under an `index`
+/// child directory. (Phase 5 correction — this line read "up to 16",
+/// contradicting its own 7 + 7 enumeration. The operator's Q-A arbitration
+/// chose the FULL list over the minimal one; only the count was wrong, and
+/// 16 is what 2 + 14 gives when the two mutually-exclusive branches are
+/// added together. No behavior depends on the number — see ADR-0030.)
 ///
 /// Retry (Dev-B BLOCKING-1): the direct 7 are built by APPENDING `.ext` to
 /// `normalized`'s full file name (`append_extension`), never by
