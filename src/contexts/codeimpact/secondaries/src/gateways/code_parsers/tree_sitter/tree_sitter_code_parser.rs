@@ -156,14 +156,14 @@ impl TreeSitterCodeParser {
                     .collect(),
                 degradations: CapabilityDegradations {
                     io_in_loops: MetricSupport::Degraded(
-                        "syntactic only; instance/EF receivers abstained, not asserted"
-                            .to_string(),
+                        "syntactic only; instance/EF receivers abstained, not asserted".to_string(),
                     ),
                     call_graph: MetricSupport::Degraded(
                         "name-based resolution; unresolved-receiver calls may merge".to_string(),
                     ),
                     cross_file_dependencies: MetricSupport::Degraded(
-                        "namespace-level resolution; a file links to every declarer of a used namespace"
+                        "namespace-level resolution; a file links to every declarer of a used \
+                         namespace; targets outside the configured sourceRoots produce no edge"
                             .to_string(),
                     ),
                 },
@@ -269,8 +269,9 @@ impl TreeSitterCodeParser {
                          computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
                          imports, and the legacy `import x = require()` form produce no edge; \
                          a shadowed `require` identifier is still followed (syntactic only); \
-                         type-only imports produce a full edge like any other import; .tsx \
-                         targets are not analyzed"
+                         type-only imports produce a full edge like any other import; targets \
+                         outside the configured sourceRoots produce no edge; .tsx targets are \
+                         not analyzed"
                             .to_string(),
                     ),
                 },
