@@ -27,7 +27,7 @@ Feature: TypeScript / JavaScript analysis support
     Then it is routed by extension through the same registry as every other language
     And an extension no language claims is refused rather than guessed
 
-  @wip @scenario:S3
+  @scenario:S3
   Scenario: An external import produces no file-dependency edge
     Given a file that imports an external package, such as `import React from 'react'`
     When the inter-file dependency graph is built

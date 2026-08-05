@@ -3,4 +3,10 @@ Cargo.lock
 lcov.info
 *.profraw
 mutants.out/
+mutants.out.old/
 .mutation-gate/
+
+# Agent-written memory/scratch files, not source (repo hygiene sweep,
+# #34 T4.3) — these can appear at any depth and are large (~450 KB each);
+# a distracted `git add -A` would commit them as if they were project docs.
+AGENTS.md
