@@ -523,8 +523,8 @@ fn build_deps_index(
     let mut file_references: HashMap<PathBuf, Vec<String>> = HashMap::new();
     let resolvable_targets: HashSet<PathBuf> = file_sources
         .iter()
+        .filter(|(path, _)| under_any_root(path, source_roots))
         .map(|(path, _)| path.clone())
-        .filter(|path| under_any_root(path, source_roots))
         .collect();
 
     for (path, source) in file_sources {
