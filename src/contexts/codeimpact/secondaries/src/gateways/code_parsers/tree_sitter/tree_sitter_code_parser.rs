@@ -2618,31 +2618,47 @@ mod tests {
         }
 
         #[test]
+        // Retry 3 (mutation gate: the last survivor, `:806` deletion of the
+        // `"escape_sequence" => return None` arm). One behavior — an escape
+        // sequence anywhere in the specifier must abstain — four divergent
+        // positions, one parameterized cycle. Each pairs the abstaining
+        // specifier with `require('./b')` resolving in the same file.
         fn a_require_with_an_escape_sequence_literal_produces_no_edge_and_no_error() {
             let a_ts = "export const a = 1;";
             let b_ts = "export const b = 1;";
-            // The `\x00` sits right AFTER a complete-looking path fragment
-            // ("./a") so that a buggy extraction merely taking the fragment
-            // BEFORE the escape (ignoring the escape's presence entirely)
-            // would coincidentally still resolve to a REAL file — proving
-            // the abstention is load-bearing, not an accident of `a.ts`
-            // simply not existing.
-            let source = "require('./a\\x00');\nrequire('./b');\n";
-            let ctx = deps_ctx(
-                "entry.js",
-                &[("entry.js", source), ("a.ts", a_ts), ("b.ts", b_ts)],
-                &[],
-            );
-
-            let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
-
-            assert_eq!(
-                resolved,
-                vec![PathBuf::from("b.ts")],
-                "an escape-sequence literal must abstain (no edge to a.ts, no error) even \
-                 though a.ts exists, while the plain literal require in the same file still \
-                 resolves"
-            );
+            let cases = [
+                // trailing: escape right AFTER a complete-looking fragment
+                // ("./a") — a buggy extraction using only the fragment
+                // BEFORE the escape would coincidentally resolve to the
+                // REAL a.ts decoy below.
+                ("trailing", "require('./a\\x78');\nrequire('./b');\n"),
+                // interior: splits into two `string_fragment` children
+                // ("./a" and "b") around the escape.
+                ("interior", "require('./a\\x78b');\nrequire('./b');\n"),
+                // leading: the escape decodes to './a''s leading '.' — the
+                // raw fragment BEFORE decoding is "/a", not even a
+                // relative specifier, but abstention must happen at
+                // extraction, before any prefix check ever sees it.
+                ("leading", "require('\\x2e/a');\nrequire('./b');\n"),
+                // entire string: zero `string_fragment` children at all.
+                ("entire string", "require('\\x2e');\nrequire('./b');\n"),
+            ];
+            for (position, source) in cases {
+                let ctx = deps_ctx(
+                    "entry.js",
+                    &[("entry.js", source), ("a.ts", a_ts), ("b.ts", b_ts)],
+                    &[],
+                );
+                let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("b.ts")],
+                    "position: {} — an escape sequence must abstain regardless of where it \
+                     sits in the specifier, while the paired literal require in the same \
+                     file still resolves",
+                    position
+                );
+            }
         }
 
         #[test]
