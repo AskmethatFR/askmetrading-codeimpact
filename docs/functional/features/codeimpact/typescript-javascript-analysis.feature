@@ -33,7 +33,7 @@ Feature: TypeScript / JavaScript analysis support
     When the inter-file dependency graph is built
     Then no edge is produced for that external import
 
-  @wip @scenario:S4
+  @scenario:S4
   Scenario: A local relative import resolves to a real file-dependency edge
     Given a file that imports another file via a relative path, such as `import './x'`
     When the inter-file dependency graph is built
