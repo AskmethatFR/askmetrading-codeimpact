@@ -2757,38 +2757,48 @@ mod tests {
 
         #[test]
         // Retry 2 (mutation gate, corrected recipe: 4 survivors, all on the
-        // `:837` byte-scan predicate). Unlike the NUL case above, a raw TAB
-        // (0x09) is legal unescaped inside a JS/TS string literal and stays
-        // INSIDE the `string_fragment`'s own span (verified against the
-        // real parse tree: `'./a\tb'` -> `' string_fragment[./a\tb] '`, no
-        // gap, no sibling `ERROR`) — the `:828` gap-check does not fire, so
-        // `:837`'s byte-scan is the ONLY thing standing between this byte
-        // and the resolver. `a\tb.ts` is a decoy target that only a broken
-        // (deleted, or `||`->`&&`, or first `<`->`==`) predicate would
-        // reach.
-        fn a_require_with_a_raw_tab_byte_produces_no_edge_and_no_error() {
-            let a_tab_b_ts = "export const x = 1;";
+        // byte-scan predicate `byte < 0x20 || byte == 0x7f`) + sweep
+        // (Security Finding 2, Dev-B MINOR-3): a raw TAB (0x09) and a raw
+        // DEL (0x7f) are both legal unescaped inside a JS/TS string literal
+        // and both stay INSIDE the `string_fragment`'s own span (verified
+        // against the real parse tree: no gap, no sibling `ERROR`), so the
+        // byte-scan is the ONLY thing standing between either byte and the
+        // resolver. One behavior (a control byte inside the fragment must
+        // abstain), two divergent bytes — one cycle. TAB pins the `<0x20`
+        // clause (kills the predicate deleted, `||`->`&&`, and first
+        // `<`->`==` mutants); DEL pins the `==0x7f` clause on its own —
+        // cargo-mutants cannot isolate one operand of a `||`, and nothing
+        // else in this file supplies a byte the `<0x20` clause misses but
+        // `==0x7f` catches. Each decoy target is a real (but wrong) file
+        // that only a broken predicate would reach.
+        fn a_require_with_a_raw_control_byte_inside_the_fragment_abstains() {
             let b_ts = "export const b = 1;";
-            let source = "require('./a\tb');\nrequire('./b');\n";
-            let ctx = deps_ctx(
-                "entry.js",
-                &[
-                    ("entry.js", source),
-                    ("a\tb.ts", a_tab_b_ts),
-                    ("b.ts", b_ts),
-                ],
-                &[],
-            );
+            let cases = [("TAB (0x09)", "\t"), ("DEL (0x7f)", "\u{7f}")];
+            for (label, byte) in cases {
+                let decoy_ts = "export const wrongTarget = 1;";
+                let decoy_name = format!("a{}b.ts", byte);
+                let source = format!("require('./a{}b');\nrequire('./b');\n", byte);
+                let ctx = deps_ctx(
+                    "entry.js",
+                    &[
+                        ("entry.js", &source),
+                        (&decoy_name, decoy_ts),
+                        ("b.ts", b_ts),
+                    ],
+                    &[],
+                );
 
-            let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+                let resolved = js_parser().resolve_dependencies(&source, &ctx).unwrap();
 
-            assert_eq!(
-                resolved,
-                vec![PathBuf::from("b.ts")],
-                "a raw TAB byte must abstain (no edge to the a\\tb.ts decoy, no error) even \
-                 though it exists, while the plain literal require in the same file still \
-                 resolves"
-            );
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("b.ts")],
+                    "position: {} — a raw control byte inside the fragment must abstain (no \
+                     edge to the decoy, no error) even though it exists, while the plain \
+                     literal require in the same file still resolves",
+                    label
+                );
+            }
         }
 
         #[test]
@@ -2820,29 +2830,37 @@ mod tests {
         }
 
         #[test]
-        // Retry (Dev-B MINOR) — the zero/multiple-`string_fragment`
-        // abstention branch was untested: `import ''` reaches zero
-        // fragments, and `import './a&amp;b'` splits into two fragments
-        // around an `html_character_reference` node (confirmed present in
-        // this grammar's `string` node-types). Both paired with `import
-        // './b'` so a dead resolver cannot pass either row by accident.
-        fn an_import_with_zero_or_multiple_string_fragments_produces_no_edge_and_no_error() {
+        // Retry (Dev-B MINOR), corrected by the sweep — the zero-fragment
+        // abstention branch (`import ''`) was untested, paired with
+        // `import './b'` so a dead resolver cannot pass by accident.
+        //
+        // A second row asserting `import './a&amp;b'` splits into two
+        // fragments around an `html_character_reference` node was REMOVED
+        // here (sweep, Dev-B MAJOR-1/MAJOR-2, Security): measured against
+        // both loaded grammars, `html_character_reference` appears only
+        // inside a JSX attribute string, never in an ordinary literal —
+        // `'./a&b'` (a real `&`, not `&amp;`) parses as ONE edge-to-edge
+        // `string_fragment` in both parsers, and the ORIGINAL row (using
+        // the literal text "&amp;", never decoded) never exercised the
+        // node at all. The row passed only because the fixture carried no
+        // decoy for "./a&amp;b.ts" — it would have passed identically with
+        // the `fragment_count != 1` branch deleted. `> 1 fragment`
+        // coverage is not lost: the escape-position test's "interior" row
+        // (`'./a\x78b'`) already exercises it with a real two-fragment
+        // split.
+        fn an_import_with_zero_string_fragments_produces_no_edge_and_no_error() {
             let b_ts = "export const b = 1;";
-            let cases = [
-                "import '';\nimport './b';\n",
-                "import './a&amp;b';\nimport './b';\n",
-            ];
-            for source in cases {
-                let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("b.ts", b_ts)], &[]);
-                let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
-                assert_eq!(
-                    resolved,
-                    vec![PathBuf::from("b.ts")],
-                    "source: {} — a zero- or multi-fragment string must abstain while the \
-                     paired import still resolves",
-                    source
-                );
-            }
+            let source = "import '';\nimport './b';\n";
+            let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("b.ts", b_ts)], &[]);
+
+            let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("b.ts")],
+                "a zero-fragment string (import '') must abstain while the paired import \
+                 still resolves"
+            );
         }
 
         #[test]
