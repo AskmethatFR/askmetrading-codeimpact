@@ -2350,6 +2350,10 @@ mod tests {
         //       an IN-root target — source_roots bounds which files may be
         //       a dependency TARGET, never which files may REQUEST
         //       resolution.
+        //   32. (Dev-B MINOR-2, inherited from T4.3) resolvable_targets
+        //       stays independent of extract_deps_safe succeeding: a
+        //       too-large-to-extract-from file is still a legitimate
+        //       dependency TARGET, proven by importing INTO one.
 
         fn ts_parser() -> TreeSitterCodeParser {
             TreeSitterCodeParser::typescript(Vec::new())
@@ -3119,6 +3123,30 @@ mod tests {
             let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
 
             assert_eq!(resolved, vec![PathBuf::from("src/y.ts")]);
+        }
+
+        #[test]
+        fn a_file_too_large_to_extract_from_is_still_a_legitimate_dependency_target() {
+            // Dev-B MINOR-2 — `build_deps_index`'s doc claims
+            // `resolvable_targets` is independent of `extract_deps_safe`
+            // succeeding. `huge.ts` exceeds
+            // `source_guard::MAX_MEASURABLE_SOURCE_BYTES`, so
+            // `extract_deps_safe` returns `None` for it and it never enters
+            // `file_references`/`namespace_declarers` — but it must still
+            // resolve as an IMPORT TARGET, since `resolvable_targets` is
+            // built from every `file_sources` key, not from extraction
+            // output.
+            let huge_source = "x".repeat(source_guard::MAX_MEASURABLE_SOURCE_BYTES + 1);
+            let entry = "import './huge';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("huge.ts", &huge_source)],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("huge.ts")]);
         }
 
         #[test]
