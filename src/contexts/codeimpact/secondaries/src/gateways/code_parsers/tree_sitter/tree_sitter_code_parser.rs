@@ -789,17 +789,10 @@ fn field_text_opt(node: &Node, field: &str, source: &[u8]) -> Option<String> {
 /// more than one `string_fragment` child (an empty string, or one split by
 /// an interior `html_character_reference`), or a nested `escape_sequence`
 /// child at all (`'./\x78'` must never be decoded into a path — the
-/// decoded byte could name a file the raw source text never mentions).
-///
-/// Retry (Dev-B / Security fold-in): a single `string_fragment` can still
-/// carry a RAW control byte typed directly into the source (`'./a\0'` —
-/// note the literal NUL, not the escape sequence `'./\x00'`, which the
-/// `escape_sequence` guard above already catches). Measured against the
-/// real grammar: tree-sitter's lexer ends the fragment's matched text at
-/// the raw byte, so a specifier shorter than what the source spells out
-/// reaches the resolver and can land on a real, but wrongly-named, file —
-/// the same AD-8 abstention this function already applies to escapes, now
-/// applied to the fragment's decoded text itself.
+/// decoded byte could name a file the raw source text never mentions). A
+/// third case (retry, Dev-B/Security) gets the same treatment below: a raw
+/// control byte typed directly into the source, distinct from an escape
+/// SEQUENCE and diagnosed separately where it is checked.
 fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     let mut fragment: Option<Node> = None;
