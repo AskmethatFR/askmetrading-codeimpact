@@ -2311,6 +2311,25 @@ mod tests {
         //       via `require` — dedupes to exactly one edge.
         //   28. `capabilities().cross_file_dependencies() == Degraded(msg)`
         //       with an assertion on the message's CONTENT (AD-6).
+        //
+        // ── Test List (US17 T4.4 — `resolvable_targets` bounded by
+        //    `source_roots`, mirroring `namespace_declarers`) ─────────────
+        //   29. a relative import resolving to a target OUTSIDE the
+        //       configured source_roots produces no edge, paired with a
+        //       sibling import resolving to an IN-root target in the same
+        //       file (S4's "sourceRoots are honored when set").
+        //   30. empty source_roots means "unset" — the SAME fixture as #29
+        //       (an out-of-root-looking target) resolves once source_roots
+        //       is empty, proving today's unrestricted behavior is
+        //       unchanged (`under_any_root`'s `roots.is_empty()` branch,
+        //       exercised through the use case rather than unit-tested
+        //       directly — it is an internal predicate, not its own use
+        //       case).
+        //   31. the deliberate asymmetry: a file sitting OUTSIDE
+        //       source_roots must still resolve its OWN relative import to
+        //       an IN-root target — source_roots bounds which files may be
+        //       a dependency TARGET, never which files may REQUEST
+        //       resolution.
 
         fn ts_parser() -> TreeSitterCodeParser {
             TreeSitterCodeParser::typescript(Vec::new())
@@ -2999,6 +3018,87 @@ mod tests {
                 vec![PathBuf::from("y.ts")],
                 "the .tsx-only target must not resolve, while the paired import still does"
             );
+        }
+
+        // @scenario: typescript-javascript-analysis/S4
+        #[test]
+        fn a_relative_import_resolving_outside_configured_source_roots_produces_no_edge() {
+            let outside_x = "export const x = 1;";
+            let inside_y = "export const y = 1;";
+            let entry = "import '../lib/x';\nimport './y';\n";
+            // entry.ts lives under "src/" (the only configured source
+            // root); its sibling "src/y.ts" is in-root and resolves, but
+            // "lib/x.ts" sits outside "src/" and must not enter
+            // resolvable_targets — direct mirror of the C# precedent
+            // (`a_namespace_declared_outside_configured_source_roots_does_
+            // not_resolve`).
+            let ctx = deps_ctx(
+                "src/entry.ts",
+                &[
+                    ("src/entry.ts", entry),
+                    ("src/y.ts", inside_y),
+                    ("lib/x.ts", outside_x),
+                ],
+                &["src"],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("src/y.ts")],
+                "the in-root sibling must resolve while the out-of-root target must not"
+            );
+        }
+
+        #[test]
+        fn empty_source_roots_leaves_target_resolution_unrestricted() {
+            let outside_x = "export const x = 1;";
+            let inside_y = "export const y = 1;";
+            let entry = "import '../lib/x';\nimport './y';\n";
+            // Same fixture as the test above, but with NO configured
+            // source_roots — proves `under_any_root`'s "empty means unset"
+            // branch keeps today's behavior: the whole project stays
+            // resolvable, both targets included.
+            let ctx = deps_ctx(
+                "src/entry.ts",
+                &[
+                    ("src/entry.ts", entry),
+                    ("src/y.ts", inside_y),
+                    ("lib/x.ts", outside_x),
+                ],
+                &[],
+            );
+
+            let mut resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+            resolved.sort();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("lib/x.ts"), PathBuf::from("src/y.ts")],
+                "unset source_roots (empty) must keep the whole project resolvable"
+            );
+        }
+
+        #[test]
+        fn a_file_outside_source_roots_still_resolves_its_own_relative_import() {
+            let inside_y = "export const y = 1;";
+            let entry = "import './src/y';\n";
+            // entry.ts sits at the project root, OUTSIDE "src/" (the only
+            // configured root) — but it must still resolve its own import
+            // to an IN-root target: source_roots bounds which files may be
+            // a dependency TARGET, never which files may REQUEST
+            // resolution (the asymmetry `file_references`'s unconditional
+            // population preserves).
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("src/y.ts", inside_y)],
+                &["src"],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("src/y.ts")]);
         }
 
         #[test]
