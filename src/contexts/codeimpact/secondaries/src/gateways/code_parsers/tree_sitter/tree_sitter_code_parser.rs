@@ -93,14 +93,23 @@ type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 /// the configured roots cannot be a dependency TARGET, mirroring the C#
 /// namespace-declarer scoping below.
 ///
-/// `derive(Default)` (US17 T4.4 mutation-gate retry) has no production
-/// caller — it exists so `cargo-mutants`' whole-function
-/// `build_deps_index -> Default::default()` mutant is viable (compiles)
-/// instead of `Unviable`, which is the ONLY mutant `--in-diff` can reach
-/// for this slice's change (the reused `under_any_root` predicate's own
-/// body is untouched, per this ticket's "do not re-implement it"). Every
-/// field type here (`HashMap`, `HashSet`) already implements `Default`.
-#[derive(Default)]
+/// `cfg_attr(test, derive(Default))` (US17 T4.4 mutation-gate retry,
+/// Security LOW-2) is a TEST-ONLY affordance — it exists so `cargo-mutants`'
+/// whole-function `build_deps_index -> Default::default()` mutant is viable
+/// (compiles) instead of `Unviable`, which is the ONLY mutant `--in-diff`
+/// can reach for this slice's change (the reused `under_any_root`
+/// predicate's own body is untouched, per this ticket's "do not
+/// re-implement it"). Deliberately NOT a bare `#[derive(Default)]`: Security
+/// proved by compilation that a production-reachable `Default` on
+/// `DepsIndex` propagates to `Arc<DepsIndex>`, then the memoized
+/// `DepsIndexCacheEntry` tuple, making `cache.take().unwrap_or_default()`
+/// in `deps_index` COMPILE — a silently empty index (zero targets, zero
+/// declarers) for C# and TS/JS alike, no error at all (AD-8 abstention).
+/// `cfg_attr(test, ...)` keeps that combination a compile error in every
+/// non-test build, restoring the guard rail this file had before the plain
+/// derive was introduced. `cargo-mutants` builds under the test profile
+/// (`cargo test --no-run`), so the whole-function mutant stays viable.
+#[cfg_attr(test, derive(Default))]
 struct DepsIndex {
     namespace_declarers: NamespaceDeclarers,
     file_references: HashMap<PathBuf, Vec<String>>,
