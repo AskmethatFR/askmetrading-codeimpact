@@ -785,26 +785,36 @@ fn field_text_opt(node: &Node, field: &str, source: &[u8]) -> Option<String> {
 /// wrong: it still carries the surrounding quotes. The real text lives on
 /// the `string_fragment` child instead. AD-8 (abstain, never guess, never
 /// fail): this function returns `None` — no capture consumed, no edge, no
-/// error — whenever the string is not a single plain fragment: zero or
-/// more than one `string_fragment` child (an empty string, or one split by
-/// an interior `html_character_reference`), or a nested `escape_sequence`
-/// child at all (`'./\x78'` must never be decoded into a path — the
-/// decoded byte could name a file the raw source text never mentions). A
-/// third case (retry, Dev-B/Security) gets the same treatment below: a raw
-/// control byte typed directly into the source, distinct from an escape
-/// SEQUENCE and diagnosed separately where it is checked.
+/// error — whenever the string is not a single plain fragment spanning the
+/// ENTIRE content between the quotes: zero or more than one
+/// `string_fragment` child (an empty string; an interior split by an
+/// `escape_sequence` or an `html_character_reference`), or a single
+/// fragment that does not reach edge to edge (a leading/trailing
+/// `escape_sequence`, or a raw control byte the lexer excludes into a
+/// sibling `ERROR` node — see the gap-check below).
+///
+/// Retry 3 (mutation gate: the last survivor) — an earlier revision had a
+/// SEPARATE `"escape_sequence" => return None` arm here, on the theory that
+/// an escape must never be decoded into a path (the decoded byte could name
+/// a file the raw source text never mentions). Proven redundant by
+/// deliberately deleting it and re-running a test covering all four
+/// positions an escape can occupy: trailing (`'./a\x78'`) and leading
+/// (`'\x2e/a'`) each leave a single fragment that does not span edge to
+/// edge, caught by the gap-check; interior (`'./a\x78b'`) splits into two
+/// fragments; the whole string as one escape (`'\x2e'`) leaves zero — both
+/// caught by `fragment_count != 1`. No position survived the arm's
+/// removal, so it stayed removed — one check now enforces both "never
+/// decode an escape into a path" AND "never resolve a control-byte-
+/// truncated specifier", which is a simpler and strictly more general
+/// invariant than the two arms it replaces.
 fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     let mut fragment: Option<Node> = None;
     let mut fragment_count = 0usize;
     for child in node.children(&mut cursor) {
-        match child.kind() {
-            "string_fragment" => {
-                fragment_count += 1;
-                fragment = Some(child);
-            }
-            "escape_sequence" => return None,
-            _ => {}
+        if child.kind() == "string_fragment" {
+            fragment_count += 1;
+            fragment = Some(child);
         }
     }
     if fragment_count != 1 {
@@ -813,18 +823,14 @@ fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     let fragment =
         fragment.expect("fragment_count == 1 guarantees exactly one captured string_fragment");
 
-    // Retry (Security) — a raw control byte (e.g. a literal NUL typed
-    // directly into the source, NOT the escape sequence `\x00` the
-    // `escape_sequence` guard above already catches) does not become part
-    // of the `string_fragment` node's own text at all: diagnosed against
-    // the real parse tree, `require('./a\0')`'s `string` node is `'
-    // string_fragment ERROR '` — the byte becomes a SEPARATE sibling
-    // `ERROR` node, so `fragment_count` stays 1 and the fragment's own text
-    // reads as the complete-looking "./a", silently SHORTER than what the
-    // source spells. The one fragment must therefore account for the
-    // ENTIRE content between the opening and closing quote (each exactly 1
-    // byte in this grammar) — a gap means bytes were excluded from its
-    // span, whatever produced them.
+    // The one fragment must account for the ENTIRE content between the
+    // opening and closing quote (each exactly 1 byte in this grammar) — a
+    // gap means bytes were excluded from its span, whatever produced them
+    // (an escape sequence at either edge, or — diagnosed against the real
+    // parse tree for `require('./a\0')`, whose `string` node is `'
+    // string_fragment ERROR '` — a raw control byte lexed into a sibling
+    // `ERROR` node, leaving a fragment text that reads as the complete-
+    // looking "./a", silently SHORTER than what the source spells).
     if fragment.start_byte() != node.start_byte() + 1 || fragment.end_byte() != node.end_byte() - 1
     {
         return None;
