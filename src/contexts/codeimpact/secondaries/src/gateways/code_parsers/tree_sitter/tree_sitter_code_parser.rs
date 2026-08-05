@@ -2679,6 +2679,70 @@ mod tests {
         }
 
         #[test]
+        // Retry 2 (mutation gate, corrected recipe: 4 survivors, all on the
+        // `:837` byte-scan predicate). Unlike the NUL case above, a raw TAB
+        // (0x09) is legal unescaped inside a JS/TS string literal and stays
+        // INSIDE the `string_fragment`'s own span (verified against the
+        // real parse tree: `'./a\tb'` -> `' string_fragment[./a\tb] '`, no
+        // gap, no sibling `ERROR`) — the `:828` gap-check does not fire, so
+        // `:837`'s byte-scan is the ONLY thing standing between this byte
+        // and the resolver. `a\tb.ts` is a decoy target that only a broken
+        // (deleted, or `||`->`&&`, or first `<`->`==`) predicate would
+        // reach.
+        fn a_require_with_a_raw_tab_byte_produces_no_edge_and_no_error() {
+            let a_tab_b_ts = "export const x = 1;";
+            let b_ts = "export const b = 1;";
+            let source = "require('./a\tb');\nrequire('./b');\n";
+            let ctx = deps_ctx(
+                "entry.js",
+                &[
+                    ("entry.js", source),
+                    ("a\tb.ts", a_tab_b_ts),
+                    ("b.ts", b_ts),
+                ],
+                &[],
+            );
+
+            let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("b.ts")],
+                "a raw TAB byte must abstain (no edge to the a\\tb.ts decoy, no error) even \
+                 though it exists, while the plain literal require in the same file still \
+                 resolves"
+            );
+        }
+
+        #[test]
+        // Retry 2 — the boundary case the TAB test cannot reach: SPACE
+        // (0x20) is legal in a filename and must NOT abstain. This is the
+        // only shape that discriminates `:837`'s first `<` mutated to
+        // `<=`: under `<`, 0x20 < 0x20 is false (no abstention, correct);
+        // under `<=`, 0x20 <= 0x20 is true (abstains, WRONG — a real,
+        // legal target silently vanishes from the graph). Asserting the
+        // edge directly (not merely non-emptiness) makes this self-
+        // discriminating without needing a separate negative pairing.
+        fn a_relative_import_with_a_literal_space_in_its_target_name_resolves() {
+            let a_space_b_ts = "export const x = 1;";
+            let entry = "import './a b';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("a b.ts", a_space_b_ts)],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("a b.ts")],
+                "a literal space in a target file name must not be treated as a control byte \
+                 — the edge must appear"
+            );
+        }
+
+        #[test]
         // Retry (Dev-B MINOR) — the zero/multiple-`string_fragment`
         // abstention branch was untested: `import ''` reaches zero
         // fragments, and `import './a&amp;b'` splits into two fragments
