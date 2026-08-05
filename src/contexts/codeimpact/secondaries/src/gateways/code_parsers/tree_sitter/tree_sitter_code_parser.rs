@@ -92,6 +92,15 @@ type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 /// `under_any_root` gate `namespace_declarers` already had): a file outside
 /// the configured roots cannot be a dependency TARGET, mirroring the C#
 /// namespace-declarer scoping below.
+///
+/// `derive(Default)` (US17 T4.4 mutation-gate retry) has no production
+/// caller — it exists so `cargo-mutants`' whole-function
+/// `build_deps_index -> Default::default()` mutant is viable (compiles)
+/// instead of `Unviable`, which is the ONLY mutant `--in-diff` can reach
+/// for this slice's change (the reused `under_any_root` predicate's own
+/// body is untouched, per this ticket's "do not re-implement it"). Every
+/// field type here (`HashMap`, `HashSet`) already implements `Default`.
+#[derive(Default)]
 struct DepsIndex {
     namespace_declarers: NamespaceDeclarers,
     file_references: HashMap<PathBuf, Vec<String>>,
