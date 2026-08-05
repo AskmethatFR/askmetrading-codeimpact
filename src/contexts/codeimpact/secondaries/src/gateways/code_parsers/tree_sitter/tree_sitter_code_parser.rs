@@ -243,12 +243,22 @@ impl TreeSitterCodeParser {
                     // read as "supported" to a reader who leans on it) and
                     // the shadowed-`require` blind spot (inherent to a
                     // syntactic query, not a bug to fix here).
+                    // Retry sweep (Security/AD-6): names the type-only
+                    // import over-approximation — `import type`/`import
+                    // { type A }`/`export type` are not distinguished from
+                    // value imports and still produce a full edge (a
+                    // dominant modern-TypeScript idiom, measured, see
+                    // `type_only_imports_produce_a_full_edge_like_any_
+                    // other_import`). Whether to EXCLUDE them is a
+                    // behavior decision filed separately — naming the
+                    // blind spot is not.
                     cross_file_dependencies: MetricSupport::Degraded(
                         "literal relative specifiers only (import, export-from, require); \
                          computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
                          imports, and the legacy `import x = require()` form produce no edge; \
                          a shadowed `require` identifier is still followed (syntactic only); \
-                         .tsx targets are not analyzed"
+                         type-only imports produce a full edge like any other import; .tsx \
+                         targets are not analyzed"
                             .to_string(),
                     ),
                 },
