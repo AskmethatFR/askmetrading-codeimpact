@@ -29,6 +29,7 @@ use tree_sitter::StreamingIterator;
 use super::io_signatures;
 use super::io_signatures::classifier::classify_call;
 use super::language_profile::CapabilityDegradations;
+use super::language_profile::DepsStrategy;
 use super::language_profile::LanguageProfile;
 
 /// Wall-clock budget for BOTH the parse and the query stage (US16 T2, Q2
@@ -66,18 +67,28 @@ const MAX_NESTING_DEPTH: u32 = 2_000;
 const MAX_QUADRATIC_CAPTURES_PER_FUNCTION: usize = 2_000;
 
 /// `namespace -> declaring-files` (US16 T5) — named so `DepsIndex`'s field
-/// stays readable.
-type NamespaceIndex = HashMap<String, Vec<PathBuf>>;
+/// stays readable. Named `NamespaceDeclarers` (US17 T4.1 sweep, Dev-B
+/// MINOR-1), not `NamespaceIndex`, to stay distinct from the unrelated
+/// `DepsStrategy::NamespaceIndex` variant — the same identifier naming two
+/// different things in this file was exactly the ambiguity `cc-clear-naming`
+/// exists to catch.
+type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 
 /// The project-global pre-pass's full output (US16 T5, Security MEDIUM
 /// retry #1): the `namespace -> declaring-files` index AND every file's
-/// own `using` targets, captured in the SAME pass over `file_sources` —
-/// `resolve_dependencies` looks its own file up in `file_usings` instead
-/// of re-parsing `source` a second time (once here, once in the pre-pass,
-/// for the SAME file, on every single call).
+/// own referenced targets, captured in the SAME pass over `file_sources` —
+/// `resolve_dependencies` looks its own file up in `file_references`
+/// instead of re-parsing `source` a second time (once here, once in the
+/// pre-pass, for the SAME file, on every single call). `namespace_declarers`
+/// stays specific to `DepsStrategy::NamespaceIndex` (C#'s `using`/namespace
+/// resolution, ADR-0023); `file_references` (renamed from `file_usings`,
+/// US17 T4.1 — `usings` holding a relative path string like `"./x"` would
+/// be a name that lies) is named neutrally so T4.3's `RelativePath` arm can
+/// consume it too — today it is populated for every extractable file but
+/// only ever READ by the `NamespaceIndex` arm.
 struct DepsIndex {
-    namespace_declarers: NamespaceIndex,
-    file_usings: HashMap<PathBuf, Vec<String>>,
+    namespace_declarers: NamespaceDeclarers,
+    file_references: HashMap<PathBuf, Vec<String>>,
 }
 
 /// The `deps_index_cache`'s memoized entry (#90 T5 retry #1): the exact
@@ -140,6 +151,7 @@ impl TreeSitterCodeParser {
                             .to_string(),
                     ),
                 },
+                deps: DepsStrategy::NamespaceIndex,
             },
             deps_index_cache: Mutex::new(None),
         }
@@ -218,6 +230,7 @@ impl TreeSitterCodeParser {
                     ),
                     cross_file_dependencies: MetricSupport::Unsupported,
                 },
+                deps: DepsStrategy::RelativePath,
             },
             deps_index_cache: Mutex::new(None),
         }
@@ -296,25 +309,38 @@ impl CodeParser for TreeSitterCodeParser {
         parse_source(&self.profile, source)
     }
 
-    /// Resolves `source`'s `using` directives to actual project files
-    /// (US16 T5) — C#'s `using`/namespace semantics are entirely owned by
-    /// this adapter (ADR-0018). A `using` resolves to every project file
-    /// that DECLARES the used namespace (namespace-granularity resolution,
-    /// honestly reported as `Degraded` in `capabilities`) via the memoized
-    /// `deps_index`; `current_file` is excluded from its own result
-    /// (never a self-edge) and the result is deduped. A `using` with no
-    /// project declarer (e.g. `using System;`) contributes no edge — same
-    /// "absent, never an error" contract as `SynCodeParser`.
+    /// Resolves `source`'s dependencies to actual project files, dispatched
+    /// on `self.profile.deps` (US17 T4.1, AD-1) — a data field on the
+    /// profile, never a `match self.language` branch here: a 5th language
+    /// extends by writing a profile, not by editing this method (OCP is
+    /// this ticket's whole point).
     ///
-    /// `current_file`'s OWN `using`s are looked up in `deps_index`'s
-    /// `file_usings` (Security MEDIUM, retry #1) — the pre-pass already
-    /// parsed `source` once while building the index (`current_file` is
-    /// itself one of `ctx.file_sources`), so a second `extract_deps_safe`
-    /// call on the SAME text is redundant. Falls back to extracting
-    /// `source` directly only when `current_file` is absent from
-    /// `file_usings` (not part of `ctx.file_sources` at all — e.g. a
-    /// hand-built `DependencyContext` in a test, or a real caller that
+    /// `DepsStrategy::NamespaceIndex` is C#'s `using`/namespace semantics,
+    /// entirely owned by this adapter (ADR-0018), moved here as-is from
+    /// before T4.1: a `using` resolves to every project file that DECLARES
+    /// the used namespace (namespace-granularity resolution, honestly
+    /// reported as `Degraded` in `capabilities`) via the memoized
+    /// `deps_index`; `current_file` is excluded from its own result (never
+    /// a self-edge) and the result is deduped. A `using` with no project
+    /// declarer (e.g. `using System;`) contributes no edge — same "absent,
+    /// never an error" contract as `SynCodeParser`.
+    ///
+    /// `current_file`'s OWN referenced targets are looked up in
+    /// `deps_index`'s `file_references` (Security MEDIUM, retry #1) — the
+    /// pre-pass already parsed `source` once while building the index
+    /// (`current_file` is itself one of `ctx.file_sources`), so a second
+    /// `extract_deps_safe` call on the SAME text is redundant. Falls back
+    /// to extracting `source` directly only when `current_file` is absent
+    /// from `file_references` (not part of `ctx.file_sources` at all — e.g.
+    /// a hand-built `DependencyContext` in a test, or a real caller that
     /// never populated it).
+    ///
+    /// `DepsStrategy::RelativePath` (TypeScript/JavaScript) returns no edge
+    /// yet — T4.3 fills this arm in; T4.1 only opens the seam. Whatever
+    /// structure T4.3 needs to resolve a relative import MUST be built
+    /// once in `build_deps_index` and read here through the memoized
+    /// `deps_index(ctx)` — never rebuilt per call (AD-2, ADR-0024): this
+    /// exact path already relapsed into a per-call rebuild once (#123).
     fn resolve_dependencies(
         &self,
         source: &str,
@@ -322,44 +348,53 @@ impl CodeParser for TreeSitterCodeParser {
     ) -> Result<Vec<PathBuf>, AnalysisError> {
         source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
 
-        let index = self.deps_index(ctx);
-        let usings = match index.file_usings.get(&ctx.current_file) {
-            Some(usings) => usings.clone(),
-            None => {
-                extract_deps_safe(&self.profile, source)
-                    .ok_or(AnalysisError::Unmeasurable(
-                        UnmeasurableReason::SourceTooComplex,
-                    ))?
-                    .usings
-            }
-        };
+        match self.profile.deps {
+            DepsStrategy::NamespaceIndex => {
+                let index = self.deps_index(ctx);
+                let referenced = match index.file_references.get(&ctx.current_file) {
+                    Some(referenced) => referenced.clone(),
+                    None => {
+                        extract_deps_safe(&self.profile, source)
+                            .ok_or(AnalysisError::Unmeasurable(
+                                UnmeasurableReason::SourceTooComplex,
+                            ))?
+                            .referenced
+                    }
+                };
 
-        // `seen` dedupes in O(1) per candidate (MINOR, US16 T5 retry #2)
-        // — a linear `resolved.contains(..)` scan was O(len(resolved)) per
-        // candidate; `resolved` itself stays a plain `Vec` for its
-        // caller-visible insertion order.
-        let mut resolved: Vec<PathBuf> = Vec::new();
-        let mut seen: HashSet<PathBuf> = HashSet::new();
-        for used_namespace in &usings {
-            let Some(declarers) = index.namespace_declarers.get(used_namespace) else {
-                continue;
-            };
-            for declarer in declarers {
-                if declarer != &ctx.current_file && seen.insert(declarer.clone()) {
-                    resolved.push(declarer.clone());
+                // `seen` dedupes in O(1) per candidate (MINOR, US16 T5
+                // retry #2) — a linear `resolved.contains(..)` scan was
+                // O(len(resolved)) per candidate; `resolved` itself stays a
+                // plain `Vec` for its caller-visible insertion order.
+                let mut resolved: Vec<PathBuf> = Vec::new();
+                let mut seen: HashSet<PathBuf> = HashSet::new();
+                for used_namespace in &referenced {
+                    let Some(declarers) = index.namespace_declarers.get(used_namespace) else {
+                        continue;
+                    };
+                    for declarer in declarers {
+                        if declarer != &ctx.current_file && seen.insert(declarer.clone()) {
+                            resolved.push(declarer.clone());
+                        }
+                    }
                 }
+                Ok(resolved)
             }
+            DepsStrategy::RelativePath => Ok(Vec::new()),
         }
-        Ok(resolved)
     }
 }
 
-/// Every namespace declared, and every namespace used (via `using`), by one
-/// file's source — the raw material both the namespace-index builder and
-/// `resolve_dependencies` extract from a `deps_scm` query pass (US16 T5).
+/// Every dependency-relevant construct declared, and every one referenced,
+/// by one file's source — the raw material both the namespace-index
+/// builder and `resolve_dependencies` extract from a `deps_scm` query pass
+/// (US16 T5). Renamed from `namespaces`/`usings` (US17 T4.1, AD-1): once
+/// `RelativePath` populates `referenced` with strings like `"./x"`, calling
+/// the field `usings` would be a name that lies — `declared`/`referenced`
+/// are neutral across both `DepsStrategy` variants.
 struct DepsExtraction {
-    namespaces: Vec<String>,
-    usings: Vec<String>,
+    declared: Vec<String>,
+    referenced: Vec<String>,
 }
 
 /// Whether `path` is in scope for the namespace index, given the
@@ -381,10 +416,10 @@ fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
 /// pathological file is simply excluded from the index, never fatal to
 /// the whole project scan.
 ///
-/// `file_usings` is populated for EVERY successfully-extracted file,
+/// `file_references` is populated for EVERY successfully-extracted file,
 /// unconditionally — `current_file` must be able to resolve its OWN
-/// `using`s regardless of whether current_file itself sits inside or
-/// outside `source_roots` (identical to `resolve_dependencies`'s
+/// referenced targets regardless of whether current_file itself sits inside
+/// or outside `source_roots` (identical to `resolve_dependencies`'s
 /// pre-Security-MEDIUM-fix behavior, which always parsed `source`
 /// directly with no `source_roots` gate at all). `namespace_declarers`,
 /// by contrast, is scoped to `under_any_root` — `source_roots` bounds
@@ -395,17 +430,17 @@ fn build_deps_index(
     file_sources: &[(PathBuf, String)],
     source_roots: &[PathBuf],
 ) -> DepsIndex {
-    let mut namespace_declarers: NamespaceIndex = HashMap::new();
-    let mut file_usings: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    let mut namespace_declarers: NamespaceDeclarers = HashMap::new();
+    let mut file_references: HashMap<PathBuf, Vec<String>> = HashMap::new();
 
     for (path, source) in file_sources {
         let Some(extraction) = extract_deps_safe(profile, source) else {
             continue;
         };
-        file_usings.insert(path.clone(), extraction.usings);
+        file_references.insert(path.clone(), extraction.referenced);
 
         if under_any_root(path, source_roots) {
-            for namespace in extraction.namespaces {
+            for namespace in extraction.declared {
                 namespace_declarers
                     .entry(namespace)
                     .or_default()
@@ -416,7 +451,7 @@ fn build_deps_index(
 
     DepsIndex {
         namespace_declarers,
-        file_usings,
+        file_references,
     }
 }
 
@@ -436,9 +471,12 @@ fn extract_deps_safe(profile: &LanguageProfile, source: &str) -> Option<DepsExtr
 }
 
 /// Parses `source` and runs `deps_scm`'s query over it, returning every
-/// declared namespace's name and every `using`'s target namespace text
-/// (US16 T5) — `None` when parse/query is cancelled by `deadline`
-/// (mirrors `run_pipeline`'s own budget contract).
+/// declared construct's name and every referenced target's text (US16 T5)
+/// — `None` when parse/query is cancelled by `deadline` (mirrors
+/// `run_pipeline`'s own budget contract). The query's own capture names
+/// (`@namespace`/`@using`, C#-specific — `queries/csharp_deps.scm`) are
+/// unchanged by US17 T4.1; only this function's Rust-side vocabulary is
+/// generalized.
 fn extract_deps(
     profile: &LanguageProfile,
     source: &str,
@@ -481,19 +519,19 @@ fn extract_deps(
     let mut matches = cursor.matches_with_options(&query, tree.root_node(), bytes, query_options);
 
     let capture_names = query.capture_names();
-    let mut namespaces = Vec::new();
-    let mut usings = Vec::new();
+    let mut declared = Vec::new();
+    let mut referenced = Vec::new();
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             match capture_names[capture.index as usize] {
                 "namespace" => {
                     if let Some(text) = field_text_opt(&capture.node, "name", bytes) {
-                        namespaces.push(text);
+                        declared.push(text);
                     }
                 }
                 "using" => {
                     if let Some(text) = using_target_text(&capture.node, bytes) {
-                        usings.push(text);
+                        referenced.push(text);
                     }
                 }
                 _ => {}
@@ -504,7 +542,10 @@ fn extract_deps(
         return None;
     }
 
-    Some(DepsExtraction { namespaces, usings })
+    Some(DepsExtraction {
+        declared,
+        referenced,
+    })
 }
 
 /// The namespace text a `using_directive` node targets (US16 T5) — the
