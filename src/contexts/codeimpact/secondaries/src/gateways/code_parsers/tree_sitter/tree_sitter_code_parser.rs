@@ -605,15 +605,33 @@ fn candidate_paths(normalized: &Path) -> Vec<PathBuf> {
             }
             candidates
         }
-        _ => CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
-            .iter()
-            .map(|ext| append_extension(normalized, ext))
-            .chain(
+        _ => {
+            // Retry sweep (Security Finding 1) — an empty-normalized path
+            // (e.g. `import '../..'` popping every segment) has no file
+            // name to append an extension TO: `append_extension` would
+            // produce a bare dotfile (".ts") that never named a real
+            // target before this fix (`Path::with_extension` left an
+            // empty path unchanged). Skipping the 7 direct candidates
+            // here — never proposing them at all — leaves the `index/`
+            // branch as the only candidates for an empty path, matching
+            // Node's own directory-specifier semantics.
+            let direct: Vec<PathBuf> = if normalized.file_name().is_some() {
                 CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
                     .iter()
-                    .map(|ext| normalized.join("index").with_extension(ext)),
-            )
-            .collect(),
+                    .map(|ext| append_extension(normalized, ext))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            direct
+                .into_iter()
+                .chain(
+                    CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
+                        .iter()
+                        .map(|ext| normalized.join("index").with_extension(ext)),
+                )
+                .collect()
+        }
     }
 }
 
