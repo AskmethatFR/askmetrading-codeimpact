@@ -2488,6 +2488,43 @@ mod tests {
             );
         }
 
+        #[test]
+        // Retry sweep (Security Finding 1) — `import '../..'` from
+        // `src/feature/entry.ts` normalizes to the EMPTY path (both path
+        // segments popped). `append_extension` on an empty path produces a
+        // bare dotfile candidate (".ts") that `Path::with_extension` used
+        // to leave untouched — and the 7 direct candidates run BEFORE the
+        // 7 `index/` candidates, so the wrong dotfile would win over the
+        // correct `index.ts` (Node's own semantics for a directory
+        // specifier) whenever both happen to exist in the scanned set.
+        // Not reachable through the real `FileSystemCodeReader` (it walks
+        // with `.hidden(true)`, so a literal `.ts` file never enters
+        // `file_sources`) — latent, defense-in-depth only, but a real
+        // resolution defect in `candidate_paths` itself.
+        fn a_relative_import_normalizing_to_an_empty_path_prefers_the_index_file_over_a_dotfile() {
+            let dotfile_ts = "export const wrongTarget = 1;";
+            let index_ts = "export const right = 1;";
+            let entry = "import '../..';\n";
+            let ctx = deps_ctx(
+                "src/feature/entry.ts",
+                &[
+                    ("src/feature/entry.ts", entry),
+                    (".ts", dotfile_ts),
+                    ("index.ts", index_ts),
+                ],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("index.ts")],
+                "an empty-normalized specifier must prefer index.ts (Node's own semantics for \
+                 a directory specifier), never a bare dotfile candidate like .ts"
+            );
+        }
+
         // @scenario: typescript-javascript-analysis/S4
         // Retry (Dev-B BLOCKING-2 items 3/4) — replaces the single-row
         // `.js`-only twin test: `typescript_source_twin`'s three match arms
