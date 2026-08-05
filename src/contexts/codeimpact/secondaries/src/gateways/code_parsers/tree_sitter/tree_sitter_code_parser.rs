@@ -2261,8 +2261,11 @@ mod tests {
                         assert!(
                             reason.contains("literal relative specifiers only")
                                 && reason.contains("require")
-                                && reason.contains(".tsx"),
-                            "expected the literal-only-resolution reason (AD-6), got: {}",
+                                && reason.contains(".tsx")
+                                && reason.contains("import x = require()")
+                                && reason.contains("shadowed"),
+                            "expected the literal-only-resolution reason (AD-6, retry MAJOR-5), \
+                             got: {}",
                             reason
                         );
                     }
@@ -2388,12 +2391,118 @@ mod tests {
             assert_eq!(resolved, vec![PathBuf::from("x/index.ts")]);
         }
 
+        // Retry (Dev-B BLOCKING-1) — `./app.module` must propose
+        // `app.module.ts`, not `app.ts`. `Path::with_extension` REPLACES
+        // everything after the last `.` in a file name; `app.module` has
+        // one (splitting "app"/"module"), so the pre-fix direct-candidate
+        // builder silently truncated to "app" + ".ts" = "app.ts" — missing
+        // the real target (Angular/NestJS's `./app.module`, `./x.service`
+        // naming convention) and risking a false edge to an unrelated
+        // `app.ts` that happens to exist, which is exactly what this test
+        // also proves does NOT happen (`app.ts` is present in the fixture
+        // and must be ignored).
+        #[test]
+        fn a_relative_import_with_an_internal_dot_appends_rather_than_replaces_the_extension() {
+            let app_module_ts = "export const AppModule = {};";
+            let app_ts = "export const wrongTarget = 1;";
+            let entry = "import './app.module';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[
+                    ("entry.ts", entry),
+                    ("app.module.ts", app_module_ts),
+                    ("app.ts", app_ts),
+                ],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("app.module.ts")],
+                "an internal dot in the specifier's file name must not truncate the candidate \
+                 — got a false edge to app.ts or an empty result instead of app.module.ts"
+            );
+        }
+
         // @scenario: typescript-javascript-analysis/S4
+        // Retry (Dev-B BLOCKING-2 items 3/4) — replaces the single-row
+        // `.js`-only twin test: `typescript_source_twin`'s three match arms
+        // ("js"->"ts", "mjs"->"mts", "cjs"->"cts") are one behavior with
+        // divergent data, so one parameterized cycle; the `.jsx` row is the
+        // discriminating NEGATIVE — `.jsx` has no twin, so with only a
+        // `.tsx` target present it must produce no edge, never guess one.
         #[test]
         fn an_extension_carrying_import_resolves_to_its_typescript_source_twin() {
+            let cases = [
+                ("import './x.js';\n", "x.ts", Some("x.ts")),
+                ("import './x.mjs';\n", "x.mts", Some("x.mts")),
+                ("import './x.cjs';\n", "x.cts", Some("x.cts")),
+                ("import './x.jsx';\n", "x.tsx", None),
+            ];
+            for (entry, twin_target, expected) in cases {
+                let twin_source = "export const x = 1;";
+                let ctx = deps_ctx(
+                    "entry.ts",
+                    &[("entry.ts", entry), (twin_target, twin_source)],
+                    &[],
+                );
+                let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+                let expected_vec: Vec<PathBuf> = expected.map(PathBuf::from).into_iter().collect();
+                assert_eq!(
+                    resolved, expected_vec,
+                    "entry: {} — twin_target: {}",
+                    entry, twin_target
+                );
+            }
+        }
+
+        // @scenario: typescript-javascript-analysis/S4
+        // Retry (QA precedence finding) — `a_relative_import_prefers_the_
+        // ts_candidate_over_the_js_candidate` above only ever has ONE of
+        // {exact path, TS twin} present per case (`.ts` alongside a
+        // same-directory sibling `.js`, not the SAME specifier's own twin
+        // pair) — it does not prove the exact-path-before-twin ordering
+        // within the 2-candidate analyzable-extension branch itself. This
+        // does: `./x.js` with BOTH `x.js` (the exact path) and `x.ts` (its
+        // twin) present must resolve to the exact path.
+        #[test]
+        fn an_extension_carrying_import_prefers_the_exact_path_over_its_typescript_twin() {
+            let x_js = "module.exports.x = 1;";
             let x_ts = "export const x = 1;";
             let entry = "import './x.js';\n";
-            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry), ("x.ts", x_ts)], &[]);
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("x.js", x_js), ("x.ts", x_ts)],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("x.js")]);
+        }
+
+        // @scenario: typescript-javascript-analysis/S4
+        // Retry (QA precedence finding) — the direct-candidate branch (7
+        // suffixes) and the `index/` branch (the same 7, one level down)
+        // are chained in that order in `candidate_paths`; this proves the
+        // ordering directly, with BOTH `x.ts` and `x/index.ts` present for
+        // the same extension-less specifier.
+        #[test]
+        fn a_relative_import_prefers_the_direct_candidate_over_the_index_candidate() {
+            let x_ts = "export const x = 1;";
+            let index_ts = "export const indexTarget = 1;";
+            let entry = "import './x';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[
+                    ("entry.ts", entry),
+                    ("x.ts", x_ts),
+                    ("x/index.ts", index_ts),
+                ],
+                &[],
+            );
 
             let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
 
@@ -2481,19 +2590,90 @@ mod tests {
         }
 
         #[test]
+        // Retry (Security fold-in) — a RAW control byte typed directly into
+        // the source (not the escape SEQUENCE `\x00`, which the test above
+        // already covers) is a distinct hole. Diagnosed via the real parse
+        // tree: `require('./a\0')`'s `string` node is `' string_fragment
+        // ERROR '` — the NUL becomes a SEPARATE sibling `ERROR` node the
+        // extraction loop's `_ => {}` wildcard silently ignored, leaving
+        // `fragment_count == 1` and a fragment text of exactly "./a" (the
+        // NUL never enters the extracted text at all — the lexer excluded
+        // it from the fragment's own byte span). Measured to resolve to a
+        // real `a.ts` before this fix, an edge the source text never
+        // actually names. `a.ts` exists in this fixture as the decoy
+        // target, `b.ts` as the paired control.
+        fn a_require_with_a_raw_control_byte_produces_no_edge_and_no_error() {
+            let a_ts = "export const a = 1;";
+            let b_ts = "export const b = 1;";
+            let source = "require('./a\0');\nrequire('./b');\n";
+            let ctx = deps_ctx(
+                "entry.js",
+                &[("entry.js", source), ("a.ts", a_ts), ("b.ts", b_ts)],
+                &[],
+            );
+
+            let resolved = js_parser().resolve_dependencies(source, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("b.ts")],
+                "a raw control byte must abstain (no edge to a.ts, no error) even though \
+                 a.ts exists, while the plain literal require in the same file still resolves"
+            );
+        }
+
+        #[test]
+        // Retry (Dev-B MINOR) — the zero/multiple-`string_fragment`
+        // abstention branch was untested: `import ''` reaches zero
+        // fragments, and `import './a&amp;b'` splits into two fragments
+        // around an `html_character_reference` node (confirmed present in
+        // this grammar's `string` node-types). Both paired with `import
+        // './b'` so a dead resolver cannot pass either row by accident.
+        fn an_import_with_zero_or_multiple_string_fragments_produces_no_edge_and_no_error() {
+            let b_ts = "export const b = 1;";
+            let cases = [
+                "import '';\nimport './b';\n",
+                "import './a&amp;b';\nimport './b';\n",
+            ];
+            for source in cases {
+                let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("b.ts", b_ts)], &[]);
+                let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("b.ts")],
+                    "source: {} — a zero- or multi-fragment string must abstain while the \
+                     paired import still resolves",
+                    source
+                );
+            }
+        }
+
+        #[test]
         fn legacy_ts_import_equals_require_produces_no_edge_and_the_suite_stays_green() {
+            // Retry (Dev-B MAJOR-3) — the original fixture pointed BOTH the
+            // `import x = require(...)` clause and the plain `import` at
+            // the SAME `./y`, so the `:433` dedupe made the assertion true
+            // by construction regardless of whether `import_require_clause`
+            // was (wrongly) captured. Two DISTINCT targets close the hole:
+            // if the shared query were ever widened to capture it, `z.ts`
+            // would appear in `resolved` too.
             let y_ts = "export const y = 1;";
-            let source = "import x = require('./y');\nimport './y';\n";
-            let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("y.ts", y_ts)], &[]);
+            let z_ts = "export const z = 1;";
+            let source = "import x = require('./z');\nimport './y';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", source), ("y.ts", y_ts), ("z.ts", z_ts)],
+                &[],
+            );
 
             let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
 
             assert_eq!(
                 resolved,
                 vec![PathBuf::from("y.ts")],
-                "import_require_clause must contribute no edge of its own — the shared query \
-                 was not widened to capture it — while the ordinary import in the same file \
-                 still resolves"
+                "import_require_clause must contribute no edge of its own (no z.ts in the \
+                 result) — the shared query was not widened to capture it — while the \
+                 ordinary import in the same file still resolves"
             );
         }
 
@@ -2521,24 +2701,51 @@ mod tests {
         }
 
         #[test]
+        // Retry (Dev-B MAJOR-4) — `assert!(resolved.is_empty())` on its own
+        // is satisfied by ANY breakage of the chain (query, extraction, or
+        // resolution), not just by the `.tsx`-exclusion property this test
+        // exists to pin. Paired with `import './y'` (y.ts present) so a
+        // dead resolver fails this test instead of passing it by accident.
         fn a_relative_import_with_only_a_tsx_target_produces_no_edge() {
             let x_tsx = "export const X = () => null;";
-            let entry = "import './x';\n";
-            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry), ("x.tsx", x_tsx)], &[]);
+            let y_ts = "export const y = 1;";
+            let entry = "import './x';\nimport './y';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("x.tsx", x_tsx), ("y.ts", y_ts)],
+                &[],
+            );
 
             let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
 
-            assert!(resolved.is_empty());
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("y.ts")],
+                "the .tsx-only target must not resolve, while the paired import still does"
+            );
         }
 
         #[test]
+        // Retry (Dev-B MAJOR-4 sweep) — this test DOES discriminate on its
+        // own (it is the only test killing the `:433` `&&`->`||` self-edge
+        // mutant), but pairing it protects it from an upstream extraction
+        // break too, same discipline as every other test in this module.
         fn a_file_importing_itself_does_not_link_to_itself() {
-            let entry = "import './entry';\n";
-            let ctx = deps_ctx("entry.ts", &[("entry.ts", entry)], &[]);
+            let other_ts = "export const other = 1;";
+            let entry = "import './entry';\nimport './other';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("other.ts", other_ts)],
+                &[],
+            );
 
             let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
 
-            assert!(resolved.is_empty());
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("other.ts")],
+                "the file must not link to itself, while the paired import still resolves"
+            );
         }
 
         #[test]
