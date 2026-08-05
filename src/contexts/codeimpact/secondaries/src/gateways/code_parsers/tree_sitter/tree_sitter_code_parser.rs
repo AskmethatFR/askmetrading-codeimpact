@@ -2347,24 +2347,24 @@ mod tests {
                 // resolution exists — asserted on CONTENT, not merely the
                 // variant, so a stale string (AD-6's invariant) would fail
                 // this test even if the variant stayed Degraded.
-                match capabilities.cross_file_dependencies() {
-                    MetricSupport::Degraded(reason) => {
-                        assert!(
-                            reason.contains("literal relative specifiers only")
-                                && reason.contains("require")
-                                && reason.contains(".tsx")
-                                && reason.contains("import x = require()")
-                                && reason.contains("shadowed"),
-                            "expected the literal-only-resolution reason (AD-6, retry MAJOR-5), \
-                             got: {}",
-                            reason
-                        );
-                    }
-                    other => panic!(
-                        "expected cross_file_dependencies to be Degraded, got {:?}",
-                        other
-                    ),
-                }
+                // Retry sweep (Dev-B MINOR-4) — a `contains(...)` chain
+                // would survive a rewording that INVERTED the meaning
+                // ("...form produces an edge" would still contain every
+                // substring checked). AD-6's whole premise is that the
+                // operator relies on this exact text, so the honest bar is
+                // a golden verbatim match, not substring presence.
+                assert_eq!(
+                    *capabilities.cross_file_dependencies(),
+                    MetricSupport::Degraded(
+                        "literal relative specifiers only (import, export-from, require); \
+                         computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
+                         imports, and the legacy `import x = require()` form produce no edge; \
+                         a shadowed `require` identifier is still followed (syntactic only); \
+                         type-only imports produce a full edge like any other import; .tsx \
+                         targets are not analyzed"
+                            .to_string()
+                    )
+                );
             }
         }
 
@@ -2921,6 +2921,33 @@ mod tests {
                     vec![PathBuf::from("x.ts")],
                     "source: {} — the non-relative specifier must not resolve while the \
                      paired relative import still does",
+                    source
+                );
+            }
+        }
+
+        #[test]
+        // Retry sweep (Security) — pins the CURRENT, documented behavior:
+        // type-only imports are NOT distinguished from value imports and
+        // still produce a full edge. This is an over-approximation named
+        // in the Degraded string (AD-6), not a decision to exclude them —
+        // that choice is filed separately. If a future change DOES exclude
+        // type-only imports, this test must change alongside it and the
+        // Degraded string content assertion below.
+        fn type_only_imports_produce_a_full_edge_like_any_other_import() {
+            let x_ts = "export const x = 1;";
+            let cases = [
+                "import type { A } from './x';\n",
+                "import { type A } from './x';\n",
+                "export type { A } from './x';\n",
+            ];
+            for source in cases {
+                let ctx = deps_ctx("entry.ts", &[("entry.ts", source), ("x.ts", x_ts)], &[]);
+                let resolved = ts_parser().resolve_dependencies(source, &ctx).unwrap();
+                assert_eq!(
+                    resolved,
+                    vec![PathBuf::from("x.ts")],
+                    "source: {} — a type-only import must still produce a full edge today",
                     source
                 );
             }
