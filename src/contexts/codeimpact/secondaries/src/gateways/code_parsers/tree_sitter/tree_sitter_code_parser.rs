@@ -1630,19 +1630,21 @@ mod tests {
                 }
                 other => panic!("expected call_graph to be Degraded, got {:?}", other),
             }
-            match capabilities.cross_file_dependencies() {
-                MetricSupport::Degraded(reason) => {
-                    assert!(
-                        reason.contains("namespace-level"),
-                        "expected the namespace-level-resolution reason, got: {}",
-                        reason
-                    );
-                }
-                other => panic!(
-                    "expected cross_file_dependencies to be Degraded, got {:?}",
-                    other
-                ),
-            }
+            // Retry (Security Q6, operator arbitration, US17 T4.4) — was a
+            // `contains("namespace-level")` substring check; converted to a
+            // golden verbatim match, matching the TS/JS test's own bar
+            // (Dev-B MINOR-4 precedent below): a `contains(...)` chain
+            // survives a rewording that silently drops or inverts a clause,
+            // and this string now also names the sourceRoots blind spot
+            // (same gate, same wording obligation as TS/JS).
+            assert_eq!(
+                *capabilities.cross_file_dependencies(),
+                MetricSupport::Degraded(
+                    "namespace-level resolution; a file links to every declarer of a used \
+                     namespace; targets outside the configured sourceRoots produce no edge"
+                        .to_string()
+                )
+            );
         }
 
         // Discriminating test (T5.2 tech spec): a C# call/dep capability
@@ -2419,6 +2421,11 @@ mod tests {
                 // substring checked). AD-6's whole premise is that the
                 // operator relies on this exact text, so the honest bar is
                 // a golden verbatim match, not substring presence.
+                // Retry #2 (Security Q6, operator arbitration) — sourceRoots
+                // scoping (US17 T4.4) is the one blind spot here a reader
+                // cannot infer from the language itself: every OTHER entry
+                // in this string is a syntactic property of TS/JS, this one
+                // is a property of the operator's OWN configuration.
                 assert_eq!(
                     *capabilities.cross_file_dependencies(),
                     MetricSupport::Degraded(
@@ -2426,8 +2433,9 @@ mod tests {
                          computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
                          imports, and the legacy `import x = require()` form produce no edge; \
                          a shadowed `require` identifier is still followed (syntactic only); \
-                         type-only imports produce a full edge like any other import; .tsx \
-                         targets are not analyzed"
+                         type-only imports produce a full edge like any other import; targets \
+                         outside the configured sourceRoots produce no edge; .tsx targets are \
+                         not analyzed"
                             .to_string()
                     )
                 );
