@@ -8,8 +8,11 @@
 ;             raw `string` node text, which still carries the surrounding
 ;             quotes — and abstains (no edge, no error) on anything it
 ;             cannot read safely: zero or multiple `string_fragment`
-;             children, or a nested `escape_sequence` (AD-8 — abstain, never
-;             guess, never fail).
+;             children (an `escape_sequence` is a SIBLING of the fragment,
+;             never nested inside it, and splits or shortens the fragment
+;             count/span the same way), or a single fragment that does not
+;             span the whole quoted content (AD-8 — abstain, never guess,
+;             never fail).
 ;
 ; `import x = require('./y')` (the legacy TypeScript form, whose target
 ; string sits on the nested `import_require_clause` node, NOT on

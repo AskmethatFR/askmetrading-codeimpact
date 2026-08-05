@@ -806,10 +806,12 @@ fn field_text_opt(node: &Node, field: &str, source: &[u8]) -> Option<String> {
 /// error — whenever the string is not a single plain fragment spanning the
 /// ENTIRE content between the quotes: zero or more than one
 /// `string_fragment` child (an empty string; an interior split by an
-/// `escape_sequence` or an `html_character_reference`), or a single
-/// fragment that does not reach edge to edge (a leading/trailing
-/// `escape_sequence`, or a raw control byte the lexer excludes into a
-/// sibling `ERROR` node — see the gap-check below).
+/// `escape_sequence`), or a single fragment that does not reach edge to
+/// edge (a leading/trailing `escape_sequence`, or a raw control byte the
+/// lexer excludes into a sibling `ERROR` node — see the gap-check below).
+/// `html_character_reference` (retry sweep, Dev-B/Security) is NOT a real
+/// split cause here — measured against both loaded grammars, it appears
+/// only inside a JSX attribute string, never an ordinary literal.
 ///
 /// Retry 3 (mutation gate: the last survivor) — an earlier revision had a
 /// SEPARATE `"escape_sequence" => return None` arm here, on the theory that
@@ -855,9 +857,18 @@ fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     }
 
     let text = fragment.utf8_text(source).ok()?.to_string();
-    // Defense in depth: a control byte that DID end up inside the
-    // fragment's own span (not diagnosed, but not proven impossible either)
-    // must abstain the same way (AD-8).
+    // NOT decorative — this is the SOLE guard for a control byte that lands
+    // INSIDE the fragment's own span rather than outside it. The gap-check
+    // above only catches bytes the lexer excludes (escape sequences at
+    // either edge, and the NUL that becomes a sibling `ERROR` node). Most
+    // other control bytes are legal unescaped ECMAScript string content
+    // and stay INSIDE the fragment, invisible to the gap-check — measured
+    // against the real grammar for 0x01, TAB (0x09), 0x0B, 0x0C and DEL
+    // (0x7f) (TAB and DEL each pinned by their own test row; the others
+    // share the same `< 0x20` clause TAB already proves load-bearing).
+    // Deleting this check on the (false) belief that the gap-check already
+    // covers every control byte would reopen exactly the hole this
+    // predicate closes (AD-8).
     if text.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return None;
     }
