@@ -645,10 +645,15 @@ fn candidate_paths(normalized: &Path) -> Vec<PathBuf> {
     }
 }
 
-/// Appends `.ext` to `path`'s full file name (US17 T4.3 retry, BLOCKING-1)
-/// — deliberately NOT `Path::with_extension`, which replaces everything
-/// after the last `.` in the file name instead of appending after it. A
-/// specifier like `./app.module` must propose `app.module.ts`, not `app.ts`.
+/// Appends `.ext` to the whole `path` (US17 T4.3 retry, BLOCKING-1; wording
+/// corrected — retry sweep, Dev-B MINOR-2) — deliberately NOT `Path::
+/// with_extension`, which replaces everything after the last `.` in the
+/// file name instead of appending after it. A specifier like
+/// `./app.module` must propose `app.module.ts`, not `app.ts`. Operating on
+/// the whole path (not just `file_name()`) is safe only because
+/// `normalize_lexically` rebuilds `path` via `components()` and never
+/// leaves a trailing separator — there is no directory suffix here for the
+/// concatenation to corrupt.
 fn append_extension(path: &Path, ext: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".");
@@ -850,8 +855,12 @@ fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     if fragment_count != 1 {
         return None;
     }
-    let fragment =
-        fragment.expect("fragment_count == 1 guarantees exactly one captured string_fragment");
+    // Retry sweep (Dev-B MINOR-1) — `.expect(...)` introduced a panic path
+    // into a function whose whole contract is "abstain, never guess, never
+    // fail" (AD-8). `fragment_count == 1` already guarantees `Some` here,
+    // so this is behaviorally identical, but `?` keeps that guarantee from
+    // ever becoming a panic if it's wrong — it abstains (`None`) instead.
+    let fragment = fragment?;
 
     // The one fragment must account for the ENTIRE content between the
     // opening and closing quote (each exactly 1 byte in this grammar) — a
