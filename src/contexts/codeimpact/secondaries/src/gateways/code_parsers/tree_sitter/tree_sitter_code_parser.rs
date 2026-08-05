@@ -84,11 +84,14 @@ type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 /// resolution, ADR-0023); `file_references` (renamed from `file_usings`,
 /// US17 T4.1 — `usings` holding a relative path string like `"./x"` would
 /// be a name that lies) is named neutrally, and is now also consumed by
-/// `RelativePath` (US17 T4.3). `resolvable_targets` (US17 T4.3, AD-2/AD-3)
-/// is the admissible-edge-target SET `RelativePath` resolves candidates
-/// against — every key of `file_sources`, independent of extraction
-/// success (a file too large to extract from is still a legitimate graph
-/// node) and independent of `source_roots` (T4.4 adds that gate).
+/// `RelativePath` (US17 T4.3). `resolvable_targets` (US17 T4.3/T4.4,
+/// AD-2/AD-3) is the admissible-edge-target SET `RelativePath` resolves
+/// candidates against — every key of `file_sources`, independent of
+/// extraction success (a file too large to extract from is still a
+/// legitimate graph node), but bounded by `source_roots` (US17 T4.4, same
+/// `under_any_root` gate `namespace_declarers` already had): a file outside
+/// the configured roots cannot be a dependency TARGET, mirroring the C#
+/// namespace-declarer scoping below.
 struct DepsIndex {
     namespace_declarers: NamespaceDeclarers,
     file_references: HashMap<PathBuf, Vec<String>>,
@@ -491,11 +494,16 @@ fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
 /// which files may act as a namespace's DECLARER, not which files may
 /// REQUEST resolution.
 ///
-/// `resolvable_targets` (US17 T4.3, AD-2/AD-3) is built here too, from
-/// EVERY key of `file_sources` — independent of `extract_deps_safe`
-/// succeeding (a file too large/pathological to extract from is still a
-/// legitimate graph node) and independent of `source_roots` (T4.4 adds
-/// that gate; T4.3 deliberately does not).
+/// `resolvable_targets` (US17 T4.3/T4.4, AD-2/AD-3) is built here too, from
+/// every key of `file_sources` that is `under_any_root` — independent of
+/// `extract_deps_safe` succeeding (a file too large/pathological to
+/// extract from is still a legitimate graph node), but bounded by
+/// `source_roots` (US17 T4.4, mirroring `namespace_declarers` above): a
+/// file outside the configured roots cannot be a dependency TARGET. This
+/// does NOT narrow who may REQUEST resolution — `file_references` stays
+/// unconditional (previous paragraph), so a file outside `source_roots`
+/// still resolves its own imports; only the set it may resolve INTO
+/// shrinks.
 fn build_deps_index(
     profile: &LanguageProfile,
     file_sources: &[(PathBuf, String)],
@@ -503,8 +511,11 @@ fn build_deps_index(
 ) -> DepsIndex {
     let mut namespace_declarers: NamespaceDeclarers = HashMap::new();
     let mut file_references: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    let resolvable_targets: HashSet<PathBuf> =
-        file_sources.iter().map(|(path, _)| path.clone()).collect();
+    let resolvable_targets: HashSet<PathBuf> = file_sources
+        .iter()
+        .map(|(path, _)| path.clone())
+        .filter(|path| under_any_root(path, source_roots))
+        .collect();
 
     for (path, source) in file_sources {
         let Some(extraction) = extract_deps_safe(profile, source) else {
