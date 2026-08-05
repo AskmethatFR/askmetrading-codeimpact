@@ -26,7 +26,12 @@
 ; `require(cfg, './x')` does not match. A computed argument (`require(name)`,
 ; a template string, string concatenation, or any other non-literal
 ; expression) simply matches none of these patterns — there is no guard to
-; write here, only a query shape not to widen (AD-8).
+; write here, only a query shape not to widen (AD-8). A leading COMMENT
+; before the string argument (`require(/* c */ './x')`) also fails the `.`
+; anchor and abstains: this grammar's `comment` is a named "extra" node that
+; can appear before the real first argument (confirmed against the same
+; grammar quirk the IIFE-attribution tests below already document), so it
+; counts as `arguments`' actual first named child, not the string.
 
 (import_statement source: (string) @import)
 

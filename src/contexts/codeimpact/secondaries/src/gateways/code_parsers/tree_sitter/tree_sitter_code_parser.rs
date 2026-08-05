@@ -236,11 +236,19 @@ impl TreeSitterCodeParser {
                     // (if literal-only) resolution exists. Deliberately
                     // longer than C#'s three strings (AD-6): this axis has
                     // more blind spots, and the operator relies on this
-                    // exact text to decide whether to trust the graph.
+                    // exact text to decide whether to trust the graph. Retry
+                    // (Dev-B MAJOR-5 / Security): names the legacy `import x
+                    // = require()` form explicitly (a dedicated test proves
+                    // it produces no edge — silence in this string would
+                    // read as "supported" to a reader who leans on it) and
+                    // the shadowed-`require` blind spot (inherent to a
+                    // syntactic query, not a bug to fix here).
                     cross_file_dependencies: MetricSupport::Degraded(
                         "literal relative specifiers only (import, export-from, require); \
                          computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
-                         imports produce no edge, and .tsx targets are not analyzed"
+                         imports, and the legacy `import x = require()` form produce no edge; \
+                         a shadowed `require` identifier is still followed (syntactic only); \
+                         .tsx targets are not analyzed"
                             .to_string(),
                     ),
                 },
@@ -370,20 +378,24 @@ impl CodeParser for TreeSitterCodeParser {
     ) -> Result<Vec<PathBuf>, AnalysisError> {
         source_guard::check_admissible(source).map_err(AnalysisError::Unmeasurable)?;
 
+        // Retry (Dev-B MINOR): `index` and `referenced` were computed
+        // identically in both match arms below — same lookup, same
+        // fallback, same doc. Hoisted once; each arm now only does the
+        // resolution-specific walk over `referenced`.
+        let index = self.deps_index(ctx);
+        let referenced = match index.file_references.get(&ctx.current_file) {
+            Some(referenced) => referenced.clone(),
+            None => {
+                extract_deps_safe(&self.profile, source)
+                    .ok_or(AnalysisError::Unmeasurable(
+                        UnmeasurableReason::SourceTooComplex,
+                    ))?
+                    .referenced
+            }
+        };
+
         match self.profile.deps {
             DepsStrategy::NamespaceIndex => {
-                let index = self.deps_index(ctx);
-                let referenced = match index.file_references.get(&ctx.current_file) {
-                    Some(referenced) => referenced.clone(),
-                    None => {
-                        extract_deps_safe(&self.profile, source)
-                            .ok_or(AnalysisError::Unmeasurable(
-                                UnmeasurableReason::SourceTooComplex,
-                            ))?
-                            .referenced
-                    }
-                };
-
                 // `seen` dedupes in O(1) per candidate (MINOR, US16 T5
                 // retry #2) — a linear `resolved.contains(..)` scan was
                 // O(len(resolved)) per candidate; `resolved` itself stays a
@@ -403,18 +415,6 @@ impl CodeParser for TreeSitterCodeParser {
                 Ok(resolved)
             }
             DepsStrategy::RelativePath => {
-                let index = self.deps_index(ctx);
-                let referenced = match index.file_references.get(&ctx.current_file) {
-                    Some(referenced) => referenced.clone(),
-                    None => {
-                        extract_deps_safe(&self.profile, source)
-                            .ok_or(AnalysisError::Unmeasurable(
-                                UnmeasurableReason::SourceTooComplex,
-                            ))?
-                            .referenced
-                    }
-                };
-
                 let Some(base) = ctx.current_file.parent() else {
                     return Ok(Vec::new());
                 };
@@ -520,10 +520,15 @@ fn build_deps_index(
 }
 
 /// The extensions T4.3's relative-import resolution will ever propose as a
-/// candidate (Q-A, operator-approved order — see `candidate_paths`).
-/// Deliberately excludes `.tsx` (#118 — never listed, never a candidate,
-/// never a target: `.tsx` never enters `file_sources` in the first place)
-/// and `.d.ts` (a types-only dependency is not a runtime one).
+/// GUESSED candidate — i.e. the 7 suffixes tried when a specifier has no
+/// analyzable extension of its own (Q-A, operator-approved order — see
+/// `candidate_paths`). `.tsx` is never among them (#118 — never listed,
+/// never a candidate, never a target: `.tsx` never enters `file_sources` in
+/// the first place, so it is unreachable in every form). `.d.ts` is also
+/// never guessed, but retry (Security) — this is NOT the same guarantee:
+/// an EXPLICIT `./t.d.ts` specifier still resolves if `t.d.ts` is itself a
+/// scanned file, exactly like any other exact-path literal (AD-3 — the
+/// source named that path itself, membership is the only test).
 const CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION: [&str; 7] =
     ["ts", "mts", "cts", "js", "jsx", "mjs", "cjs"];
 
@@ -580,6 +585,16 @@ fn normalize_lexically(path: &Path) -> Option<PathBuf> {
 /// their emitted `.js`/`.mjs`/`.cjs` name). An extension-less specifier
 /// proposes up to 16: 7 direct extensions, then the same 7 under an
 /// `index` child directory.
+///
+/// Retry (Dev-B BLOCKING-1): the direct 7 are built by APPENDING `.ext` to
+/// `normalized`'s full file name (`append_extension`), never by
+/// `Path::with_extension`, which REPLACES everything after the last `.` —
+/// `./app.module` would have `with_extension("ts")` silently truncate to
+/// `app.ts`, both missing the real `app.module.ts` target (Angular/NestJS's
+/// dominant naming convention) and, worse, risking a false edge to an
+/// unrelated `app.ts` that happens to exist. `normalized.join("index")`
+/// below is unaffected — `"index"` never contains a `.`, so
+/// `with_extension` on it always appends correctly.
 fn candidate_paths(normalized: &Path) -> Vec<PathBuf> {
     let extension = normalized.extension().and_then(|ext| ext.to_str());
     match extension {
@@ -592,7 +607,7 @@ fn candidate_paths(normalized: &Path) -> Vec<PathBuf> {
         }
         _ => CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
             .iter()
-            .map(|ext| normalized.with_extension(ext))
+            .map(|ext| append_extension(normalized, ext))
             .chain(
                 CANDIDATE_EXTENSIONS_WITHOUT_EXTENSION
                     .iter()
@@ -600,6 +615,17 @@ fn candidate_paths(normalized: &Path) -> Vec<PathBuf> {
             )
             .collect(),
     }
+}
+
+/// Appends `.ext` to `path`'s full file name (US17 T4.3 retry, BLOCKING-1)
+/// — deliberately NOT `Path::with_extension`, which replaces everything
+/// after the last `.` in the file name instead of appending after it. A
+/// specifier like `./app.module` must propose `app.module.ts`, not `app.ts`.
+fn append_extension(path: &Path, ext: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".");
+    name.push(ext);
+    PathBuf::from(name)
 }
 
 /// The NodeNext idiom (US17 T4.3): a `.js`/`.mjs`/`.cjs` specifier may name
@@ -764,6 +790,16 @@ fn field_text_opt(node: &Node, field: &str, source: &[u8]) -> Option<String> {
 /// an interior `html_character_reference`), or a nested `escape_sequence`
 /// child at all (`'./\x78'` must never be decoded into a path — the
 /// decoded byte could name a file the raw source text never mentions).
+///
+/// Retry (Dev-B / Security fold-in): a single `string_fragment` can still
+/// carry a RAW control byte typed directly into the source (`'./a\0'` —
+/// note the literal NUL, not the escape sequence `'./\x00'`, which the
+/// `escape_sequence` guard above already catches). Measured against the
+/// real grammar: tree-sitter's lexer ends the fragment's matched text at
+/// the raw byte, so a specifier shorter than what the source spells out
+/// reaches the resolver and can land on a real, but wrongly-named, file —
+/// the same AD-8 abstention this function already applies to escapes, now
+/// applied to the fragment's decoded text itself.
 fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     let mut fragment: Option<Node> = None;
@@ -781,7 +817,34 @@ fn string_literal_text(node: &Node, source: &[u8]) -> Option<String> {
     if fragment_count != 1 {
         return None;
     }
-    fragment?.utf8_text(source).ok().map(|s| s.to_string())
+    let fragment =
+        fragment.expect("fragment_count == 1 guarantees exactly one captured string_fragment");
+
+    // Retry (Security) — a raw control byte (e.g. a literal NUL typed
+    // directly into the source, NOT the escape sequence `\x00` the
+    // `escape_sequence` guard above already catches) does not become part
+    // of the `string_fragment` node's own text at all: diagnosed against
+    // the real parse tree, `require('./a\0')`'s `string` node is `'
+    // string_fragment ERROR '` — the byte becomes a SEPARATE sibling
+    // `ERROR` node, so `fragment_count` stays 1 and the fragment's own text
+    // reads as the complete-looking "./a", silently SHORTER than what the
+    // source spells. The one fragment must therefore account for the
+    // ENTIRE content between the opening and closing quote (each exactly 1
+    // byte in this grammar) — a gap means bytes were excluded from its
+    // span, whatever produced them.
+    if fragment.start_byte() != node.start_byte() + 1 || fragment.end_byte() != node.end_byte() - 1
+    {
+        return None;
+    }
+
+    let text = fragment.utf8_text(source).ok()?.to_string();
+    // Defense in depth: a control byte that DID end up inside the
+    // fragment's own span (not diagnosed, but not proven impossible either)
+    // must abstain the same way (AD-8).
+    if text.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return None;
+    }
+    Some(text)
 }
 
 /// Runs the parse+query+assign pipeline inside `catch_unwind` (Q2: defense
