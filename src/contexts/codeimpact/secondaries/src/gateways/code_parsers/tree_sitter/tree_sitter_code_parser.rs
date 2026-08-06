@@ -84,11 +84,32 @@ type NamespaceDeclarers = HashMap<String, Vec<PathBuf>>;
 /// resolution, ADR-0023); `file_references` (renamed from `file_usings`,
 /// US17 T4.1 — `usings` holding a relative path string like `"./x"` would
 /// be a name that lies) is named neutrally, and is now also consumed by
-/// `RelativePath` (US17 T4.3). `resolvable_targets` (US17 T4.3, AD-2/AD-3)
-/// is the admissible-edge-target SET `RelativePath` resolves candidates
-/// against — every key of `file_sources`, independent of extraction
-/// success (a file too large to extract from is still a legitimate graph
-/// node) and independent of `source_roots` (T4.4 adds that gate).
+/// `RelativePath` (US17 T4.3). `resolvable_targets` (US17 T4.3/T4.4,
+/// AD-2/AD-3) is the admissible-edge-target SET `RelativePath` resolves
+/// candidates against — every key of `file_sources`, independent of
+/// extraction success (a file too large to extract from is still a
+/// legitimate graph node), but bounded by `source_roots` (US17 T4.4, same
+/// `under_any_root` gate `namespace_declarers` already had): a file outside
+/// the configured roots cannot be a dependency TARGET, mirroring the C#
+/// namespace-declarer scoping below.
+///
+/// `cfg_attr(test, derive(Default))` (US17 T4.4 mutation-gate retry,
+/// Security LOW-2) is a TEST-ONLY affordance — it exists so `cargo-mutants`'
+/// whole-function `build_deps_index -> Default::default()` mutant is viable
+/// (compiles) instead of `Unviable`, which is the ONLY mutant `--in-diff`
+/// can reach for this slice's change (the reused `under_any_root`
+/// predicate's own body is untouched, per this ticket's "do not
+/// re-implement it"). Deliberately NOT a bare `#[derive(Default)]`: Security
+/// proved by compilation that a production-reachable `Default` on
+/// `DepsIndex` propagates to `Arc<DepsIndex>`, then the memoized
+/// `DepsIndexCacheEntry` tuple, making `cache.take().unwrap_or_default()`
+/// in `deps_index` COMPILE — a silently empty index (zero targets, zero
+/// declarers) for C# and TS/JS alike, no error at all (AD-8 abstention).
+/// `cfg_attr(test, ...)` keeps that combination a compile error in every
+/// non-test build, restoring the guard rail this file had before the plain
+/// derive was introduced. `cargo-mutants` builds under the test profile
+/// (`cargo test --no-run`), so the whole-function mutant stays viable.
+#[cfg_attr(test, derive(Default))]
 struct DepsIndex {
     namespace_declarers: NamespaceDeclarers,
     file_references: HashMap<PathBuf, Vec<String>>,
@@ -144,14 +165,14 @@ impl TreeSitterCodeParser {
                     .collect(),
                 degradations: CapabilityDegradations {
                     io_in_loops: MetricSupport::Degraded(
-                        "syntactic only; instance/EF receivers abstained, not asserted"
-                            .to_string(),
+                        "syntactic only; instance/EF receivers abstained, not asserted".to_string(),
                     ),
                     call_graph: MetricSupport::Degraded(
                         "name-based resolution; unresolved-receiver calls may merge".to_string(),
                     ),
                     cross_file_dependencies: MetricSupport::Degraded(
-                        "namespace-level resolution; a file links to every declarer of a used namespace"
+                        "namespace-level resolution; a file links to every declarer of a used \
+                         namespace; targets outside the configured sourceRoots produce no edge"
                             .to_string(),
                     ),
                 },
@@ -257,8 +278,9 @@ impl TreeSitterCodeParser {
                          computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
                          imports, and the legacy `import x = require()` form produce no edge; \
                          a shadowed `require` identifier is still followed (syntactic only); \
-                         type-only imports produce a full edge like any other import; .tsx \
-                         targets are not analyzed"
+                         type-only imports produce a full edge like any other import; targets \
+                         outside the configured sourceRoots produce no edge; .tsx targets are \
+                         not analyzed"
                             .to_string(),
                     ),
                 },
@@ -491,11 +513,16 @@ fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
 /// which files may act as a namespace's DECLARER, not which files may
 /// REQUEST resolution.
 ///
-/// `resolvable_targets` (US17 T4.3, AD-2/AD-3) is built here too, from
-/// EVERY key of `file_sources` — independent of `extract_deps_safe`
-/// succeeding (a file too large/pathological to extract from is still a
-/// legitimate graph node) and independent of `source_roots` (T4.4 adds
-/// that gate; T4.3 deliberately does not).
+/// `resolvable_targets` (US17 T4.3/T4.4, AD-2/AD-3) is built here too, from
+/// every key of `file_sources` that is `under_any_root` — independent of
+/// `extract_deps_safe` succeeding (a file too large/pathological to
+/// extract from is still a legitimate graph node), but bounded by
+/// `source_roots` (US17 T4.4, mirroring `namespace_declarers` above): a
+/// file outside the configured roots cannot be a dependency TARGET. This
+/// does NOT narrow who may REQUEST resolution — `file_references` stays
+/// unconditional (previous paragraph), so a file outside `source_roots`
+/// still resolves its own imports; only the set it may resolve INTO
+/// shrinks.
 fn build_deps_index(
     profile: &LanguageProfile,
     file_sources: &[(PathBuf, String)],
@@ -503,8 +530,11 @@ fn build_deps_index(
 ) -> DepsIndex {
     let mut namespace_declarers: NamespaceDeclarers = HashMap::new();
     let mut file_references: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    let resolvable_targets: HashSet<PathBuf> =
-        file_sources.iter().map(|(path, _)| path.clone()).collect();
+    let resolvable_targets: HashSet<PathBuf> = file_sources
+        .iter()
+        .filter(|(path, _)| under_any_root(path, source_roots))
+        .map(|(path, _)| path.clone())
+        .collect();
 
     for (path, source) in file_sources {
         let Some(extraction) = extract_deps_safe(profile, source) else {
@@ -1610,19 +1640,21 @@ mod tests {
                 }
                 other => panic!("expected call_graph to be Degraded, got {:?}", other),
             }
-            match capabilities.cross_file_dependencies() {
-                MetricSupport::Degraded(reason) => {
-                    assert!(
-                        reason.contains("namespace-level"),
-                        "expected the namespace-level-resolution reason, got: {}",
-                        reason
-                    );
-                }
-                other => panic!(
-                    "expected cross_file_dependencies to be Degraded, got {:?}",
-                    other
-                ),
-            }
+            // Retry (Security Q6, operator arbitration, US17 T4.4) — was a
+            // `contains("namespace-level")` substring check; converted to a
+            // golden verbatim match, matching the TS/JS test's own bar
+            // (Dev-B MINOR-4 precedent below): a `contains(...)` chain
+            // survives a rewording that silently drops or inverts a clause,
+            // and this string now also names the sourceRoots blind spot
+            // (same gate, same wording obligation as TS/JS).
+            assert_eq!(
+                *capabilities.cross_file_dependencies(),
+                MetricSupport::Degraded(
+                    "namespace-level resolution; a file links to every declarer of a used \
+                     namespace; targets outside the configured sourceRoots produce no edge"
+                        .to_string()
+                )
+            );
         }
 
         // Discriminating test (T5.2 tech spec): a C# call/dep capability
@@ -2311,6 +2343,29 @@ mod tests {
         //       via `require` — dedupes to exactly one edge.
         //   28. `capabilities().cross_file_dependencies() == Degraded(msg)`
         //       with an assertion on the message's CONTENT (AD-6).
+        //
+        // ── Test List (US17 T4.4 — `resolvable_targets` bounded by
+        //    `source_roots`, mirroring `namespace_declarers`) ─────────────
+        //   29. a relative import resolving to a target OUTSIDE the
+        //       configured source_roots produces no edge, paired with a
+        //       sibling import resolving to an IN-root target in the same
+        //       file (S4's "sourceRoots are honored when set").
+        //   30. empty source_roots means "unset" — the SAME fixture as #29
+        //       (an out-of-root-looking target) resolves once source_roots
+        //       is empty, proving today's unrestricted behavior is
+        //       unchanged (`under_any_root`'s `roots.is_empty()` branch,
+        //       exercised through the use case rather than unit-tested
+        //       directly — it is an internal predicate, not its own use
+        //       case).
+        //   31. the deliberate asymmetry: a file sitting OUTSIDE
+        //       source_roots must still resolve its OWN relative import to
+        //       an IN-root target — source_roots bounds which files may be
+        //       a dependency TARGET, never which files may REQUEST
+        //       resolution.
+        //   32. (Dev-B MINOR-2, inherited from T4.3) resolvable_targets
+        //       stays independent of extract_deps_safe succeeding: a
+        //       too-large-to-extract-from file is still a legitimate
+        //       dependency TARGET, proven by importing INTO one.
 
         fn ts_parser() -> TreeSitterCodeParser {
             TreeSitterCodeParser::typescript(Vec::new())
@@ -2376,6 +2431,11 @@ mod tests {
                 // substring checked). AD-6's whole premise is that the
                 // operator relies on this exact text, so the honest bar is
                 // a golden verbatim match, not substring presence.
+                // Retry #2 (Security Q6, operator arbitration) — sourceRoots
+                // scoping (US17 T4.4) is the one blind spot here a reader
+                // cannot infer from the language itself: every OTHER entry
+                // in this string is a syntactic property of TS/JS, this one
+                // is a property of the operator's OWN configuration.
                 assert_eq!(
                     *capabilities.cross_file_dependencies(),
                     MetricSupport::Degraded(
@@ -2383,8 +2443,9 @@ mod tests {
                          computed, dynamic and escaped specifiers, bare and tsconfig-aliased \
                          imports, and the legacy `import x = require()` form produce no edge; \
                          a shadowed `require` identifier is still followed (syntactic only); \
-                         type-only imports produce a full edge like any other import; .tsx \
-                         targets are not analyzed"
+                         type-only imports produce a full edge like any other import; targets \
+                         outside the configured sourceRoots produce no edge; .tsx targets are \
+                         not analyzed"
                             .to_string()
                     )
                 );
@@ -2999,6 +3060,111 @@ mod tests {
                 vec![PathBuf::from("y.ts")],
                 "the .tsx-only target must not resolve, while the paired import still does"
             );
+        }
+
+        // @scenario: typescript-javascript-analysis/S4
+        #[test]
+        fn a_relative_import_resolving_outside_configured_source_roots_produces_no_edge() {
+            let outside_x = "export const x = 1;";
+            let inside_y = "export const y = 1;";
+            let entry = "import '../lib/x';\nimport './y';\n";
+            // entry.ts lives under "src/" (the only configured source
+            // root); its sibling "src/y.ts" is in-root and resolves, but
+            // "lib/x.ts" sits outside "src/" and must not enter
+            // resolvable_targets — direct mirror of the C# precedent
+            // (`a_namespace_declared_outside_configured_source_roots_does_
+            // not_resolve`).
+            let ctx = deps_ctx(
+                "src/entry.ts",
+                &[
+                    ("src/entry.ts", entry),
+                    ("src/y.ts", inside_y),
+                    ("lib/x.ts", outside_x),
+                ],
+                &["src"],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("src/y.ts")],
+                "the in-root sibling must resolve while the out-of-root target must not"
+            );
+        }
+
+        #[test]
+        fn empty_source_roots_leaves_target_resolution_unrestricted() {
+            let outside_x = "export const x = 1;";
+            let inside_y = "export const y = 1;";
+            let entry = "import '../lib/x';\nimport './y';\n";
+            // Same fixture as the test above, but with NO configured
+            // source_roots — proves `under_any_root`'s "empty means unset"
+            // branch keeps today's behavior: the whole project stays
+            // resolvable, both targets included.
+            let ctx = deps_ctx(
+                "src/entry.ts",
+                &[
+                    ("src/entry.ts", entry),
+                    ("src/y.ts", inside_y),
+                    ("lib/x.ts", outside_x),
+                ],
+                &[],
+            );
+
+            let mut resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+            resolved.sort();
+
+            assert_eq!(
+                resolved,
+                vec![PathBuf::from("lib/x.ts"), PathBuf::from("src/y.ts")],
+                "unset source_roots (empty) must keep the whole project resolvable"
+            );
+        }
+
+        #[test]
+        fn a_file_outside_source_roots_still_resolves_its_own_relative_import() {
+            let inside_y = "export const y = 1;";
+            let entry = "import './src/y';\n";
+            // entry.ts sits at the project root, OUTSIDE "src/" (the only
+            // configured root) — but it must still resolve its own import
+            // to an IN-root target: source_roots bounds which files may be
+            // a dependency TARGET, never which files may REQUEST
+            // resolution (the asymmetry `file_references`'s unconditional
+            // population preserves).
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("src/y.ts", inside_y)],
+                &["src"],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("src/y.ts")]);
+        }
+
+        #[test]
+        fn a_file_too_large_to_extract_from_is_still_a_legitimate_dependency_target() {
+            // Dev-B MINOR-2 — `build_deps_index`'s doc claims
+            // `resolvable_targets` is independent of `extract_deps_safe`
+            // succeeding. `huge.ts` exceeds
+            // `source_guard::MAX_MEASURABLE_SOURCE_BYTES`, so
+            // `extract_deps_safe` returns `None` for it and it never enters
+            // `file_references`/`namespace_declarers` — but it must still
+            // resolve as an IMPORT TARGET, since `resolvable_targets` is
+            // built from every `file_sources` key, not from extraction
+            // output.
+            let huge_source = "x".repeat(source_guard::MAX_MEASURABLE_SOURCE_BYTES + 1);
+            let entry = "import './huge';\n";
+            let ctx = deps_ctx(
+                "entry.ts",
+                &[("entry.ts", entry), ("huge.ts", &huge_source)],
+                &[],
+            );
+
+            let resolved = ts_parser().resolve_dependencies(entry, &ctx).unwrap();
+
+            assert_eq!(resolved, vec![PathBuf::from("huge.ts")]);
         }
 
         #[test]

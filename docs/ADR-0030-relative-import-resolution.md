@@ -218,4 +218,12 @@ En retirant un `exit 1` qui ne protégeait que par accident, T4.2 a élargi la p
 | #134 | Specifier de répertoire bare résolvant vers un fichier frère au lieu de son `index` ; `Cargo.lock` gitignoré alors qu'on livre un binaire |
 | #128 | `--strict` sort en 0 alors qu'une partie du projet n'a pas été mesurée |
 
-**Reste sur l'US.** T4.4 — bornage de `resolvable_targets` par `sourceRoots`, dernière tranche, qui fera tomber le `@wip` de S4 dans [[typescript-javascript-analysis]].
+**T4.4 — la dernière tranche, livrée.** `resolvable_targets` est borné par les `sourceRoots` configurés, via le prédicat `under_any_root` existant — le miroir exact de ce que `namespace_declarers` fait déjà côté C#. Une ligne :
+
+```rust
+.filter(|path| under_any_root(path, source_roots))
+```
+
+L'asymétrie est délibérée et pinnée par un test : `file_references` reste peuplé **inconditionnellement**. `sourceRoots` borne qui peut être **cible** d'une arête, jamais qui peut **demander** une résolution — un fichier situé hors des roots résout toujours ses propres imports. Un import qui pointe hors des roots ne produit ni arête ni erreur (AD-8). `sourceRoots` vide signifie « non configuré » et laisse tout le projet résolvable, comportement inchangé.
+
+Le `@wip` de S4 est tombé avec cette tranche, et US17 est close.
