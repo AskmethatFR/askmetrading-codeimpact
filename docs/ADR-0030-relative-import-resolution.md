@@ -227,3 +227,71 @@ En retirant un `exit 1` qui ne protégeait que par accident, T4.2 a élargi la p
 L'asymétrie est délibérée et pinnée par un test : `file_references` reste peuplé **inconditionnellement**. `sourceRoots` borne qui peut être **cible** d'une arête, jamais qui peut **demander** une résolution — un fichier situé hors des roots résout toujours ses propres imports. Un import qui pointe hors des roots ne produit ni arête ni erreur (AD-8). `sourceRoots` vide signifie « non configuré » et laisse tout le projet résolvable, comportement inchangé.
 
 Le `@wip` de S4 est tombé avec cette tranche, et US17 est close.
+
+Le code final inverse `.filter()` et `.map()` — filtrer avant de cloner, plutôt que cloner tous les chemins pour en jeter une partie.
+
+## Décision AD-10 — les deux chaînes `Degraded` nomment l'angle mort `sourceRoots`
+
+> `targets outside the configured sourceRoots produce no edge;`
+
+Ajouté à la chaîne TS/JS **et** à la chaîne C#.
+
+**L'arbitrage, parce que la conclusion seule ne suffit pas.** Le développeur a d'abord jugé qu'aucune modification n'était nécessaire, avec un argument de cohérence réel : le gate `under_any_root` existe côté C# depuis US16 T5 et la chaîne C# ne l'a jamais mentionné ; traiter les deux différemment serait incohérent. Security a jugé l'inverse. L'orchestrateur a tranché pour Security, parce que sa synthèse **résout** l'objection de cohérence au lieu de l'ignorer : on amende les deux chaînes, donc aucune asymétrie documentaire n'est créée.
+
+**La raison de fond**, celle qu'il faut retenir si la question se repose : le scoping `sourceRoots` est le seul angle mort de cette liste qu'un lecteur **ne peut pas déduire du langage**. Tous les autres — specifiers calculés, imports bare, alias tsconfig, `.tsx` — sont des propriétés syntaxiques de TS/JS, qu'un développeur connaissant l'écosystème peut anticiper. Celui-ci est une propriété de **la configuration de l'opérateur**, invisible depuis le code analysé.
+
+**Alternative écartée** : exposer le scoping `sourceRoots` une seule fois au niveau du rapport plutôt que dupliqué par langage. Plus propre à long terme, mais hors périmètre T4.4 — et bloqué de fait par #132, puisque aucune de ces chaînes n'atteint aujourd'hui une surface opérateur.
+
+## Décision AD-11 — le gate de mutation ne peut rien prouver sur cette tranche, et c'est structurel
+
+**Verdict final de T4.4 : `empty`. 3 mutants générés, 3 `unviable`, 0 exécuté.** Dérogation accordée par l'orchestrateur sur preuves compensatoires. Ce n'est pas un contournement de confort : c'est une limite d'outil, démontrée.
+
+### Pourquoi aucun mutant utile n'existe
+
+`cargo-mutants` en mode `--in-diff` ne sait produire, pour cette forme de diff, que des remplacements de **fonction entière** par `Default::default()`. Le changement de comportement tient en une ligne — une closure d'itérateur appelant un prédicat réutilisé et **intouché** — et `cargo-mutants` ne mute pas les closures de cette forme. Les trois mutants générés visent `build_deps_index` et les deux constructeurs (entrés dans le diff parce que les chaînes `Degraded` y vivent) ; aucun de ces types n'implémente `Default` en production.
+
+### La tentative de correction, et pourquoi elle était pire
+
+Une première passe a ajouté `#[derive(Default)]` sur `DepsIndex` pour rendre le mutant viable, obtenant un `verdict: "pass"`. Deux lanes l'ont rejetée pour des raisons **indépendantes** :
+
+- **Le `pass` était plus malhonnête que le `empty`.** Un mutant de fonction entière tué prouve qu'*un* test exerce `build_deps_index` — vrai depuis US16 T5 — et ne dit rien de la ligne `.filter(...)`. Pire, ce `pass` alimente la relaxation ADR-2026-14, qui le lit comme « quelque chose a réellement été tué » et retire la vérification manuelle. On aurait fabriqué un vert qui désarme le contrôle suivant.
+- **Le derive nu retirait un garde-fou de compilation.** `Default` se propage à travers `Arc<DepsIndex>`, puis le tuple `DepsIndexCacheEntry`, puis `Option<DepsIndexCacheEntry>` — si bien qu'un futur `cache.take().unwrap_or_default()` **compile**, et rendrait un index silencieusement vide : zéro cible, zéro declarer, **zéro arête C# et TS/JS**, sans aucune erreur puisque AD-8 impose l'abstention. Avant ce commit, ce code ne compilait pas.
+
+Le code retenu est `#[cfg_attr(test, derive(Default))]` — le garde-fou est restauré, et le gate retombe à `empty`.
+
+### L'impossibilité, démontrée
+
+`.cargo/mutants.toml` porte `test_workspace = true`, donc chaque mutant lance `cargo test --workspace`. Ce build compile `codeimpact_secondaries` en **deux unités distinctes** :
+
+1. son binaire de tests unitaires, **avec** `--cfg test` — le `cfg_attr` s'y active ;
+2. une bibliothèque ordinaire (`--crate-type lib`), **sans** `--cfg test`, que les autres crates de test du workspace lient comme dépendance.
+
+Le mutant patche le **fichier source**, donc les deux unités voient le corps muté, et la seconde échoue en `E0277`.
+
+**Aucune formulation de l'attribut sur `DepsIndex` ne peut satisfaire simultanément** « garde-fou actif dans tout build non-test » et « ce mutant compile dans l'unité plain-lib sous `test_workspace = true` ». Les deux exigences sont mutuellement exclusives. Le même `E0277` qui *prouve* que le garde-fou est réel est celui qui tue la viabilité du mutant.
+
+### Les preuves compensatoires qui fondent la dérogation
+
+1. Le commit RED épingle l'assertion S4 **avant** l'existence du filtre — 100 lignes de test, zéro ligne de production.
+2. L'orchestrateur a retiré lui-même la ligne `.filter(...)` et observé le rouge sur l'assertion S4 précise, les deux autres tests restant verts à juste titre.
+3. Dev-B a raisonné **six mutants à la main** : chacun des trois tests en tue au moins un qu'aucun autre ne tue. Le plus subtil — gater le *demandeur* au lieu de la *cible* — n'est tué que par le test d'asymétrie.
+4. Security a produit un différentiel e2e sur **13 orthographes de `sourceRoots`** contre le vrai binaire, plus une preuve 18×17 que la tranche ne peut que rétrécir l'ensemble.
+
+**Leçon à retenir** : un `empty` bloquant peut être un verdict *légitime*, pas un échec à contourner. Le contrat développeur ne le prévoit pas, ce qui pousse mécaniquement à modifier la production pour nourrir l'outil — c'est le trou de process, de la famille de #130.
+
+## Ce que Security a mesuré sur le confinement, et qui reste ouvert
+
+Le comportement de `Path::starts_with` est **composant par composant**, pas textuel : `srcfoo/x.ts` n'est pas admis par un root `src`. Les trois orthographes naturelles (`frontend`, `./frontend`, `frontend/`) fonctionnent en production, où `resolve_source_roots` canonicalise.
+
+Mais `sourceRoots` n'a **aucune validation**, seule clé de configuration de chemins dans ce cas — `include`/`exclude` ont reçu un validateur complet en #34 T2, la tranche précédente. Mesuré sur le vrai binaire :
+
+| Valeur | Effet |
+|---|---|
+| `["/"]`, `["."]`, `[""]` | gate **entièrement neutralisée** — et comme `under_any_root` fait un `any()`, une seule entrée `"/"` annule tous les autres roots |
+| `[".."]`, `["/etc"]` | **blackout total silencieux**, 0 arête, aucun diagnostic |
+| `["../proj/frontend"]` | 0 arête, alors que c'est le **même dossier** que `["frontend"]` qui en donne 1 — le `join` ne normalise pas les `..` |
+| 95 323 roots (sous le plafond de 1 Mio) | scan de 500 fichiers : 4,21 s → 31,78 s |
+
+Atteignable depuis une PR hostile en CI, puisque `.codeimpact.json` est auto-découvert dans le répertoire analysé. **Arbitrage produit en attente de l'opérateur** : appliquer le validateur déjà écrit à côté ferait d'une configuration acceptée aujourd'hui une erreur dure.
+
+Aggravant : une mauvaise configuration du confinement ne produit **aucun signal**. Sur `--format json` et `--format html`, le rapport est byte-identique gate active ou non ; seul `--format console` affiche `Dépendances totales: 0`, sans cause.
