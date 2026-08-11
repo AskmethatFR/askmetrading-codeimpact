@@ -151,6 +151,21 @@ fn zero_threshold_is_a_valid_maximally_strict_construction() {
     assert!(result.is_ok());
 }
 
+#[test]
+fn threshold_error_display_renders_the_french_diagnostic_with_the_value() {
+    let energy_err = ThresholdError::InvalidEnergyThreshold(-1.5);
+    assert_eq!(
+        energy_err.to_string(),
+        "seuil d'énergie invalide: -1.5 (doit être un nombre fini >= 0)"
+    );
+
+    let co2_err = ThresholdError::InvalidCo2Threshold(-2.5);
+    assert_eq!(
+        co2_err.to_string(),
+        "seuil CO2 invalide: -2.5 (doit être un nombre fini >= 0)"
+    );
+}
+
 // US8 slice 4 (AD-5) — AlertThresholds::from_sources: the pure domain
 // merge behind `.codeimpact.json` + CLI override. Calling use case: main.rs
 // merges the config-file-read thresholds with the CLI-parsed ones before
