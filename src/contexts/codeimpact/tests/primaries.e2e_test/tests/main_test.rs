@@ -17,14 +17,18 @@ fn binary_path() -> PathBuf {
         .join("target")
         .join("debug")
         .join("codeimpact");
-    if !bin.exists() {
-        let status = Command::new("cargo")
-            .args(["build", "-p", "codeimpact_primaries"])
-            .current_dir(workspace_root())
-            .status()
-            .expect("failed to build binary");
-        assert!(status.success(), "binary build failed");
-    }
+    // #123 retry 1 (Security): rebuilding only when the binary is ABSENT
+    // let a stale binary silently mask the very regression a perf e2e test
+    // exists to catch — reproduced live: the #123 regression test failed
+    // against a stale pre-fix binary, then passed once rebuilt. `cargo
+    // build` no-ops when the binary is already current, so always invoking
+    // it costs nothing on the common case and closes the staleness hole.
+    let status = Command::new("cargo")
+        .args(["build", "-p", "codeimpact_primaries"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("failed to build binary");
+    assert!(status.success(), "binary build failed");
     // The CLI now shells out to codeimpact-parse-probe (#63) for every
     // parse — it must sit next to the CLI binary (sibling discovery, D2)
     // whenever an e2e test invokes `codeimpact analyze`.
