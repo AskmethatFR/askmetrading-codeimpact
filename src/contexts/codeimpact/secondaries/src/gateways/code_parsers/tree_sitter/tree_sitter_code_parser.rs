@@ -1068,6 +1068,7 @@ fn assign_captures_to_functions(
         .map(|(_, node)| *node)
         .collect();
     function_nodes.sort_by_key(Node::start_byte);
+    let captured_function_ids: HashSet<usize> = function_nodes.iter().map(Node::id).collect();
 
     let mut results: Vec<ParsedFunction> = function_nodes
         .iter()
@@ -1168,7 +1169,7 @@ fn assign_captures_to_functions(
         let mut call_nodes = calls_of[i].clone();
         call_nodes.sort_by_key(Node::start_byte);
         for call_node in &call_nodes {
-            let name = call_callee_name(call_node, &function_nodes, source);
+            let name = call_callee_name(call_node, &captured_function_ids, source);
             let in_loop = loops_of[i]
                 .iter()
                 .any(|loop_node| contains(loop_node, call_node));
@@ -1414,12 +1415,17 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
 /// CONTAINING a marker substring (e.g. `prefetchAll` containing `fetch`)
 /// false-classifies as `Unknown` I/O for a call that performs none.
 ///
-/// Membership is checked by `Node::id()` against `function_nodes` — the
-/// exact list this file already captured as `@function` — rather than a
-/// hardcoded per-language node-kind list, so this stays correct for any
-/// future grammar without another retry: "is this callee one of OUR
-/// captured functions" is the precise question, independent of what that
-/// grammar happens to name the node kind.
+/// Membership is checked by `Node::id()` against `captured_function_ids` —
+/// a `HashSet` of the `Node::id()`s of the exact list this file already
+/// captured as `@function` — rather than a hardcoded per-language node-kind
+/// list, so this stays correct for any future grammar without another
+/// retry: "is this callee one of OUR captured functions" is the precise
+/// question, independent of what that grammar happens to name the node
+/// kind.
+///
+/// `MAX_QUADRATIC_CAPTURES_PER_FUNCTION` bounds `calls_of[i]` PER FUNCTION,
+/// not `function_nodes.len()` (#123) — membership here is an O(1) `HashSet`
+/// lookup via `captured_function_ids`, not a per-call linear scan.
 ///
 /// Retry 2, MINOR 6 — this function's `"<anonymous>"` and `field_text`'s
 /// `"<unresolved>"` fallback (the name an anonymous `ParsedFunction` gets)
@@ -1430,11 +1436,15 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
 /// self-edge, not a correct one, so keeping them distinct is the safer
 /// choice, even though it means the edge resolves to nothing rather than
 /// to something meaningful.
-fn call_callee_name(call_node: &Node, function_nodes: &[Node], source: &[u8]) -> String {
+fn call_callee_name(
+    call_node: &Node,
+    captured_function_ids: &HashSet<usize>,
+    source: &[u8],
+) -> String {
     let callee_is_function_shaped = call_node
         .child_by_field_name("function")
         .map(unwrap_transparent_wrapper)
-        .is_some_and(|callee| function_nodes.iter().any(|f| f.id() == callee.id()));
+        .is_some_and(|callee| captured_function_ids.contains(&callee.id()));
     if callee_is_function_shaped {
         "<anonymous>".to_string()
     } else {

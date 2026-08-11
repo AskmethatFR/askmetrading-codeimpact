@@ -17,14 +17,18 @@ fn binary_path() -> PathBuf {
         .join("target")
         .join("debug")
         .join("codeimpact");
-    if !bin.exists() {
-        let status = Command::new("cargo")
-            .args(["build", "-p", "codeimpact_primaries"])
-            .current_dir(workspace_root())
-            .status()
-            .expect("failed to build binary");
-        assert!(status.success(), "binary build failed");
-    }
+    // #123 retry 1 (Security): rebuilding only when the binary is ABSENT
+    // let a stale binary silently mask the very regression a perf e2e test
+    // exists to catch — reproduced live: the #123 regression test failed
+    // against a stale pre-fix binary, then passed once rebuilt. `cargo
+    // build` no-ops when the binary is already current, so always invoking
+    // it costs nothing on the common case and closes the staleness hole.
+    let status = Command::new("cargo")
+        .args(["build", "-p", "codeimpact_primaries"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("failed to build binary");
+    assert!(status.success(), "binary build failed");
     // The CLI now shells out to codeimpact-parse-probe (#63) for every
     // parse — it must sit next to the CLI binary (sibling discovery, D2)
     // whenever an e2e test invokes `codeimpact analyze`.
@@ -33,24 +37,22 @@ fn binary_path() -> PathBuf {
 }
 
 fn ensure_probe_built() {
-    let probe = workspace_root().join("target").join("debug").join(format!(
-        "codeimpact-parse-probe{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    if !probe.exists() {
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                "codeimpact_secondaries",
-                "--bin",
-                "codeimpact-parse-probe",
-            ])
-            .current_dir(workspace_root())
-            .status()
-            .expect("failed to build probe binary");
-        assert!(status.success(), "probe binary build failed");
-    }
+    // #123 (same-shape sweep, human-ruled): identical staleness hole as
+    // binary_path()'s CLI-binary build above — rebuilding only when the
+    // probe is ABSENT lets a stale probe silently mask a regression.
+    // `cargo build` no-ops when current.
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "codeimpact_secondaries",
+            "--bin",
+            "codeimpact-parse-probe",
+        ])
+        .current_dir(workspace_root())
+        .status()
+        .expect("failed to build probe binary");
+    assert!(status.success(), "probe binary build failed");
 }
 
 /// Writes `content` to an isolated temp file and returns its path. Used to
@@ -861,6 +863,95 @@ fn e2e_analyze_path_with_many_small_csharp_functions_measures_fast() {
     assert_eq!(
         json["metrics"]["cyclomatic_complexity"], 58_001,
         "1 (base) + 1 (if) per function, summed across 58,000 functions: {}",
+        stdout
+    );
+}
+
+// ── #123 (US17 T1 retry, Security F3) — `call_callee_name` resolved a
+// callee's identity via `function_nodes.iter().any(|f| f.id() == ...)`, an
+// O(functions) linear scan per call site, inside a loop over every call in
+// every function: O(functions × calls). `MAX_QUADRATIC_CAPTURES_PER_FUNCTION`
+// bounds `calls_of[i]` PER FUNCTION, not `function_nodes.len()` — so it
+// bounds the "one function, many calls" shape (which the cap correctly
+// refuses as `SourceTooComplex`), but it never bounded THIS shape: MANY
+// functions, each making one call, where every one of those calls still
+// paid a scan proportional to the whole file's function count. This
+// fixture — many small functions, one call each — isolates exactly that
+// cost, staying within both the PARSE_QUERY_BUDGET and the per-function
+// quadratic-capture cap (retry 1, Dev-B F1/F2: an earlier draft of this
+// comment and its assertions described the fixture backwards, as "many
+// calls in one function" — precisely the case the cap DOES bound, and
+// which the cap being untouched means this test could never validate).
+#[test]
+fn e2e_analyze_path_with_many_small_csharp_functions_each_calling_measures_fast() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_csharp_many_calls_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+
+    // A healthy file alongside the pathological one is mandatory: without
+    // it the run exits 1 / "no files could be analyzed" and the test would
+    // assert on the wrong mechanism (verified empirically).
+    std::fs::write(
+        dir.join("good.cs"),
+        "class G { void m() { if (true) { } } }",
+    )
+    .expect("write healthy fixture");
+
+    // retry 1 (Security, GATE 1.5 Q1 revised): 30,000, not 45,000 — the
+    // architect's original ~1.5s GREEN projection was off by ~2.5x against
+    // the measured 3.84s warm / 4.60s cold (77% / 92% of the 5s budget) at
+    // 45,000. 30,000 measures 2.62s (~52% of budget), a safer CI margin,
+    // while still comfortably exceeding budget pre-fix (6.24s).
+    let mut source = String::from("class C {\n");
+    for _ in 0..30_000 {
+        source.push_str("void a(){g();}\n");
+    }
+    source.push_str("}\n");
+    std::fs::write(dir.join("many_calls.cs"), &source).expect("write fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(
+        json["metrics"]["unmeasurable_files_count"], 0,
+        "30,000 tiny functions each making one call — the whole file's function count was paid per call site; it must be MEASURED, not refused: {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["cyclomatic_complexity"], 3,
+        "good.cs (1 base + 1 if) + many_calls.cs's 30,000 branch-free a() functions (1 base each, but cyclomatic_complexity is a PER-FILE base, not per-function — same convention the pre-existing 58,001 test above pins): {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["transitive_complexity"], 1,
+        "unresolved g() never becomes a graph edge to a captured function: {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["max_call_depth"], 2,
+        "reachable only if callee names were genuinely resolved (behavior-preservation): {}",
         stdout
     );
 }
