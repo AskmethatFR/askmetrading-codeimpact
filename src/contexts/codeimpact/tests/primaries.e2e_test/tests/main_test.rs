@@ -37,24 +37,22 @@ fn binary_path() -> PathBuf {
 }
 
 fn ensure_probe_built() {
-    let probe = workspace_root().join("target").join("debug").join(format!(
-        "codeimpact-parse-probe{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    if !probe.exists() {
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                "codeimpact_secondaries",
-                "--bin",
-                "codeimpact-parse-probe",
-            ])
-            .current_dir(workspace_root())
-            .status()
-            .expect("failed to build probe binary");
-        assert!(status.success(), "probe binary build failed");
-    }
+    // #123 (same-shape sweep, human-ruled): identical staleness hole as
+    // binary_path()'s CLI-binary build above — rebuilding only when the
+    // probe is ABSENT lets a stale probe silently mask a regression.
+    // `cargo build` no-ops when current.
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "codeimpact_secondaries",
+            "--bin",
+            "codeimpact-parse-probe",
+        ])
+        .current_dir(workspace_root())
+        .status()
+        .expect("failed to build probe binary");
+    assert!(status.success(), "probe binary build failed");
 }
 
 /// Writes `content` to an isolated temp file and returns its path. Used to
