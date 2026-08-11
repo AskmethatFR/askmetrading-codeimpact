@@ -865,6 +865,85 @@ fn e2e_analyze_path_with_many_small_csharp_functions_measures_fast() {
     );
 }
 
+// ── #123 (US17 T1 retry, Security F3) — `call_callee_name` resolved a
+// callee's identity via `function_nodes.iter().any(|f| f.id() == ...)`, an
+// O(functions) linear scan per call site, inside a loop over every call in
+// every function: O(functions × calls). `function_nodes.len()` is NOT
+// bounded by `MAX_QUADRATIC_CAPTURES_PER_FUNCTION` (that cap bounds
+// `calls_of[i]` per FUNCTION, not the function count), so a single function
+// with many calls pays a cost proportional to the whole file's function
+// count, per call. This fixture stays within the PARSE_QUERY_BUDGET and the
+// per-function quadratic-capture cap, so it isolates exactly the
+// callee-resolution cost the fix targets.
+#[test]
+fn e2e_analyze_path_with_many_small_csharp_functions_each_calling_measures_fast() {
+    let binary = binary_path();
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_csharp_many_calls_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated scan dir");
+
+    // A healthy file alongside the pathological one is mandatory: without
+    // it the run exits 1 / "no files could be analyzed" and the test would
+    // assert on the wrong mechanism (verified empirically).
+    std::fs::write(
+        dir.join("good.cs"),
+        "class G { void m() { if (true) { } } }",
+    )
+    .expect("write healthy fixture");
+
+    let mut source = String::from("class C {\n");
+    for _ in 0..45_000 {
+        source.push_str("void a(){g();}\n");
+    }
+    source.push_str("}\n");
+    std::fs::write(dir.join("many_calls.cs"), &source).expect("write fixture");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "exit 0 expected. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(
+        json["metrics"]["unmeasurable_files_count"], 0,
+        "45,000 calls in one function is large but legitimate code — it must be MEASURED, not refused: {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["cyclomatic_complexity"], 3,
+        "good.cs (1 base + 1 if) + many_calls.cs's single a() (1 base, no branches): {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["transitive_complexity"], 1,
+        "unresolved g() never becomes a graph edge to a captured function: {}",
+        stdout
+    );
+    assert_eq!(
+        json["metrics"]["max_call_depth"], 2,
+        "reachable only if callee names were genuinely resolved (behavior-preservation): {}",
+        stdout
+    );
+}
+
 #[test]
 fn e2e_analyze_nonexistent_file_exits_1() {
     let binary = binary_path();
