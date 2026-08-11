@@ -1071,8 +1071,7 @@ fn assign_captures_to_functions(
     // #123 (US17 T1 retry, Security F3): O(1) membership for
     // `call_callee_name` below — see that function's doc comment. Building
     // the set is O(F), negligible against the O(F log F) sort just above.
-    let captured_function_ids: HashSet<usize> =
-        function_nodes.iter().map(Node::id).collect();
+    let captured_function_ids: HashSet<usize> = function_nodes.iter().map(Node::id).collect();
 
     let mut results: Vec<ParsedFunction> = function_nodes
         .iter()
