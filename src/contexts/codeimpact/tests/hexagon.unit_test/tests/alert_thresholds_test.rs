@@ -19,14 +19,17 @@ use codeimpact_hexagon::analysis::ThresholdError;
 // 2. energy below limit -> no breach
 // 3. energy exactly at limit (boundary) -> no breach (`>` not `>=`)
 // 4. energy above limit -> breach, correct metric/limit/actual/excess
-// 5. co2 above limit -> breach
-// 6. both metrics breaching -> report carries both breaches
-// 7. (parametrized) absent metric never breaches even with a threshold
+// 5. co2 exactly at limit (boundary) -> no breach (`>` not `>=`) [#115]
+// 6. co2 above limit -> breach
+// 7. both metrics breaching -> report carries both breaches
+// 8. (parametrized) absent metric never breaches even with a threshold
 //    configured (ADR-0010 — a missing measurement is not a confident zero)
-// 8. negative energy threshold is rejected
-// 9. negative co2 threshold is rejected
-// 10. (parametrized) non-finite (NaN/Infinity) thresholds are rejected
-// 11. a zero threshold is a valid (maximally strict) construction
+// 9. negative energy threshold is rejected
+// 10. negative co2 threshold is rejected
+// 11. (parametrized) non-finite (NaN/Infinity) thresholds are rejected
+// 12. a zero threshold is a valid (maximally strict) construction
+// 13. ThresholdError::Display renders the French diagnostic for both
+//     variants, with the interpolated value [#115]
 
 #[test]
 fn no_thresholds_configured_never_breaches() {
@@ -64,6 +67,16 @@ fn energy_above_limit_breaches_with_the_right_numbers() {
     assert_eq!(breaches[0].limit(), 0.00001);
     assert_eq!(breaches[0].actual(), 0.000015);
     assert!((breaches[0].excess() - 0.000005).abs() < 1e-12);
+}
+
+#[test]
+fn co2_exactly_at_limit_does_not_breach() {
+    let thresholds = AlertThresholds::new(None, Some(20.0)).unwrap();
+    let report = thresholds.evaluate(None, Some(20.0));
+    assert!(
+        !report.has_breach(),
+        "exceeding must be strictly greater than the limit, not equal to it"
+    );
 }
 
 #[test]
@@ -136,6 +149,21 @@ fn non_finite_thresholds_are_rejected() {
 fn zero_threshold_is_a_valid_maximally_strict_construction() {
     let result = AlertThresholds::new(Some(0.0), Some(0.0));
     assert!(result.is_ok());
+}
+
+#[test]
+fn threshold_error_display_renders_the_french_diagnostic_with_the_value() {
+    let energy_err = ThresholdError::InvalidEnergyThreshold(-1.5);
+    assert_eq!(
+        energy_err.to_string(),
+        "seuil d'énergie invalide: -1.5 (doit être un nombre fini >= 0)"
+    );
+
+    let co2_err = ThresholdError::InvalidCo2Threshold(-2.5);
+    assert_eq!(
+        co2_err.to_string(),
+        "seuil CO2 invalide: -2.5 (doit être un nombre fini >= 0)"
+    );
 }
 
 // US8 slice 4 (AD-5) — AlertThresholds::from_sources: the pure domain

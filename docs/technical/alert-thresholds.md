@@ -16,6 +16,7 @@
 | `AlertThresholds::evaluate(cpu, co2)` | fn pure | `(Option<f64>, Option<f64>) -> ThresholdReport`. Compare **seulement** sur `(Some, Some)` — `None` ne franchit jamais un seuil ([[ADR-0010]]) |
 | `AlertThresholds::from_sources(file, cli)` | fn pure | Fusion par métrique : `cli.or(file)` — la CLI l'emporte |
 | `AlertThresholds::none()` | ctor | Aucun seuil ; `evaluate` ne déclenche jamais |
+| `ThresholdError` | erreur | Construction rejetée. Son `Display` est **surface utilisateur**, pas de la dette morte : rendu à trois sites de production — `primaries/src/main.rs:129` et `:312` (`eprintln!("erreur: {}", e)` puis exit 1) et `secondaries/.../file_system_config_reader.rs:143` (`e.to_string()` porté dans `AnalysisError`). L'impl est donc conservée et son rendu asservi par test (#115) ; sa suppression sous YAGNI casserait les trois sites |
 | `ThresholdReport` / `ThresholdBreach` / `BreachedMetric` | VO | Résultat du gate ; `has_breach()` porte la décision d'exit |
 | `GatedOutput<T>` | wrapper | Payload du use case + `ThresholdReport` ; décision dans le domaine, mapping dans `main.rs` |
 
