@@ -1068,9 +1068,6 @@ fn assign_captures_to_functions(
         .map(|(_, node)| *node)
         .collect();
     function_nodes.sort_by_key(Node::start_byte);
-    // #123 (US17 T1 retry, Security F3): O(1) membership for
-    // `call_callee_name` below — see that function's doc comment. Building
-    // the set is O(F), negligible against the O(F log F) sort just above.
     let captured_function_ids: HashSet<usize> = function_nodes.iter().map(Node::id).collect();
 
     let mut results: Vec<ParsedFunction> = function_nodes
@@ -1426,16 +1423,9 @@ fn field_text(node: &Node, field: &str, source: &[u8]) -> String {
 /// question, independent of what that grammar happens to name the node
 /// kind.
 ///
-/// #123 (US17 T1 retry, Security F3): this was originally
-/// `function_nodes.iter().any(|f| f.id() == callee.id())`, an O(functions)
-/// linear scan per call site — called once per call, inside a loop over
-/// every function, for O(functions × calls) overall.
 /// `MAX_QUADRATIC_CAPTURES_PER_FUNCTION` bounds `calls_of[i]` PER FUNCTION,
-/// not `function_nodes.len()`, so it never bounded this cost: a single
-/// function with many calls in a file with many OTHER functions still paid
-/// the full linear scan on every one of its calls. The caller now passes a
-/// `HashSet<usize>` built once (see `assign_captures_to_functions`), making
-/// this an O(1) membership check.
+/// not `function_nodes.len()` (#123) — membership here is an O(1) `HashSet`
+/// lookup via `captured_function_ids`, not a per-call linear scan.
 ///
 /// Retry 2, MINOR 6 — this function's `"<anonymous>"` and `field_text`'s
 /// `"<unresolved>"` fallback (the name an anonymous `ParsedFunction` gets)
