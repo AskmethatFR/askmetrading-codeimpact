@@ -484,6 +484,56 @@ fn file_json_no_capabilities_reports_metric_support_all_supported() {
     );
 }
 
+// #132 T3 (AD-6) — MetricSupportDto gains cross_file_dependencies on BOTH
+// JSON paths (one shared DTO, per-file constructor here).
+#[test]
+fn file_json_reports_cross_file_dependencies_metric_support() {
+    let writer = JsonReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::TypeScript)
+        .with_cross_file_dependencies(MetricSupport::Degraded(
+            "literal relative specifiers only".to_string(),
+        ));
+    let metrics = make_metrics_with_impacts().with_capabilities(capabilities);
+
+    let json_str = writer.write_json(&metrics, "test.ts", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(
+        json["metrics"]["metric_support"]["cross_file_dependencies"],
+        "degraded: literal relative specifiers only"
+    );
+}
+
+// #132 T3 (AD-6) — the aggregate constructor gets the same field, folded
+// for real (AD-4) rather than left absent.
+#[test]
+fn project_json_reports_cross_file_dependencies_metric_support() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.ts"),
+        make_measured_file(5).with_capabilities(
+            LanguageCapabilities::all_supported(Language::TypeScript).with_cross_file_dependencies(
+                MetricSupport::Degraded("literal relative specifiers only".to_string()),
+            ),
+        ),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    let support = json["metrics"]["metric_support"]["cross_file_dependencies"]
+        .as_str()
+        .expect("cross_file_dependencies metric_support should be a string");
+    assert!(
+        support.contains("literal relative specifiers only"),
+        "expected the degradation chain to travel to the aggregate JSON, got: {}",
+        support
+    );
+}
+
 #[test]
 fn project_json_sums_unclassifiable_io_in_loops_count_across_files() {
     let writer = JsonReportWriter::new();
@@ -711,6 +761,7 @@ fn project_json_mixed_language_io_reports_degraded_with_real_partial_value() {
 // hardcoded `call_graph: "supported"` regardless of what was actually
 // measured: a project JSON asserting the opposite of the truth on every
 // TS/JS project, the nominal ADR-0010 violation this ticket exists to fix.
+// @scenario: typescript-javascript-analysis/S8
 #[test]
 fn project_json_call_graph_never_asserts_supported_when_ts_degraded() {
     let writer = JsonReportWriter::new();
@@ -743,6 +794,32 @@ fn project_json_call_graph_never_asserts_supported_when_ts_degraded() {
         "the source degradation chain must travel to the aggregate JSON \
          verbatim, got: {}",
         call_graph
+    );
+}
+
+// Negative arm (S8's third And): a project whose call graph is fully
+// resolved still reports it as supported — discriminates against a fold
+// that always narrows to Degraded/Unsupported regardless of input.
+// @scenario: typescript-javascript-analysis/S8
+#[test]
+fn project_json_call_graph_reports_supported_when_fully_resolved() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.ts"),
+        make_measured_file(5)
+            .with_capabilities(LanguageCapabilities::all_supported(Language::TypeScript)),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(
+        json["metrics"]["metric_support"]["call_graph"], "supported",
+        "a fully-resolved call graph must still report supported, got: {}",
+        json_str
     );
 }
 

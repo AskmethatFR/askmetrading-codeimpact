@@ -75,3 +75,16 @@ Feature: TypeScript / JavaScript analysis support
     Then no raw control character reaches the terminal in any report section
     And the neutralized name stays readable and unambiguously decodable
     And the machine-readable formats keep the real name
+
+  # Added in #132. The project JSON did not merely omit the call-graph caveat: it asserted
+  # `"supported"` outright, on every TS/JS project, because the aggregate did not fold that
+  # axis and the writer filled the hole with a plausible constant. That is the nominal case
+  # ADR-0010 forbids — a value read as "clean" where no measurement backs it. An adapter
+  # that cannot read a signal propagates the absence; it never manufactures a value.
+  @scenario:S8
+  Scenario: The call-graph support level is never reported as supported when resolution is degraded
+    Given a project whose call graph is resolved by name and merges its anonymous functions
+    When the project analysis report is produced
+    Then the reported call-graph support level is not "supported"
+    And it states that resolution is name-based and that anonymous functions merge
+    And a project whose call graph is fully resolved still reports it as supported

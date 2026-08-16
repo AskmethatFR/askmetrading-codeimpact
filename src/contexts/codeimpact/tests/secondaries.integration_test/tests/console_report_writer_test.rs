@@ -443,6 +443,117 @@ fn write_project_report_shows_unclassifiable_io_in_loops_total() {
     );
 }
 
+// #132 T3 (AD-6) — the dependency edge count is never displayed without
+// saying what the graph cannot see. Models the per-file degraded-note
+// format at :81 (write_console_appends_degraded_note_to_transitive_
+// complexity_line), applied to the project summary.
+// @scenario: dependency-graph-integrity/S2
+#[test]
+fn write_project_report_appends_degraded_note_to_dependances_totales_line() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::TypeScript)
+        .with_cross_file_dependencies(MetricSupport::Degraded(
+            "literal relative specifiers only".to_string(),
+        ));
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+    let files = vec![(path("a.ts"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains(
+            "Dépendances totales: 0 [dégradé: partial: 0/1 files measured this metric; \
+             literal relative specifiers only]"
+        ),
+        "expected the degraded note appended to the Dépendances totales line, got: {}",
+        output
+    );
+}
+
+// Negative arm (S2's third And): a project whose language resolves every
+// dependency carries no such statement — discriminates against a writer
+// that appends the note unconditionally.
+#[test]
+fn write_project_report_no_note_on_dependances_totales_line_when_fully_resolved() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("Dépendances totales: 0\n")
+            && !output.contains("Dépendances totales: 0 [dégradé:"),
+        "a fully-resolved project must carry no degraded note, got: {}",
+        output
+    );
+}
+
+// #132 T4 (human-approved Q2) — the call-graph caveat goes on Complexité
+// cachée totale (the one project-summary number entirely derived from the
+// call graph), NOT on Complexité transitive totale (which also includes
+// direct complexity, reliable regardless of call-graph resolution).
+fn function_detail_with_hidden(hidden: u32) -> FunctionDetail {
+    FunctionDetail::new(
+        "f".to_string(),
+        CodeLocation::new("a.ts".into(), 1, 1),
+        5,
+        hidden,
+        2,
+        false,
+    )
+}
+
+#[test]
+fn write_project_report_appends_degraded_note_to_complexite_cachee_totale_line() {
+    let writer = ConsoleReportWriter::new();
+    let capabilities = LanguageCapabilities::all_supported(Language::TypeScript).with_call_graph(
+        MetricSupport::Degraded("name-based resolution; anonymous functions merge".to_string()),
+    );
+    let metrics =
+        CodeMetrics::with_call_graph(5, 8, 2, vec![], vec![function_detail_with_hidden(3)])
+            .with_capabilities(capabilities);
+    let files = vec![(path("a.ts"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains(
+            "Complexité cachée totale: 3 [dégradé: name-based resolution; anonymous functions merge]"
+        ),
+        "expected the degraded note appended to the Complexité cachée totale line, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("Complexité transitive totale: 8 [dégradé:"),
+        "the call-graph caveat must not duplicate onto Complexité transitive totale (Q2), got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_no_note_on_complexite_cachee_totale_line_when_fully_resolved() {
+    let writer = ConsoleReportWriter::new();
+    let metrics =
+        CodeMetrics::with_call_graph(5, 8, 2, vec![], vec![function_detail_with_hidden(3)]);
+    let files = vec![(path("a.rs"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        output.contains("Complexité cachée totale: 3\n"),
+        "a fully-resolved call graph must carry no degraded note, got: {}",
+        output
+    );
+}
+
 // #36 — the central acceptance criterion for the whole ticket: the tool
 // must never render `0` for a metric it could not measure. `0` reads as
 // "free", which is a lie.
