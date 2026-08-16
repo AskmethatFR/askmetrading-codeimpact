@@ -4,7 +4,8 @@
 > **Status:** Applied
 > **Date:** 2026-07-20
 > **Decided in:** Issue #33 (US16 — US14-T3, dégradation honnête C#)
-> **Links:** [[architecture-overview]], [[ADR-0020]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]], [[console-report-enriched]], [[glossary]]
+> **Links:** [[architecture-overview]], [[ADR-0020]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[ADR-0032]], [[json-report-schema]], [[html-report]], [[console-report-enriched]], [[glossary]]
+> **Étendu par :** [[ADR-0032]] (#132) — D3 gagne les axes `call_graph` et `cross_file_dependencies` sur le **résumé projet** (deux nouvelles lignes console + un nouveau champ JSON), et la note dégradée console est assainie à chaque sink.
 
 ## Contexte
 
@@ -61,6 +62,18 @@ Trois amendements, un par writer. La **présence de l'annotation est pilotée pa
 | **Console** | `n/a — non supporté pour C#` (français) | valeur + note `[dégradé: reason]` | Voir [[console-report-enriched]] |
 | **JSON** | le champ sérialise `null` (jamais `[]` ni `0`) + objet `metric_support` | `null`/valeur + `metric_support` (`"degraded: reason"`) | Valeurs **anglaises** `"supported"` / `"degraded: reason"` / `"unsupported"`. Voir amendement [[ADR-0007]] |
 | **HTML** | `MetricVm.support` = `na` + `MetricVm.note` | `support` = `degraded` + note | Whitelist JS **fermée** `SUP` → classes CSS `sup-ok` / `sup-degraded` / `sup-na` ; **pas d'`innerHTML`**, discipline [[ADR-0008]] §8.10 préservée. Voir amendement [[ADR-0008]] |
+
+**Extension #132 — les deux axes du graphe rejoignent D3, sur le résumé projet ([[ADR-0032]]).** T3 câblait quatre axes ; `call_graph` et `cross_file_dependencies` n'étaient rendus **nulle part** au niveau projet — et le JSON fabriquait même un `call_graph: "supported"` mensonger ([[ADR-0032]] AD-5). D3 s'étend ainsi, **sans qu'aucun writer change de forme** (D2 tient : on branche toujours sur la donnée) :
+
+| Axe | Surface | Rendu `Degraded(reason)` | Ancre |
+|---|---|---|---|
+| `cross_file_dependencies` | Console — **résumé projet** | `Dépendances totales: {n} [dégradé: {reason}]` | `console_report_writer.rs:445` |
+| `call_graph` | Console — **résumé projet** | `Complexité cachée totale: {n} [dégradé: {reason}]` — la mise en garde va sur le seul nombre agrégé **entièrement** dérivé du graphe d'appels, jamais sur la complexité transitive (qui inclut aussi la complexité directe, fiable quelle que soit la résolution). Arbitrage humain #132 Q2 | `console_report_writer.rs:473` |
+| `cross_file_dependencies` | JSON | `metric_support.cross_file_dependencies` — **champ nouveau**, sur les deux constructeurs du DTO | `json_report_writer.rs:139`, `:168` |
+| `call_graph` | JSON | `metric_support.call_graph` — foldé pour de vrai, remplace un littéral `"supported"` codé en dur | `json_report_writer.rs:164` |
+| — | HTML | **inchangé** : #132 a écarté l'invention de tuiles de stat pour ces deux axes ([[ADR-0032]], option 1 rejetée) | — |
+
+**Précision de sécurité, ajoutée par la même tranche.** La note `[dégradé: <reason>]` **contournait `sanitize_console_text`** — sur les deux sinks par-fichier existants comme sur les deux nouveaux. Les quatre passent désormais par un helper unique `degraded_note` qui assainit (`console_report_writer.rs:29-37`), conformément à la défense D6 d'[[ADR-0029]]. Ce n'était pas exploitable (toute raison expédiée est un littéral de compilation) mais rien ne l'empêchait **structurellement** : `MetricSupport::Degraded(String)` accepte n'importe quelle chaîne. Détail et démonstration : [[ADR-0032]] AD-6.
 
 **JSON — `null`, jamais `[]`/`0` (le cœur d'[[ADR-0010]] appliqué à la sérialisation).** `io_in_loops` et `unclassifiable_io_in_loops_count` sérialisent `null` quand la métrique est `Unsupported` — **jamais** un tableau vide (qui lirait « analysé, aucune I/O ») ni `0` (idem). Le nouvel objet `metric_support` porte l'état déclaré, pour qu'un consommateur CI distingue « mesuré à vide » de « non mesuré ». Les valeurs y sont en **anglais** (contrat machine stable, cohérent avec le reste du schéma JSON), là où la Console rend en **français** (sortie humaine).
 

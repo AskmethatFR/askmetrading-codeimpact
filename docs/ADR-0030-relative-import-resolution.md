@@ -2,7 +2,8 @@
 
 > **Statut :** Appliqué
 > **Décidé dans :** Issue #34 (US17 — T4.1 couture `DepsStrategy`, T4.2 précondition du graphe, T4.3 résolution des specifiers relatifs)
-> **Liens :** [[ADR-0029]], [[ADR-0020]], [[ADR-0021]], [[ADR-0010]], [[ADR-0016]], [[ADR-0022]], [[ADR-0023]], [[architecture-overview]], [[dependency-graph-integrity]], [[typescript-javascript-analysis]], [[glossary]]
+> **Liens :** [[ADR-0029]], [[ADR-0020]], [[ADR-0021]], [[ADR-0010]], [[ADR-0016]], [[ADR-0022]], [[ADR-0023]], [[ADR-0032]], [[architecture-overview]], [[dependency-graph-integrity]], [[typescript-javascript-analysis]], [[glossary]]
+> **Suivi par :** [[ADR-0032]] (#132) — la chaîne AD-6 atteint enfin une surface opérateur ; la dette `#132` ci-dessous est **fermée**, et le blocage de l'alternative AD-10 est **levé**.
 
 ## Contexte
 
@@ -131,7 +132,7 @@ fn append_extension(path: &Path, ext: &str) -> PathBuf {
 
 `Path::with_extension` **remplace** tout ce qui suit le dernier `.`. Sur `./app.module`, il produirait `app.ts` — ratant le vrai `app.module.ts` (la convention de nommage dominante d'Angular et NestJS) et, plus grave, risquant une **arête fausse** vers un `app.ts` sans rapport qui existerait par ailleurs.
 
-C'est un mensonge de mesure au sens d'[[ADR-0010]] : une arête vers un fichier réel du projet que le code source n'a jamais désigné. [[AD-3]] ne protège pas ici, la cible étant bien dans l'ensemble scanné. Le défaut a été trouvé en revue croisée, pas par le gate de mutation.
+C'est un mensonge de mesure au sens d'[[ADR-0010]] : une arête vers un fichier réel du projet que le code source n'a jamais désigné. AD-3 ne protège pas ici, la cible étant bien dans l'ensemble scanné. Le défaut a été trouvé en revue croisée, pas par le gate de mutation.
 
 `normalized.join("index")` n'est pas concerné — `"index"` ne contient pas de `.`, donc `with_extension` y ajoute correctement.
 
@@ -191,6 +192,16 @@ L'invariant AD-6 est que **tout angle mort découvert atterrit dans cette chaîn
 
 La chaîne est pinnée par une assertion golden-verbatim : une mise à jour du comportement sans mise à jour de la chaîne casse le test.
 
+**#132 — la chaîne atteint enfin l'opérateur ([[ADR-0032]]).** AD-6 a été écrit sur le motif explicite que *l'opérateur s'appuie sur ce texte pour décider s'il fait confiance au graphe*. T4.3 l'a livré sans qu'il atteigne **aucune surface** : ni console, ni JSON. AD-6 était une convention interne, pinnée par un test, invisible de bout en bout — un invariant sans effet observable. #132 le rend :
+
+- console — `Dépendances totales: {n} [dégradé: {reason}]` (`console_report_writer.rs:445`) ;
+- JSON — `metric_support.cross_file_dependencies`, champ nouveau (`json_report_writer.rs:139`, `:168`).
+
+Deux conséquences pour AD-6 lui-même, à retenir :
+
+1. **La raison agrégée énumère, elle ne résume pas.** L'agrégat projet ne pouvait porter qu'un compte de couverture ([[ADR-0026]] #89 Q2) ; il porte désormais le compte **et** l'énumération des raisons distinctes ([[ADR-0032]] AD-1). Sans cela, l'opérateur aurait lu « 1 395 arêtes, couverture partielle » sans jamais apprendre **quoi** le graphe ne voit pas — la lettre d'AD-6 satisfaite, son intention perdue.
+2. **La chaîne est désormais du texte face-opérateur, donc assainie.** Elle traverse `sanitize_console_text` à chaque sink console ([[ADR-0032]] AD-6). Toute raison ajoutée à cette liste est du contenu rendu, plus seulement une constante de test.
+
 ## T4.2 — la précondition du graphe que son appelant violait
 
 Découvert hors énoncé, livré **avant** la résolution sur arbitrage opérateur (Q-C).
@@ -212,7 +223,7 @@ En retirant un `exit 1` qui ne protégeait que par accident, T4.2 a élargi la p
 | # | Sujet |
 |---|---|
 | #130 | Le gate de mutation rend un faux `pass` par asymétrie de périmètre baseline/mutants. **Le plus grave** : il neutralise le gate bloquant sur tout le dépôt |
-| #132 | La chaîne `Degraded` n'est rendue sur **aucune** surface opérateur — 1 395 arêtes affichées, mise en garde invisible |
+| ~~#132~~ | ~~La chaîne `Degraded` n'est rendue sur **aucune** surface opérateur — 1 395 arêtes affichées, mise en garde invisible~~ — **fermée** par [[ADR-0032]] (PR #144) : console (`Dépendances totales`, `Complexité cachée totale`) + JSON (`metric_support.cross_file_dependencies`, `metric_support.call_graph`) |
 | #133 | Un import type-only doit-il produire une arête ? `cross_file_dependencies` mesure-t-il le couplage ou l'exécution ? |
 | #131 | Ré-extraction redondante (×3 mesuré : 10,04 s → 30,16 s) et `Query::new` par fichier (~4,1 ms/fichier fixe) |
 | #134 | Specifier de répertoire bare résolvant vers un fichier frère au lieu de son `index` ; `Cargo.lock` gitignoré alors qu'on livre un binaire |
@@ -241,6 +252,8 @@ Ajouté à la chaîne TS/JS **et** à la chaîne C#.
 **La raison de fond**, celle qu'il faut retenir si la question se repose : le scoping `sourceRoots` est le seul angle mort de cette liste qu'un lecteur **ne peut pas déduire du langage**. Tous les autres — specifiers calculés, imports bare, alias tsconfig, `.tsx` — sont des propriétés syntaxiques de TS/JS, qu'un développeur connaissant l'écosystème peut anticiper. Celui-ci est une propriété de **la configuration de l'opérateur**, invisible depuis le code analysé.
 
 **Alternative écartée** : exposer le scoping `sourceRoots` une seule fois au niveau du rapport plutôt que dupliqué par langage. Plus propre à long terme, mais hors périmètre T4.4 — et bloqué de fait par #132, puisque aucune de ces chaînes n'atteint aujourd'hui une surface opérateur.
+
+> **Mise à jour #132 — ce blocage est levé ([[ADR-0032]]).** Les chaînes `Degraded` atteignent désormais la console et le JSON. « Exposer le scoping une seule fois au niveau du rapport » a donc un endroit où atterrir, et redevient **recevable** pour une tranche future. Deux éléments à verser au dossier le jour où la question se repose : (1) l'agrégat projet dédoublonne déjà les raisons identiques entre langages ([[ADR-0032]] AD-2, `BTreeSet`), donc la duplication par langage y est **déjà** absorbée — le gain résiduel porte sur le rendu par-fichier ; (2) la borne mesurée (641 caractères à 3 600 fichiers, énumération constante en octets — [[ADR-0032]] AD-3) retire l'argument « la chaîne est trop longue » du débat. L'écart reste donc une question de lisibilité, pas de volume.
 
 ## Décision AD-11 — le gate de mutation ne peut rien prouver sur cette tranche, et c'est structurel
 
