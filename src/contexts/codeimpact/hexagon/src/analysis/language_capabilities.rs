@@ -120,16 +120,23 @@ impl LanguageCapabilities {
 /// whenever a future axis/adapter does declare `Unsupported`, but is not
 /// reachable end-to-end via a shipped adapter as of #89.
 ///
-/// Four axes only (human-approved Q3: wire ALL tiles to their axis) — the
-/// ones an S1 calling use case (`build_stats`, HTML writer) actually
-/// consumes. `call_graph`/`cross_file_dependencies` have no stat tile yet,
-/// so they are not folded here (YAGNI: no calling use case, no VO field).
+/// #132 T2/T3: `call_graph` (T2) and `cross_file_dependencies` (T3) joined
+/// (AD-4 — the four-axis restriction from #89 Q3 is lifted now that a
+/// calling use case exists for each: the project JSON's
+/// `metric_support.call_graph` field, which #89 left hardcoded to
+/// `"supported"` because this VO did not fold the axis — the nominal
+/// ADR-0010 violation #132 fixes; and the console `Dépendances totales`
+/// line + the JSON `cross_file_dependencies` field, which #34 T4.3 built a
+/// long precise degradation chain for and #132 found reaching no operator
+/// surface at all).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AggregateMetricSupport {
     cyclomatic_complexity: MetricSupport,
     io_in_loops: MetricSupport,
     economic_impact: MetricSupport,
     ecological_impact: MetricSupport,
+    call_graph: MetricSupport,
+    cross_file_dependencies: MetricSupport,
 }
 
 impl AggregateMetricSupport {
@@ -143,6 +150,8 @@ impl AggregateMetricSupport {
         let mut io_in_loops = AxisTally::default();
         let mut economic_impact = AxisTally::default();
         let mut ecological_impact = AxisTally::default();
+        let mut call_graph = AxisTally::default();
+        let mut cross_file_dependencies = AxisTally::default();
         let all_supported = MetricSupport::Supported;
 
         for file_capabilities in capabilities {
@@ -152,12 +161,16 @@ impl AggregateMetricSupport {
                     io_in_loops.record(caps.io_in_loops());
                     economic_impact.record(caps.economic_impact());
                     ecological_impact.record(caps.ecological_impact());
+                    call_graph.record(caps.call_graph());
+                    cross_file_dependencies.record(caps.cross_file_dependencies());
                 }
                 None => {
                     cyclomatic_complexity.record(&all_supported);
                     io_in_loops.record(&all_supported);
                     economic_impact.record(&all_supported);
                     ecological_impact.record(&all_supported);
+                    call_graph.record(&all_supported);
+                    cross_file_dependencies.record(&all_supported);
                 }
             }
         }
@@ -167,6 +180,8 @@ impl AggregateMetricSupport {
             io_in_loops: io_in_loops.resolve(),
             economic_impact: economic_impact.resolve(),
             ecological_impact: ecological_impact.resolve(),
+            call_graph: call_graph.resolve(),
+            cross_file_dependencies: cross_file_dependencies.resolve(),
         }
     }
 
@@ -185,6 +200,14 @@ impl AggregateMetricSupport {
     pub fn ecological_impact(&self) -> &MetricSupport {
         &self.ecological_impact
     }
+
+    pub fn cross_file_dependencies(&self) -> &MetricSupport {
+        &self.cross_file_dependencies
+    }
+
+    pub fn call_graph(&self) -> &MetricSupport {
+        &self.call_graph
+    }
 }
 
 /// One axis' running tally across the files folded so far — private, `fold`
@@ -192,17 +215,28 @@ impl AggregateMetricSupport {
 /// everything (a single per-file `Degraded`, OR a mix of `Supported` and
 /// `Unsupported` files with no per-file `Degraded` at all); `Unsupported`
 /// only when nothing at all was measured; `Supported` otherwise, including
-/// the empty/vacuous case. The `Degraded` reason is always the precise
-/// coverage count (human-approved Q2), never a concatenation of individual
-/// per-file reasons — `supported` counts only fully-`Supported` files, so it
+/// the empty/vacuous case. The `Degraded` reason always carries the precise
+/// coverage count (human-approved #89 Q2) AND, when at least one per-file
+/// `Degraded` was folded in, the enumeration of every distinct reason
+/// (#132 AD-1 — amends the "never a concatenation" rule below: AD-6/
+/// ADR-0030 requires the operator-facing text to name each blind spot, not
+/// only count files, so the count stays and the enumeration is added to
+/// it). Reasons are deduplicated and lexicographically sorted (`BTreeSet`,
+/// #132 AD-2 — `HashMap` iteration order is randomized per process, so an
+/// encounter-order join would make the composed string non-reproducible
+/// run to run). `supported` counts only fully-`Supported` files, so it
 /// reads as "how many files gave a clean measurement" regardless of whether
-/// the rest were `Degraded` or `Unsupported`.
+/// the rest were `Degraded` or `Unsupported`. The no-reason arm (a mix of
+/// `Supported`/`Unsupported` files with no per-file `Degraded` at all) has
+/// nothing to enumerate, so it stays byte-identical to the pre-#132 count-
+/// only shape.
 #[derive(Default)]
 struct AxisTally {
     total: usize,
     supported: usize,
     any_degraded: bool,
     any_unsupported: bool,
+    reasons: std::collections::BTreeSet<String>,
 }
 
 impl AxisTally {
@@ -210,17 +244,31 @@ impl AxisTally {
         self.total += 1;
         match support {
             MetricSupport::Supported => self.supported += 1,
-            MetricSupport::Degraded(_) => self.any_degraded = true,
+            MetricSupport::Degraded(reason) => {
+                self.any_degraded = true;
+                self.reasons.insert(reason.clone());
+            }
             MetricSupport::Unsupported => self.any_unsupported = true,
         }
     }
 
     fn resolve(&self) -> MetricSupport {
         if self.any_degraded || (self.supported > 0 && self.any_unsupported) {
-            MetricSupport::Degraded(format!(
+            let count = format!(
                 "partial: {}/{} files measured this metric",
                 self.supported, self.total
-            ))
+            );
+            if self.reasons.is_empty() {
+                MetricSupport::Degraded(count)
+            } else {
+                let enumerated = self
+                    .reasons
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                MetricSupport::Degraded(format!("{}; {}", count, enumerated))
+            }
         } else if self.any_unsupported {
             MetricSupport::Unsupported
         } else {

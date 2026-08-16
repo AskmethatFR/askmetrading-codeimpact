@@ -258,11 +258,11 @@ fn e2e_analyze_javascript_file_exits_0() {
 }
 
 // @scenario: typescript-javascript-analysis/S1 — Q4's honest degradation
-// surfaces through the existing JSON writer (ADR-0021/ADR-0026), no writer
-// change needed: `MetricSupportDto` renders `io_in_loops`/`call_graph`
-// (both `Degraded`, Q4) but has no `cross_file_dependencies` field at all
-// today — that axis is not JSON-rendered for ANY language yet (a
-// pre-existing gap, out of this ticket's scope; see Open Questions).
+// surfaces through the existing JSON writer (ADR-0021/ADR-0026):
+// `MetricSupportDto` renders `io_in_loops`/`call_graph` (both `Degraded`,
+// Q4) and, since #132 T3 (AD-6), `cross_file_dependencies` too — the
+// pre-existing gap this comment used to document (no field at all for that
+// axis, on either JSON path) is closed.
 #[test]
 fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
     let binary = binary_path();
@@ -298,6 +298,17 @@ fn e2e_analyze_typescript_file_json_reports_honest_metric_support() {
         "Q4/retry (Dev-B F2): call_graph must honestly report that anonymous \
          functions MERGE (corrupting derived metrics), not merely \"resolve no \
          edge\", got: {}",
+        stdout
+    );
+    // #132 T3 (AD-6) — the field this test's header comment used to
+    // document as absent now exists and carries the real source chain.
+    let cross_file_dependencies = json["metrics"]["metric_support"]["cross_file_dependencies"]
+        .as_str()
+        .expect("cross_file_dependencies must be a string");
+    assert!(
+        cross_file_dependencies.starts_with("degraded:")
+            && cross_file_dependencies.contains("literal relative specifiers only"),
+        "cross_file_dependencies must honestly report the TS/JS degradation chain, got: {}",
         stdout
     );
 }

@@ -21,3 +21,19 @@ Feature: Inter-file dependency graph integrity
     Then a report is produced rather than an error
     And no edge is recorded for that dependency
     And the file that could not be analyzed is still named among the unmeasurable files
+
+  # Added in #132. T4.3 wrote a long, precise degradation chain under AD-6 (ADR-0030) on
+  # the explicit ground that the operator leans on that text to decide whether to trust the
+  # graph — then the chain reached no operator surface at all. A dense graph read without
+  # its caveat is the ADR-0010 danger one notch up: not a fabricated metric, but an honest
+  # metric whose honesty never leaves the code. The edge count and the caveat now travel
+  # together, on the surface where the count is displayed. The caveat enumerates the blind
+  # spots rather than summarizing them (AD-6) — a coverage count alone tells the operator
+  # how much was measured, never what the graph cannot see.
+  @scenario:S2
+  Scenario: The dependency edge count is never displayed without saying what the graph cannot see
+    Given a project whose language resolves only part of its inter-file dependencies
+    When the project analysis report is produced
+    Then the surface that displays the total dependency count also states what produces no edge
+    And that statement names each blind spot rather than only counting the files measured
+    And a project whose language resolves every dependency carries no such statement

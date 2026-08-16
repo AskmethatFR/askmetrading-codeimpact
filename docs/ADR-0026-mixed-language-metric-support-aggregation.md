@@ -4,7 +4,8 @@
 > **Status:** Applied
 > **Date:** 2026-07-24
 > **Decided in:** Issue #89 / PR #107 (S1 HTML), PR #111 (S2 JSON)
-> **Links:** [[architecture-overview]], [[ADR-0021]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[json-report-schema]], [[html-report]]
+> **Links:** [[architecture-overview]], [[ADR-0021]], [[ADR-0010]], [[ADR-0007]], [[ADR-0008]], [[ADR-0032]], [[json-report-schema]], [[html-report]]
+> **Amendé par :** [[ADR-0032]] (#132) — la raison agrégée porte désormais le compte **et** l'énumération (AD-1), et le fold couvre **six** axes, plus quatre (AD-4). Voir la section « Amendement #132 » ci-dessous.
 
 ## Contexte
 
@@ -26,7 +27,7 @@ Par axe, fold sur `(any_supported, any_degraded, any_unsupported)` où un fichie
 | **tous** `Unsupported` | `Unsupported` → `n/a` | Rien n'a été mesuré. On tue le `0` confiant. |
 | **tout mélange** : `Supported`+`Unsupported`, ou tout `Degraded`, ou `Degraded`+`Unsupported` | `Degraded(raison)` | Une valeur existe mais sur une **partie** du projet — c'est ce que « dégradé » veut dire. Le nombre est montré, la couverture partielle signalée. |
 
-Formellement : `any_degraded → Degraded` ; sinon `any_supported && any_unsupported → Degraded` (couverture mixte) ; sinon `any_unsupported → Unsupported` ; sinon `Supported`. La raison `Degraded` est un compte de couverture — `"partial: M/N files measured this metric"` (M/N sont des `usize`, digits-only, aucune injection possible). **Quatre axes** seulement (`cyclomatic_complexity`, `io_in_loops`, `economic_impact`, `ecological_impact`) — ceux qu'un cas d'usage appelant consomme ; `call_graph`/`cross_file_dependencies` n'ont pas de tuile, donc non foldés (YAGNI).
+Formellement : `any_degraded → Degraded` ; sinon `any_supported && any_unsupported → Degraded` (couverture mixte) ; sinon `any_unsupported → Unsupported` ; sinon `Supported`. La raison `Degraded` porte un compte de couverture — `"partial: M/N files measured this metric"` (M/N sont des `usize`, digits-only, aucune injection possible) — **et, depuis #132, l'énumération des raisons distinctes qui y ont été foldées** (voir « Amendement #132 » ci-dessous). **Six axes** (`cyclomatic_complexity`, `io_in_loops`, `economic_impact`, `ecological_impact`, `call_graph`, `cross_file_dependencies`) — quatre à l'origine, `call_graph`/`cross_file_dependencies` ayant rejoint le fold en #132 quand leurs cas d'usage appelants sont apparus.
 
 ### Rendu — deux slices observables
 
@@ -44,3 +45,22 @@ Formellement : `any_degraded → Degraded` ; sinon `any_supported && any_unsuppo
 - **(+)** Writers découplés de la langue (branchent sur `MetricSupport`), hexagone zéro-dépendance, additif JSON ([[ADR-0007]]), discipline §8.10 intacte.
 - **(−)** Le badge `Degraded` porte une raison `"partial: M/N"` que le `StatVm` HTML ne surface pas encore (pas de champ `note` sur la tuile) — observation UX pour un futur slice, rien d'unsafe supprimé.
 - **Dette / observation** : l'état `Unsupported` reste non atteignable via adaptateur tant qu'un axe ne le déclare pas ; les tuiles dérivées de `cyclomatic_complexity` (Warnings, Max depth, Hotspots) sont câblées mais inertes (C# et Rust supportent la complexité).
+
+## Amendement #132 — la règle « jamais une concaténation » est **partiellement révisée** ; le fold passe à six axes
+
+Cette ADR posait, en tant que décision GATE 1.5 (#89 Q2), que la raison `Degraded` agrégée est *« un compte de couverture […] **jamais une concaténation** des raisons individuelles par fichier »*, et restreignait le fold à **quatre axes** (#89 Q3 : `call_graph`/`cross_file_dependencies` n'ont pas de tuile de stat, donc pas de cas d'usage appelant — YAGNI).
+
+**[[ADR-0032]] (#132), sur arbitrage humain explicite, révise les deux points :**
+
+| Règle #89 | État après #132 | Où |
+|---|---|---|
+| La raison est un compte, **jamais** une concaténation | **Partiellement révisée** : le compte **reste** ; l'énumération dédoublonnée et triée (`BTreeSet`) s'y **ajoute**, séparateur `; ` — `partial: M/N files measured this metric; <A>; <B>` | [[ADR-0032]] AD-1, AD-2 |
+| **Quatre** axes foldés | **Six** — `call_graph` et `cross_file_dependencies` rejoignent le fold | [[ADR-0032]] AD-4 |
+
+**Pourquoi le compte seul ne tenait plus.** [[ADR-0030]] AD-6 exige que le texte face-opérateur **nomme chaque angle mort** du graphe. Un compte répond « quelle couverture ? » mais jamais « quoi le graphe ne voit-il pas ? » — or c'est la seconde question qui décide si l'opérateur fait confiance aux 1 395 arêtes affichées. La motivation d'origine (ne pas produire un mur de texte par fichier) est préservée par le dédoublonnage et **mesurée** : la ligne composée fait 638 caractères à 4 fichiers et 641 à 3 600, l'énumération étant constante en octets ([[ADR-0032]] AD-3).
+
+**Pourquoi la restriction à quatre axes tombe.** La justification #89 était correcte **à sa date** : sans consommateur, pas de champ. #34 T4.3 a livré 1 395 arêtes affichées et un graphe d'appels ; les cas d'usage appelants existent désormais — lignes console `Dépendances totales` / `Complexité cachée totale`, champs JSON `metric_support.call_graph` / `metric_support.cross_file_dependencies`. Le YAGNI n'est pas désavoué, il est **daté**.
+
+**Le corollaire qui manquait, et qui était un défaut réel.** Tant que l'agrégat ne foldait pas `call_graph`, `json_report_writer.rs` n'avait rien à lire et **fabriquait** `call_graph: "supported"` sur l'agrégat projet — affirmant l'inverse de la vérité sur tout projet TS/JS, dans le cas nominal ([[ADR-0032]] AD-5, violation d'[[ADR-0010]]). La restriction à quatre axes n'était donc pas neutre : elle produisait un mensonge en aval.
+
+**Reste ouvert.** La conséquence `(−)` ci-dessus (« le `StatVm` HTML ne surface pas la raison ») **n'est pas fermée** : #132 a délibérément écarté l'invention de tuiles de stat HTML (option 1 de son ticket) et n'a rendu que là où le graphe est affiché — console et JSON.
