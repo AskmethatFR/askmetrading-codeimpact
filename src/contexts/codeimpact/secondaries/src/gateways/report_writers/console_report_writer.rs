@@ -444,10 +444,19 @@ impl ConsoleReportWriter {
             aggregated.total_transitive_complexity
         )
         .unwrap();
+        // #132 T4 (human-approved Q2): the call-graph caveat goes on
+        // hidden complexity — the one project-summary number entirely
+        // derived from the call graph — never on transitive complexity
+        // above (which also includes direct complexity, reliable
+        // regardless of call-graph resolution).
+        let hidden_complexity_note = match aggregated.metric_support.call_graph() {
+            MetricSupport::Degraded(reason) => format!(" [dégradé: {}]", reason),
+            _ => String::new(),
+        };
         writeln!(
             writer,
-            "Complexité cachée totale: {}",
-            aggregated.total_hidden_complexity
+            "Complexité cachée totale: {}{}",
+            aggregated.total_hidden_complexity, hidden_complexity_note,
         )
         .unwrap();
         writeln!(
