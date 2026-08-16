@@ -19,6 +19,22 @@ use super::humanize::{
 const KB_TO_MB: f64 = 1024.0;
 const MB_TO_GB: f64 = 1024.0;
 
+/// Renders a `MetricSupport`'s degraded caveat as the `" [dégradé: <reason>]"`
+/// suffix every degraded-note call site appends (retry 1, Dev-B F3 /
+/// Security F1) — sanitized like every other analyzed-repo-derived string
+/// reaching the console (`sanitize_console_text`, same as `function`/
+/// `message`/`io_call`/paths above): the reason comes from a
+/// `LanguageCapabilities` a parser attaches, which is exactly as
+/// attacker-influenced as a symbol name.
+fn degraded_note(support: &MetricSupport) -> String {
+    match support {
+        MetricSupport::Degraded(reason) => {
+            format!(" [dégradé: {}]", sanitize_console_text(reason))
+        }
+        _ => String::new(),
+    }
+}
+
 /// Sanitizes a filesystem path before it reaches the console (sweep, item
 /// 4, Dev-B + Security — folded in per the operator's rule: same shape,
 /// same file, the sanitizer already exists). On Unix a filename may
@@ -77,18 +93,20 @@ impl ConsoleReportWriter {
             metrics.cyclomatic_complexity()
         )
         .unwrap();
-        let call_graph_note = match metrics.capabilities().map(|c| c.call_graph()) {
-            Some(MetricSupport::Degraded(reason)) => format!(" [dégradé: {}]", reason),
-            _ => String::new(),
-        };
+        let call_graph_note = metrics
+            .capabilities()
+            .map(|c| c.call_graph())
+            .map(degraded_note)
+            .unwrap_or_default();
         // T4.2 (US16, #33) — coordination fix: io_in_loops can now be
         // Degraded (not just Unsupported), so the unclassifiable-count line
         // needs the same "[dégradé: <reason>]" append the transitive-
         // complexity line already carries for call_graph.
-        let io_degraded_note = match metrics.capabilities().map(|c| c.io_in_loops()) {
-            Some(MetricSupport::Degraded(reason)) => format!(" [dégradé: {}]", reason),
-            _ => String::new(),
-        };
+        let io_degraded_note = metrics
+            .capabilities()
+            .map(|c| c.io_in_loops())
+            .map(degraded_note)
+            .unwrap_or_default();
         writeln!(
             writer,
             "Complexité transitive: {} (dont {} cachée dans les appels){}",
@@ -421,10 +439,7 @@ impl ConsoleReportWriter {
         // never shown without stating what the graph cannot see — same
         // "[dégradé: <reason>]" append the per-file transitive-complexity
         // line already carries for call_graph (write_console_to, above).
-        let dependencies_note = match aggregated.metric_support.cross_file_dependencies() {
-            MetricSupport::Degraded(reason) => format!(" [dégradé: {}]", reason),
-            _ => String::new(),
-        };
+        let dependencies_note = degraded_note(aggregated.metric_support.cross_file_dependencies());
         writeln!(
             writer,
             "Dépendances totales: {}{}",
@@ -444,15 +459,15 @@ impl ConsoleReportWriter {
             aggregated.total_transitive_complexity
         )
         .unwrap();
-        // #132 T4 (human-approved Q2): the call-graph caveat goes on
-        // hidden complexity — the one project-summary number entirely
-        // derived from the call graph — never on transitive complexity
-        // above (which also includes direct complexity, reliable
-        // regardless of call-graph resolution).
-        let hidden_complexity_note = match aggregated.metric_support.call_graph() {
-            MetricSupport::Degraded(reason) => format!(" [dégradé: {}]", reason),
-            _ => String::new(),
-        };
+        // #132 T4 (human-approved Q2): on the project summary, the
+        // call-graph caveat goes on hidden complexity — the one aggregate
+        // number entirely derived from the call graph — never on
+        // transitive complexity above (which also includes direct
+        // complexity, reliable regardless of call-graph resolution). At
+        // per-file granularity (write_console_to, above) the caveat sits
+        // on the combined transitive line instead, which already states
+        // the hidden share inline.
+        let hidden_complexity_note = degraded_note(aggregated.metric_support.call_graph());
         writeln!(
             writer,
             "Complexité cachée totale: {}{}",
