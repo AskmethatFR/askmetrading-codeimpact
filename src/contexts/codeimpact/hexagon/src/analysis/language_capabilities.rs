@@ -120,16 +120,20 @@ impl LanguageCapabilities {
 /// whenever a future axis/adapter does declare `Unsupported`, but is not
 /// reachable end-to-end via a shipped adapter as of #89.
 ///
-/// Four axes only (human-approved Q3: wire ALL tiles to their axis) — the
-/// ones an S1 calling use case (`build_stats`, HTML writer) actually
-/// consumes. `call_graph`/`cross_file_dependencies` have no stat tile yet,
-/// so they are not folded here (YAGNI: no calling use case, no VO field).
+/// #132 T2: `call_graph` joined (AD-4 — the four-axis restriction from #89
+/// Q3 is lifted now that a calling use case exists: the project JSON's
+/// `metric_support.call_graph` field, which #89 left hardcoded to
+/// `"supported"` because this VO did not fold the axis, precisely the
+/// nominal ADR-0010 violation #132 fixes). `cross_file_dependencies`
+/// follows in T3 for the same reason (the console `Dépendances totales`
+/// line and the JSON field are its calling use cases).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AggregateMetricSupport {
     cyclomatic_complexity: MetricSupport,
     io_in_loops: MetricSupport,
     economic_impact: MetricSupport,
     ecological_impact: MetricSupport,
+    call_graph: MetricSupport,
 }
 
 impl AggregateMetricSupport {
@@ -143,6 +147,7 @@ impl AggregateMetricSupport {
         let mut io_in_loops = AxisTally::default();
         let mut economic_impact = AxisTally::default();
         let mut ecological_impact = AxisTally::default();
+        let mut call_graph = AxisTally::default();
         let all_supported = MetricSupport::Supported;
 
         for file_capabilities in capabilities {
@@ -152,12 +157,14 @@ impl AggregateMetricSupport {
                     io_in_loops.record(caps.io_in_loops());
                     economic_impact.record(caps.economic_impact());
                     ecological_impact.record(caps.ecological_impact());
+                    call_graph.record(caps.call_graph());
                 }
                 None => {
                     cyclomatic_complexity.record(&all_supported);
                     io_in_loops.record(&all_supported);
                     economic_impact.record(&all_supported);
                     ecological_impact.record(&all_supported);
+                    call_graph.record(&all_supported);
                 }
             }
         }
@@ -167,6 +174,7 @@ impl AggregateMetricSupport {
             io_in_loops: io_in_loops.resolve(),
             economic_impact: economic_impact.resolve(),
             ecological_impact: ecological_impact.resolve(),
+            call_graph: call_graph.resolve(),
         }
     }
 
@@ -184,6 +192,10 @@ impl AggregateMetricSupport {
 
     pub fn ecological_impact(&self) -> &MetricSupport {
         &self.ecological_impact
+    }
+
+    pub fn call_graph(&self) -> &MetricSupport {
+        &self.call_graph
     }
 }
 

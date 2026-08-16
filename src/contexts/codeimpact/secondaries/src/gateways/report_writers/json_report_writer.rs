@@ -147,14 +147,15 @@ fn metric_support_dto(capabilities: Option<&LanguageCapabilities>) -> MetricSupp
 /// (#89 S2, ADR-0021 T3b follow-up) — the real per-axis fold across every
 /// measured file (`ProjectMetrics::metric_support`, `#89` S1), replacing the
 /// `metric_support_dto(None)` placeholder `serialize_project_metrics` used
-/// before this slice. `call_graph` has no project-level stat tile yet and
-/// `AggregateMetricSupport` does not fold it (same YAGNI call #89 S1's HTML
-/// writer already made — no calling use case), so it stays `"supported"`,
-/// identical to the pre-S2 shape.
+/// before this slice. `call_graph` (#132 T2, AD-5) now folds for real too:
+/// before this slice this field was hardcoded to `"supported"` regardless
+/// of what was actually measured — the nominal ADR-0010 violation this
+/// ticket exists to fix, since a hardcoded "clean" value on every TS/JS
+/// project is worse than an omission.
 fn metric_support_dto_from_aggregate(support: &AggregateMetricSupport) -> MetricSupportDto {
     MetricSupportDto {
         cyclomatic_complexity: metric_support_label(support.cyclomatic_complexity()),
-        call_graph: "supported".to_string(),
+        call_graph: metric_support_label(support.call_graph()),
         economic_impact: metric_support_label(support.economic_impact()),
         ecological_impact: metric_support_label(support.ecological_impact()),
         io_in_loops: metric_support_label(support.io_in_loops()),
