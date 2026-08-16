@@ -417,10 +417,19 @@ impl ConsoleReportWriter {
             aggregated.default_excluded_files_count
         )
         .unwrap();
+        // #132 T3 (AD-6, dependency-graph-integrity/S2): the edge count is
+        // never shown without stating what the graph cannot see — same
+        // "[dégradé: <reason>]" append the per-file transitive-complexity
+        // line already carries for call_graph (write_console_to, above).
+        let dependencies_note = match aggregated.metric_support.cross_file_dependencies() {
+            MetricSupport::Degraded(reason) => format!(" [dégradé: {}]", reason),
+            _ => String::new(),
+        };
         writeln!(
             writer,
-            "Dépendances totales: {}",
-            graph.total_dependencies()
+            "Dépendances totales: {}{}",
+            graph.total_dependencies(),
+            dependencies_note,
         )
         .unwrap();
         writeln!(

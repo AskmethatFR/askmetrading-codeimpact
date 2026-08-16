@@ -120,13 +120,15 @@ impl LanguageCapabilities {
 /// whenever a future axis/adapter does declare `Unsupported`, but is not
 /// reachable end-to-end via a shipped adapter as of #89.
 ///
-/// #132 T2: `call_graph` joined (AD-4 — the four-axis restriction from #89
-/// Q3 is lifted now that a calling use case exists: the project JSON's
+/// #132 T2/T3: `call_graph` (T2) and `cross_file_dependencies` (T3) joined
+/// (AD-4 — the four-axis restriction from #89 Q3 is lifted now that a
+/// calling use case exists for each: the project JSON's
 /// `metric_support.call_graph` field, which #89 left hardcoded to
-/// `"supported"` because this VO did not fold the axis, precisely the
-/// nominal ADR-0010 violation #132 fixes). `cross_file_dependencies`
-/// follows in T3 for the same reason (the console `Dépendances totales`
-/// line and the JSON field are its calling use cases).
+/// `"supported"` because this VO did not fold the axis — the nominal
+/// ADR-0010 violation #132 fixes; and the console `Dépendances totales`
+/// line + the JSON `cross_file_dependencies` field, which #34 T4.3 built a
+/// long precise degradation chain for and #132 found reaching no operator
+/// surface at all).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AggregateMetricSupport {
     cyclomatic_complexity: MetricSupport,
@@ -134,6 +136,7 @@ pub struct AggregateMetricSupport {
     economic_impact: MetricSupport,
     ecological_impact: MetricSupport,
     call_graph: MetricSupport,
+    cross_file_dependencies: MetricSupport,
 }
 
 impl AggregateMetricSupport {
@@ -148,6 +151,7 @@ impl AggregateMetricSupport {
         let mut economic_impact = AxisTally::default();
         let mut ecological_impact = AxisTally::default();
         let mut call_graph = AxisTally::default();
+        let mut cross_file_dependencies = AxisTally::default();
         let all_supported = MetricSupport::Supported;
 
         for file_capabilities in capabilities {
@@ -158,6 +162,7 @@ impl AggregateMetricSupport {
                     economic_impact.record(caps.economic_impact());
                     ecological_impact.record(caps.ecological_impact());
                     call_graph.record(caps.call_graph());
+                    cross_file_dependencies.record(caps.cross_file_dependencies());
                 }
                 None => {
                     cyclomatic_complexity.record(&all_supported);
@@ -165,6 +170,7 @@ impl AggregateMetricSupport {
                     economic_impact.record(&all_supported);
                     ecological_impact.record(&all_supported);
                     call_graph.record(&all_supported);
+                    cross_file_dependencies.record(&all_supported);
                 }
             }
         }
@@ -175,6 +181,7 @@ impl AggregateMetricSupport {
             economic_impact: economic_impact.resolve(),
             ecological_impact: ecological_impact.resolve(),
             call_graph: call_graph.resolve(),
+            cross_file_dependencies: cross_file_dependencies.resolve(),
         }
     }
 
@@ -192,6 +199,10 @@ impl AggregateMetricSupport {
 
     pub fn ecological_impact(&self) -> &MetricSupport {
         &self.ecological_impact
+    }
+
+    pub fn cross_file_dependencies(&self) -> &MetricSupport {
+        &self.cross_file_dependencies
     }
 
     pub fn call_graph(&self) -> &MetricSupport {

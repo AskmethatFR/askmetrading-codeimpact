@@ -103,6 +103,10 @@ struct MetricSupportDto {
     economic_impact: String,
     ecological_impact: String,
     io_in_loops: String,
+    /// #132 T3 (AD-6) — on BOTH constructors below: the JSON did not merely
+    /// omit this axis' caveat, it had no field for it at all on either
+    /// path.
+    cross_file_dependencies: String,
 }
 
 /// Skips `io_in_loops` only when it is `Some(vec![])` — an empty-but-
@@ -132,6 +136,7 @@ fn metric_support_dto(capabilities: Option<&LanguageCapabilities>) -> MetricSupp
             economic_impact: metric_support_label(caps.economic_impact()),
             ecological_impact: metric_support_label(caps.ecological_impact()),
             io_in_loops: metric_support_label(caps.io_in_loops()),
+            cross_file_dependencies: metric_support_label(caps.cross_file_dependencies()),
         },
         None => MetricSupportDto {
             cyclomatic_complexity: "supported".to_string(),
@@ -139,6 +144,7 @@ fn metric_support_dto(capabilities: Option<&LanguageCapabilities>) -> MetricSupp
             economic_impact: "supported".to_string(),
             ecological_impact: "supported".to_string(),
             io_in_loops: "supported".to_string(),
+            cross_file_dependencies: "supported".to_string(),
         },
     }
 }
@@ -147,11 +153,11 @@ fn metric_support_dto(capabilities: Option<&LanguageCapabilities>) -> MetricSupp
 /// (#89 S2, ADR-0021 T3b follow-up) — the real per-axis fold across every
 /// measured file (`ProjectMetrics::metric_support`, `#89` S1), replacing the
 /// `metric_support_dto(None)` placeholder `serialize_project_metrics` used
-/// before this slice. `call_graph` (#132 T2, AD-5) now folds for real too:
-/// before this slice this field was hardcoded to `"supported"` regardless
-/// of what was actually measured — the nominal ADR-0010 violation this
-/// ticket exists to fix, since a hardcoded "clean" value on every TS/JS
-/// project is worse than an omission.
+/// before this slice. `call_graph` (#132 T2, AD-5) and `cross_file_
+/// dependencies` (#132 T3, AD-4/AD-6) now fold for real too: before #132
+/// `call_graph` was hardcoded to `"supported"` regardless of what was
+/// actually measured (the nominal ADR-0010 violation this ticket exists to
+/// fix) and `cross_file_dependencies` had no field at all on this path.
 fn metric_support_dto_from_aggregate(support: &AggregateMetricSupport) -> MetricSupportDto {
     MetricSupportDto {
         cyclomatic_complexity: metric_support_label(support.cyclomatic_complexity()),
@@ -159,6 +165,7 @@ fn metric_support_dto_from_aggregate(support: &AggregateMetricSupport) -> Metric
         economic_impact: metric_support_label(support.economic_impact()),
         ecological_impact: metric_support_label(support.ecological_impact()),
         io_in_loops: metric_support_label(support.io_in_loops()),
+        cross_file_dependencies: metric_support_label(support.cross_file_dependencies()),
     }
 }
 
