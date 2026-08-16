@@ -478,7 +478,9 @@ fn write_project_report_appends_degraded_note_to_dependances_totales_line() {
 #[test]
 fn write_project_report_no_note_on_dependances_totales_line_when_fully_resolved() {
     let writer = ConsoleReportWriter::new();
-    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let metrics = CodeMetrics::new(5)
+        .with_capabilities(LanguageCapabilities::all_supported(Language::TypeScript));
+    let files = vec![(path("a.rs"), metrics)];
     let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
     let mut buf = Vec::new();
     writer.write_project_report_to(&mut buf, &graph);
@@ -537,11 +539,63 @@ fn write_project_report_appends_degraded_note_to_complexite_cachee_totale_line()
     );
 }
 
+// Retry 1 (Dev-B F3 / Security F1) — the degraded-note reason is analyzed-
+// repo-derived input (a `LanguageCapabilities` string a parser attaches),
+// exactly like `function`/`message`/`io_call`/path above, but it reached
+// the console through 4 sinks (write_console_to's call_graph + io_in_loops
+// notes, write_project_report_to's dependencies + hidden-complexity notes)
+// with NO sanitization at all. Security proved a hostile reason containing
+// a raw ESC + a Trojan-Source RLO override forges a terminal line. One
+// test per writer method is enough: all 4 sinks now share the same
+// `degraded_note` helper, so proving it sanitizes on one call site per
+// method proves it for its sibling call site too.
+#[test]
+fn write_console_neutralizes_ansi_escape_and_rlo_in_degraded_call_graph_note() {
+    let writer = ConsoleReportWriter::new();
+    let hostile_reason = "\x1b[2K\rtout est mesuré\u{202e}evil";
+    let capabilities = LanguageCapabilities::all_supported(Language::CSharp)
+        .with_call_graph(MetricSupport::Degraded(hostile_reason.to_string()));
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+    let mut buf = Vec::new();
+    writer.write_console_to(&mut buf, &metrics);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b') && !output.contains('\u{202e}'),
+        "a raw ESC/RLO byte reached the console via the degraded call_graph note: {:?}",
+        output
+    );
+}
+
+// Matches Security's exact proof: a hostile cross_file_dependencies reason
+// forges a "Dépendances totales: 999 [tout est mesuré]" line unless the
+// note is sanitized before reaching the terminal.
+#[test]
+fn write_project_report_neutralizes_ansi_escape_and_rlo_in_degraded_dependances_note() {
+    let writer = ConsoleReportWriter::new();
+    let hostile_reason = "\x1b[2K\rtout est mesuré\u{202e}evil";
+    let capabilities = LanguageCapabilities::all_supported(Language::TypeScript)
+        .with_cross_file_dependencies(MetricSupport::Degraded(hostile_reason.to_string()));
+    let metrics = CodeMetrics::new(5).with_capabilities(capabilities);
+    let files = vec![(path("a.ts"), metrics)];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+
+    assert!(
+        !output.contains('\x1b') && !output.contains('\u{202e}'),
+        "a raw ESC/RLO byte reached the console via the degraded dependencies note: {:?}",
+        output
+    );
+}
+
 #[test]
 fn write_project_report_no_note_on_complexite_cachee_totale_line_when_fully_resolved() {
     let writer = ConsoleReportWriter::new();
     let metrics =
-        CodeMetrics::with_call_graph(5, 8, 2, vec![], vec![function_detail_with_hidden(3)]);
+        CodeMetrics::with_call_graph(5, 8, 2, vec![], vec![function_detail_with_hidden(3)])
+            .with_capabilities(LanguageCapabilities::all_supported(Language::TypeScript));
     let files = vec![(path("a.rs"), metrics)];
     let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
     let mut buf = Vec::new();

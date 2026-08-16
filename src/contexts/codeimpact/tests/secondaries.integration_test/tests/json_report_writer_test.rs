@@ -482,6 +482,10 @@ fn file_json_no_capabilities_reports_metric_support_all_supported() {
         json["metrics"]["metric_support"]["io_in_loops"],
         "supported"
     );
+    assert_eq!(
+        json["metrics"]["metric_support"]["cross_file_dependencies"],
+        "supported"
+    );
 }
 
 // #132 T3 (AD-6) — MetricSupportDto gains cross_file_dependencies on BOTH
@@ -650,7 +654,7 @@ fn project_json_pure_unsupported_io_serializes_null_never_empty_array_or_zero() 
 }
 
 #[test]
-fn project_json_rust_only_stays_byte_identical_to_pre_89_shape() {
+fn project_json_rust_only_keeps_the_pre_89_io_in_loops_omission() {
     let writer = JsonReportWriter::new();
     let files = vec![
         (PathBuf::from("a.rs"), make_measured_file(5)),
