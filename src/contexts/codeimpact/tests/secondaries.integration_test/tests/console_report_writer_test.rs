@@ -524,7 +524,8 @@ fn write_project_report_appends_degraded_note_to_complexite_cachee_totale_line()
 
     assert!(
         output.contains(
-            "Complexité cachée totale: 3 [dégradé: name-based resolution; anonymous functions merge]"
+            "Complexité cachée totale: 3 [dégradé: partial: 0/1 files measured this metric; \
+             name-based resolution; anonymous functions merge]"
         ),
         "expected the degraded note appended to the Complexité cachée totale line, got: {}",
         output
