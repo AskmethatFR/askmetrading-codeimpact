@@ -20,7 +20,7 @@ const KB_TO_MB: f64 = 1024.0;
 const MB_TO_GB: f64 = 1024.0;
 
 /// Renders a `MetricSupport`'s degraded caveat as the `" [dégradé: <reason>]"`
-/// suffix every degraded-note call site appends (retry 1, Dev-B F3 /
+/// suffix every degraded-note call site appends (retry 1, Dev-B F6 /
 /// Security F1) — sanitized like every other analyzed-repo-derived string
 /// reaching the console (`sanitize_console_text`, same as `function`/
 /// `message`/`io_call`/paths above): the reason comes from a

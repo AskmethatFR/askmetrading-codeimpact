@@ -539,7 +539,7 @@ fn write_project_report_appends_degraded_note_to_complexite_cachee_totale_line()
     );
 }
 
-// Retry 1 (Dev-B F3 / Security F1) — the degraded-note reason is analyzed-
+// Retry 1 (Dev-B F6 / Security F1) — the degraded-note reason is analyzed-
 // repo-derived input (a `LanguageCapabilities` string a parser attaches),
 // exactly like `function`/`message`/`io_call`/path above, but it reached
 // the console through 4 sinks (write_console_to's call_graph + io_in_loops
