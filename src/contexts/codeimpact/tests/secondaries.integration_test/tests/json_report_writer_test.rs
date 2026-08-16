@@ -533,6 +533,21 @@ fn csharp_unsupported_io() -> LanguageCapabilities {
         .with_io_in_loops(MetricSupport::Unsupported)
 }
 
+// #132 T2 — the exact TS/JS call_graph degradation chain
+// (tree_sitter_code_parser.rs `ecmascript()`), reproduced verbatim so this
+// test proves the chain travels to the aggregate JSON unmodified, not just
+// that SOME string appears.
+fn typescript_call_graph_degraded() -> LanguageCapabilities {
+    LanguageCapabilities::all_supported(Language::TypeScript).with_call_graph(
+        MetricSupport::Degraded(
+            "name-based resolution; every anonymous function is recorded under \
+             one placeholder name and merges into a single call-graph node — \
+             precise naming is deferred"
+                .to_string(),
+        ),
+    )
+}
+
 #[test]
 fn project_json_pure_unsupported_io_serializes_null_never_empty_array_or_zero() {
     let writer = JsonReportWriter::new();
@@ -689,6 +704,45 @@ fn project_json_mixed_language_io_reports_degraded_with_real_partial_value() {
         "a Degraded axis must keep the pre-#89 omitted-when-empty shape for \
          io_in_loops, never null: {}",
         json_str
+    );
+}
+
+// #132 T2 (AD-5) — before this slice, `metric_support_dto_from_aggregate`
+// hardcoded `call_graph: "supported"` regardless of what was actually
+// measured: a project JSON asserting the opposite of the truth on every
+// TS/JS project, the nominal ADR-0010 violation this ticket exists to fix.
+#[test]
+fn project_json_call_graph_never_asserts_supported_when_ts_degraded() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.ts"),
+        make_measured_file(5).with_capabilities(typescript_call_graph_degraded()),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let json_str = writer
+        .write_project_json(&graph, "proj")
+        .expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    let call_graph = json["metrics"]["metric_support"]["call_graph"]
+        .as_str()
+        .expect("call_graph metric_support should be a string");
+    assert_ne!(
+        call_graph, "supported",
+        "a TS/JS project's call graph must never be asserted supported when \
+         degraded, got: {}",
+        json_str
+    );
+    assert!(
+        call_graph.contains(
+            "name-based resolution; every anonymous function is recorded under \
+             one placeholder name and merges into a single call-graph node — \
+             precise naming is deferred"
+        ),
+        "the source degradation chain must travel to the aggregate JSON \
+         verbatim, got: {}",
+        call_graph
     );
 }
 
