@@ -192,17 +192,28 @@ impl AggregateMetricSupport {
 /// everything (a single per-file `Degraded`, OR a mix of `Supported` and
 /// `Unsupported` files with no per-file `Degraded` at all); `Unsupported`
 /// only when nothing at all was measured; `Supported` otherwise, including
-/// the empty/vacuous case. The `Degraded` reason is always the precise
-/// coverage count (human-approved Q2), never a concatenation of individual
-/// per-file reasons — `supported` counts only fully-`Supported` files, so it
+/// the empty/vacuous case. The `Degraded` reason always carries the precise
+/// coverage count (human-approved #89 Q2) AND, when at least one per-file
+/// `Degraded` was folded in, the enumeration of every distinct reason
+/// (#132 AD-1 — amends the "never a concatenation" rule below: AD-6/
+/// ADR-0030 requires the operator-facing text to name each blind spot, not
+/// only count files, so the count stays and the enumeration is added to
+/// it). Reasons are deduplicated and lexicographically sorted (`BTreeSet`,
+/// #132 AD-2 — `HashMap` iteration order is randomized per process, so an
+/// encounter-order join would make the composed string non-reproducible
+/// run to run). `supported` counts only fully-`Supported` files, so it
 /// reads as "how many files gave a clean measurement" regardless of whether
-/// the rest were `Degraded` or `Unsupported`.
+/// the rest were `Degraded` or `Unsupported`. The no-reason arm (a mix of
+/// `Supported`/`Unsupported` files with no per-file `Degraded` at all) has
+/// nothing to enumerate, so it stays byte-identical to the pre-#132 count-
+/// only shape.
 #[derive(Default)]
 struct AxisTally {
     total: usize,
     supported: usize,
     any_degraded: bool,
     any_unsupported: bool,
+    reasons: std::collections::BTreeSet<String>,
 }
 
 impl AxisTally {
@@ -210,17 +221,31 @@ impl AxisTally {
         self.total += 1;
         match support {
             MetricSupport::Supported => self.supported += 1,
-            MetricSupport::Degraded(_) => self.any_degraded = true,
+            MetricSupport::Degraded(reason) => {
+                self.any_degraded = true;
+                self.reasons.insert(reason.clone());
+            }
             MetricSupport::Unsupported => self.any_unsupported = true,
         }
     }
 
     fn resolve(&self) -> MetricSupport {
         if self.any_degraded || (self.supported > 0 && self.any_unsupported) {
-            MetricSupport::Degraded(format!(
+            let count = format!(
                 "partial: {}/{} files measured this metric",
                 self.supported, self.total
-            ))
+            );
+            if self.reasons.is_empty() {
+                MetricSupport::Degraded(count)
+            } else {
+                let enumerated = self
+                    .reasons
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                MetricSupport::Degraded(format!("{}; {}", count, enumerated))
+            }
         } else if self.any_unsupported {
             MetricSupport::Unsupported
         } else {
