@@ -21,6 +21,15 @@ use codeimpact_hexagon::analysis::MetricSupport;
 // 7. axes_fold_independently — narrowing io_in_loops on a file must not
 //    drag cyclomatic_complexity (left Supported) down with it: each axis
 //    folds on its own per-file state, never on a shared verdict.
+// 8. degraded_reasons_from_multiple_files_are_deduplicated (#132 AD-1) — two
+//    files carrying the identical Degraded reason must appear once, not
+//    twice, in the composed string.
+// 9. degraded_reasons_sort_lexicographically_regardless_of_insertion_order
+//    (#132 AD-2) — HashMap iteration order is randomized per process; the
+//    composed string must not depend on it.
+// 10. the no-reason arm (a mix of Supported/Unsupported files with no
+//     per-file Degraded at all) stays byte-identical to the pre-#132 count-
+//     only shape — see mixed_supported_and_unsupported_folds_to_degraded.
 
 fn csharp_with_io(support: MetricSupport) -> LanguageCapabilities {
     LanguageCapabilities::all_supported(Language::CSharp).with_io_in_loops(support)
@@ -68,7 +77,10 @@ fn any_degraded_folds_to_degraded() {
 
     match aggregate.io_in_loops() {
         MetricSupport::Degraded(reason) => {
-            assert_eq!(reason, "partial: 1/2 files measured this metric");
+            assert_eq!(
+                reason,
+                "partial: 1/2 files measured this metric; syntactic only"
+            );
         }
         other => panic!(
             "expected Degraded when any file is Degraded, got {:?}",
@@ -86,7 +98,10 @@ fn degraded_and_unsupported_folds_to_degraded() {
 
     match aggregate.io_in_loops() {
         MetricSupport::Degraded(reason) => {
-            assert_eq!(reason, "partial: 0/2 files measured this metric");
+            assert_eq!(
+                reason,
+                "partial: 0/2 files measured this metric; syntactic only"
+            );
         }
         other => panic!(
             "expected Degraded to win over Unsupported (any_degraded arm), got {:?}",
@@ -117,4 +132,38 @@ fn axes_fold_independently() {
         "narrowing io_in_loops must not drag cyclomatic_complexity (left at its Supported \
          default) down with it — each axis folds independently"
     );
+}
+
+#[test]
+fn degraded_reasons_from_multiple_files_are_deduplicated() {
+    let a = csharp_with_io(MetricSupport::Degraded("syntactic only".to_string()));
+    let b = csharp_with_io(MetricSupport::Degraded("syntactic only".to_string()));
+    let aggregate = AggregateMetricSupport::fold(vec![Some(&a), Some(&b)].into_iter());
+
+    match aggregate.io_in_loops() {
+        MetricSupport::Degraded(reason) => {
+            assert_eq!(
+                reason, "partial: 0/2 files measured this metric; syntactic only",
+                "the identical reason from two files must appear once, not twice"
+            );
+        }
+        other => panic!("expected Degraded, got {:?}", other),
+    }
+}
+
+#[test]
+fn degraded_reasons_sort_lexicographically_regardless_of_insertion_order() {
+    let z_first = csharp_with_io(MetricSupport::Degraded("z-reason".to_string()));
+    let a_second = csharp_with_io(MetricSupport::Degraded("a-reason".to_string()));
+    let aggregate = AggregateMetricSupport::fold(vec![Some(&z_first), Some(&a_second)].into_iter());
+
+    match aggregate.io_in_loops() {
+        MetricSupport::Degraded(reason) => {
+            assert_eq!(
+                reason, "partial: 0/2 files measured this metric; a-reason; z-reason",
+                "reasons must be lexicographically sorted, not in insertion/encounter order"
+            );
+        }
+        other => panic!("expected Degraded, got {:?}", other),
+    }
 }
