@@ -574,6 +574,48 @@ mod classify_walk_error_path_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Mutation gate survivor (#128 retry 3, cargo-mutants): `Ok(meta) if
+    // meta.is_file()`'s guard mutated to `true` survived — the `is_dir()`
+    // guard above already short-circuits both the real-directory and
+    // real-file cases, so the ONLY path where that guard's actual value
+    // matters is `Ok(meta)` naming neither a directory nor a regular
+    // file. A FIFO (named pipe) is the portable, dependency-free way to
+    // construct exactly that: `std::fs::metadata` resolves it (`Ok`), but
+    // `is_dir()` and `is_file()` are both `false`.
+    #[cfg(unix)]
+    #[test]
+    fn classify_walk_error_path_of_a_fifo_is_unattributable() {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_classify_fifo_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("neither_dir_nor_file");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo must be available on this platform to run this test");
+        assert!(
+            status.success(),
+            "mkfifo must succeed to set up the fixture"
+        );
+        let meta = std::fs::metadata(&fifo).expect("a FIFO must be re-statable");
+        assert!(
+            !meta.is_dir() && !meta.is_file(),
+            "fixture precondition: a FIFO must be neither a directory nor a regular file"
+        );
+
+        let outcome = classify_walk_error_path(&fifo);
+
+        assert!(
+            matches!(outcome, WalkErrorAttribution::Unattributable),
+            "a path that is neither a directory nor a file must stay unattributed, exactly the \
+             silent fallthrough this had before the re-stat was extracted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // #128 retry 3 (Security HIGH, was ticket #149): before this fix, a
     // re-stat that itself failed (the path named by the walker's error no
     // longer resolves to anything — a TOCTOU) fell through BOTH
