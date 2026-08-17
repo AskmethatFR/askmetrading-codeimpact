@@ -490,10 +490,8 @@ impl CodeReader for FileSystemCodeReader {
                                 unexplored_subtree = true;
                             }
                             WalkErrorAttribution::DroppedFile => {
-                                dropped_files.push((
-                                    path.clone(),
-                                    UnmeasurableReason::SourceUnreadable,
-                                ));
+                                dropped_files
+                                    .push((path.clone(), UnmeasurableReason::SourceUnreadable));
                             }
                             WalkErrorAttribution::Unattributable => {}
                         }
