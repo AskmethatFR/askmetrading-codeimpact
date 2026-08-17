@@ -140,7 +140,8 @@ fn handle_project_html_with_threshold_configured_and_unmeasured_files_reports_pa
     assert_eq!(
         gated.coverage(),
         GateCoverage::Partial {
-            unmeasurable_files: 1
+            unmeasurable_files: 1,
+            unexplored_subtree: false
         },
         "the HTML surface's own GatedOutput must carry the same coverage the console surface does"
     );

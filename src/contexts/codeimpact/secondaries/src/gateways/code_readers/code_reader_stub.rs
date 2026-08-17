@@ -13,6 +13,7 @@ pub struct CodeReaderStub {
     sources: HashMap<PathBuf, String>,
     source_files: Vec<PathBuf>,
     dropped_files: Vec<(PathBuf, UnmeasurableReason)>,
+    unexplored_subtree: bool,
 }
 
 impl CodeReaderStub {
@@ -21,6 +22,7 @@ impl CodeReaderStub {
             sources: HashMap::new(),
             source_files: Vec::new(),
             dropped_files: Vec::new(),
+            unexplored_subtree: false,
         }
     }
 
@@ -42,6 +44,16 @@ impl CodeReaderStub {
     pub fn add_dropped_file(&mut self, path: PathBuf, reason: UnmeasurableReason) {
         self.dropped_files.push((path, reason));
     }
+
+    /// Simulates the walk leaving at least one directory subtree
+    /// unexplored (#128 retry 2, Security HIGH) — the real
+    /// `FileSystemCodeReader`'s equivalent is a `MAX_WALK_DEPTH`
+    /// truncation or a directory-level access error, neither reproducible
+    /// without a real filesystem walk. Mirrors `add_dropped_file`'s role:
+    /// lets a use-case-level test pin the fold-in behavior directly.
+    pub fn mark_subtree_unexplored(&mut self) {
+        self.unexplored_subtree = true;
+    }
 }
 
 impl CodeReader for CodeReaderStub {
@@ -62,6 +74,7 @@ impl CodeReader for CodeReaderStub {
             files: self.source_files.clone(),
             default_excluded_count: 0,
             dropped_files: self.dropped_files.clone(),
+            unexplored_subtree: self.unexplored_subtree,
         })
     }
 }

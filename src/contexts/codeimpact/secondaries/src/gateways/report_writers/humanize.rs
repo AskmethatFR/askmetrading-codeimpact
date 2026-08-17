@@ -98,7 +98,14 @@ pub fn render_incomplete_coverage_warning(coverage: GateCoverage) -> String {
         // n'ONT pas pu être mesuré(s)") — grammatically wrong French, not
         // just informal. Proper singular/plural agreement instead of a
         // shorthand that only ever covers the noun.
-        GateCoverage::Partial { unmeasurable_files } => {
+        // #128 retry 2 (Security HIGH): `unexplored_subtree` is deliberately
+        // IGNORED here still — a scaffold, not the fix. The dedicated
+        // "names an unexplored subtree, not a count" case stays red until
+        // the paired fix wires it in.
+        GateCoverage::Partial {
+            unmeasurable_files,
+            unexplored_subtree: _,
+        } => {
             let (noun, verb) = if unmeasurable_files == 1 {
                 ("fichier", "n'a pas pu être mesuré")
             } else {
@@ -512,6 +519,7 @@ mod tests {
     fn render_incomplete_coverage_warning_of_one_unmeasurable_file_uses_singular_grammar() {
         let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
             unmeasurable_files: 1,
+            unexplored_subtree: false,
         });
         assert!(
             warning.contains("1 fichier n'a pas pu être mesuré"),
@@ -523,10 +531,57 @@ mod tests {
     fn render_incomplete_coverage_warning_of_several_unmeasurable_files_uses_plural_grammar() {
         let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
             unmeasurable_files: 3,
+            unexplored_subtree: false,
         });
         assert!(
             warning.contains("3 fichiers n'ont pas pu être mesurés"),
             "count > 1 must use plural grammar, got: {warning}"
+        );
+    }
+
+    // Security HIGH (retry 2, #128) — `unexplored_subtree` names a
+    // DIFFERENT absence than `unmeasurable_files`: "N files could not be
+    // measured" and "at least one subtree could not be explored" must stay
+    // two separate, truthful sentences — never merged into a fabricated
+    // count (ADR-0010, same discipline as `Absent` above).
+    //
+    // Test List:
+    // 1. unexplored_subtree alone (0 unmeasurable files) -> names the
+    //    subtree, never mentions a file count
+    // 2. both unmeasurable_files > 0 AND unexplored_subtree -> both
+    //    sentences present, neither one swallows the other
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_unexplored_subtree_alone_names_it_not_a_file_count() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 0,
+            unexplored_subtree: true,
+        });
+        assert!(
+            warning.contains("arborescence") && warning.contains("explor"),
+            "must name that a subtree could not be explored, got: {warning}"
+        );
+        assert!(
+            !warning.contains("0 fichier"),
+            "must never fabricate a '0 fichier(s)' count for an absence it never quantified, \
+             got: {warning}"
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_files_and_unexplored_subtree_names_both() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 2,
+            unexplored_subtree: true,
+        });
+        assert!(
+            warning.contains("2 fichiers n'ont pas pu être mesurés"),
+            "the named-files sentence must still be present, got: {warning}"
+        );
+        assert!(
+            warning.contains("arborescence") && warning.contains("explor"),
+            "the unexplored-subtree sentence must ALSO be present — neither absence may \
+             swallow the other, got: {warning}"
         );
     }
 

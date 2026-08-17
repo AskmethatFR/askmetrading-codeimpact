@@ -18,9 +18,20 @@ pub enum GateCoverage {
     /// ungated project has nothing the gate could have missed).
     Complete,
     /// One or more files could not be measured (any reason — too large,
-    /// unreadable, unparseable, unsupported language): the gated aggregate
-    /// is missing an unknown, possibly non-zero, contribution.
-    Partial { unmeasurable_files: usize },
+    /// unreadable, unparseable, unsupported language), and/or at least one
+    /// directory subtree could never be explored at all (walk-depth
+    /// truncation, an access-denied listing — #128 retry 2): either way the
+    /// gated aggregate is missing an unknown, possibly non-zero,
+    /// contribution. `unexplored_subtree` is deliberately a bool, not a
+    /// count: the walker cannot honestly report how many files live inside
+    /// a subtree it never entered — see `SourceFileListing::
+    /// unexplored_subtree`. The two facts are independent and both fit in
+    /// the SAME variant: a project can have both N named-but-unmeasurable
+    /// files AND an unrelated unexplored subtree at once.
+    Partial {
+        unmeasurable_files: usize,
+        unexplored_subtree: bool,
+    },
     /// There were no files to be partial about — the run's single
     /// measurement itself could not be taken (e.g. a stress test whose
     /// economic impact is `Unmeasurable`). Distinct from `Partial { .. }`

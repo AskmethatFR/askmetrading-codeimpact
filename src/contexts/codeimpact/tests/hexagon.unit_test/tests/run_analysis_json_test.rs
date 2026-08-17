@@ -366,7 +366,8 @@ fn handle_project_json_with_threshold_configured_and_unmeasured_files_reports_pa
     assert_eq!(
         gated.coverage(),
         GateCoverage::Partial {
-            unmeasurable_files: 1
+            unmeasurable_files: 1,
+            unexplored_subtree: false
         },
         "the JSON surface's own GatedOutput must carry the same coverage the console surface does"
     );
@@ -413,7 +414,8 @@ fn handle_project_json_folds_a_walk_time_dropped_file_into_unmeasurable_coverage
     assert_eq!(
         gated.coverage(),
         GateCoverage::Partial {
-            unmeasurable_files: 1
+            unmeasurable_files: 1,
+            unexplored_subtree: false
         },
         "a file the adapter's WALK dropped must count toward the JSON surface's own coverage \
          too, not just the console surface's"

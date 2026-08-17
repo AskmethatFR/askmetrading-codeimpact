@@ -42,11 +42,25 @@ use super::measurement::UnmeasurableReason;
 /// stderr: the file vanished from the gated sum with nothing telling the
 /// gate it had ever existed — the exact `--strict` bypass Security
 /// demonstrated by inflating one file past the walk-time cap.
+///
+/// `unexplored_subtree` (Security HIGH, #128 retry 2): unlike
+/// `dropped_files` — which names an exact FILE the walk actually visited —
+/// this names an absence the walker could never observe a file COUNT for:
+/// a directory the walker truncated at `MAX_WALK_DEPTH` before descending
+/// into it, or a directory whose listing failed outright (a
+/// permission-denied subtree). Neither case can honestly populate
+/// `dropped_files` (that would require enumerating files the walk never
+/// visited), so this stays an UNQUANTIFIED boolean — "at least one subtree
+/// was not explored," never a fabricated count. Security demonstrated the
+/// consequence: a file nested past `MAX_WALK_DEPTH` vanished from BOTH
+/// `files` and `dropped_files`, `GateCoverage` read `Complete`, and
+/// `--strict` exited 0 on a project that genuinely breached.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceFileListing {
     pub files: Vec<PathBuf>,
     pub default_excluded_count: usize,
     pub dropped_files: Vec<(PathBuf, UnmeasurableReason)>,
+    pub unexplored_subtree: bool,
 }
 
 impl std::ops::Deref for SourceFileListing {

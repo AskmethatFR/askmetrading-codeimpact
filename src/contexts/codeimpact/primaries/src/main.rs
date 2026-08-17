@@ -433,6 +433,18 @@ mod gated_exit_code_tests {
     // 7. non-strict + incomplete coverage -> 0 (AC3 extends unchanged)
     // 8. strict + Absent coverage + no breach -> 4 (the stress-test shape,
     //    T3 — Absent must map exactly like Partial at this pure level)
+    //
+    // #128 retry 2 (Security HIGH) — `Partial` gains a SECOND, independent
+    // field (`unexplored_subtree`, a walk-depth truncation or an
+    // access-denied directory the walker could never name a file count
+    // for):
+    // 9. strict + Partial{unmeasurable_files: 0, unexplored_subtree: true}
+    //    + no breach -> 4 (a subtree can be unexplored with ZERO named
+    //    unmeasurable files — `is_complete()` already treats any `Partial`
+    //    as incomplete regardless of field values, so this is a pure
+    //    regression pin at this mapping level, not a case `gated_exit_code`
+    //    itself needs new logic for; the real fold-in decision lives in
+    //    `RunAnalysis::derive_gate_coverage`, hexagon-side)
 
     #[test]
     fn strict_breach_exits_3() {
@@ -465,12 +477,30 @@ mod gated_exit_code_tests {
     }
 
     #[test]
+    fn strict_unexplored_subtree_alone_no_breach_exits_4() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        let coverage = GateCoverage::Partial {
+            unmeasurable_files: 0,
+            unexplored_subtree: true,
+        };
+        assert_eq!(
+            gated_exit_code(true, &report, coverage),
+            4,
+            "an unexplored subtree alone (zero NAMED unmeasurable files) must still be treated \
+             as incomplete coverage — the walker never claims a file count it never computed"
+        );
+    }
+
+    #[test]
     fn strict_incomplete_coverage_no_breach_exits_4() {
         let report = AlertThresholds::new(Some(10.0), None)
             .unwrap()
             .evaluate(Some(5.0), None);
         let coverage = GateCoverage::Partial {
             unmeasurable_files: 1,
+            unexplored_subtree: false,
         };
         assert_eq!(gated_exit_code(true, &report, coverage), 4);
     }
@@ -482,6 +512,7 @@ mod gated_exit_code_tests {
             .evaluate(Some(5.0), None);
         let coverage = GateCoverage::Partial {
             unmeasurable_files: 1,
+            unexplored_subtree: false,
         };
         assert_eq!(gated_exit_code(true, &report, coverage), 3);
     }
@@ -493,6 +524,7 @@ mod gated_exit_code_tests {
             .evaluate(Some(5.0), None);
         let coverage = GateCoverage::Partial {
             unmeasurable_files: 1,
+            unexplored_subtree: false,
         };
         assert_eq!(gated_exit_code(false, &report, coverage), 0);
     }

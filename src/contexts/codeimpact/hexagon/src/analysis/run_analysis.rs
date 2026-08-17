@@ -206,11 +206,14 @@ impl RunAnalysis {
         let all_deps = Self::drop_dangling_edges(&per_file, all_deps);
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
-            .with_default_excluded_count(files.default_excluded_count);
+            .with_default_excluded_count(files.default_excluded_count)
+            .with_unexplored_subtree(files.unexplored_subtree);
         let unmeasurable_count = graph.unmeasurable_files().len();
+        let unexplored_subtree = graph.unexplored_subtree();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
-        let coverage = Self::derive_gate_coverage(config.thresholds(), unmeasurable_count);
+        let coverage =
+            Self::derive_gate_coverage(config.thresholds(), unmeasurable_count, unexplored_subtree);
         self.reporter.write_project_report(&graph)?;
         Ok(GatedOutput::new((), report, coverage))
     }
@@ -295,16 +298,26 @@ impl RunAnalysis {
     /// (`default_excluded_count`, `file_filter`) never reaches this count,
     /// it is a configuration decision, not a measurement failure (out of
     /// scope item 3).
+    // #128 retry 2 (Security HIGH): `unexplored_subtree` is threaded through
+    // this signature already (every call site below passes the real,
+    // adapter-observed value) but the CONDITIONAL below is still the OLD
+    // one, deliberately — a scaffold, not the fix. This is what keeps the
+    // new tests genuinely red: the fold-in of `unexplored_subtree` into the
+    // Complete/Partial decision is the exact behavior under test.
     fn derive_gate_coverage(
         thresholds: &AlertThresholds,
         unmeasurable_files: usize,
+        _unexplored_subtree: bool,
     ) -> GateCoverage {
         let any_threshold_configured =
             thresholds.max_energy_kwh().is_some() || thresholds.max_co2_grams().is_some();
         if !any_threshold_configured || unmeasurable_files == 0 {
             GateCoverage::Complete
         } else {
-            GateCoverage::Partial { unmeasurable_files }
+            GateCoverage::Partial {
+                unmeasurable_files,
+                unexplored_subtree: false,
+            }
         }
     }
 
@@ -420,9 +433,11 @@ impl RunAnalysis {
             config.source_roots(),
         )?;
         let unmeasurable_count = graph.unmeasurable_files().len();
+        let unexplored_subtree = graph.unexplored_subtree();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
-        let coverage = Self::derive_gate_coverage(config.thresholds(), unmeasurable_count);
+        let coverage =
+            Self::derive_gate_coverage(config.thresholds(), unmeasurable_count, unexplored_subtree);
         let target_str = target.path().to_string_lossy();
         let json = self.reporter.write_project_json(&graph, &target_str)?;
         Ok(GatedOutput::new(json, report, coverage))
@@ -441,9 +456,11 @@ impl RunAnalysis {
             config.source_roots(),
         )?;
         let unmeasurable_count = graph.unmeasurable_files().len();
+        let unexplored_subtree = graph.unexplored_subtree();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
-        let coverage = Self::derive_gate_coverage(config.thresholds(), unmeasurable_count);
+        let coverage =
+            Self::derive_gate_coverage(config.thresholds(), unmeasurable_count, unexplored_subtree);
         let target_str = target.path().to_string_lossy();
         let html = self.reporter.write_html(&graph, &target_str)?;
         Ok(GatedOutput::new(html, report, coverage))
@@ -541,7 +558,8 @@ impl RunAnalysis {
         let all_deps = Self::drop_dangling_edges(&per_file, all_deps);
         Ok(FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
-            .with_default_excluded_count(files.default_excluded_count))
+            .with_default_excluded_count(files.default_excluded_count)
+            .with_unexplored_subtree(files.unexplored_subtree))
     }
 }
 

@@ -53,6 +53,13 @@ pub struct FileConsumptionGraph {
     /// ever attached one — a stub-backed `CodeReader` in a unit test,
     /// say).
     default_excluded_count: usize,
+    /// Whether the walk left at least one directory subtree unexplored
+    /// (#128 retry 2) — see `SourceFileListing::unexplored_subtree` for the
+    /// exact two conditions. Unlike `default_excluded_count`, this DOES get
+    /// a standalone getter: `derive_gate_coverage` reads it directly (no
+    /// other surface exposes it), so a mutation flipping the getter's body
+    /// has a live use case to catch it.
+    unexplored_subtree: bool,
 }
 
 impl FileConsumptionGraph {
@@ -125,6 +132,7 @@ impl FileConsumptionGraph {
             unmeasurable_files: Vec::new(),
             threshold_report: None,
             default_excluded_count: 0,
+            unexplored_subtree: false,
         })
     }
 
@@ -154,6 +162,20 @@ impl FileConsumptionGraph {
     pub fn with_default_excluded_count(mut self, count: usize) -> Self {
         self.default_excluded_count = count;
         self
+    }
+
+    /// Attaches whether the walk left at least one directory subtree
+    /// unexplored (#128 retry 2) — builder style, mirroring
+    /// `with_default_excluded_count`.
+    pub fn with_unexplored_subtree(mut self, unexplored_subtree: bool) -> Self {
+        self.unexplored_subtree = unexplored_subtree;
+        self
+    }
+
+    /// Whether the walk left at least one directory subtree unexplored —
+    /// see `SourceFileListing::unexplored_subtree`.
+    pub fn unexplored_subtree(&self) -> bool {
+        self.unexplored_subtree
     }
 
     /// Attaches the outcome of evaluating this project's aggregate impact

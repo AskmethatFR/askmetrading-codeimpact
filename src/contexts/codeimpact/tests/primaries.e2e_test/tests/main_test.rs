@@ -2521,6 +2521,83 @@ fn e2e_analyze_path_strict_walk_time_size_guard_bypass_exits_4() {
     );
 }
 
+// Security HIGH (retry 2, #128) — a THIRD, independent guard of the same
+// class: `FileSystemCodeReader::MAX_WALK_DEPTH` (128, adapter-internal, one
+// layer BELOW the two size guards above). A file nested past it is never
+// even YIELDED by the walk — unlike an oversized file (still yielded, so
+// `dropped_files` can name it precisely), nothing here is ever visited at
+// all. Before this fix, that file vanished from BOTH `files` and
+// `dropped_files` with zero trace, `GateCoverage` read `Complete`, and
+// `--strict` exited 0 on a project that genuinely breached — reproducible
+// with plain nested directories, no privileges and no conspicuously large
+// fixture required (easier to trigger than the size-guard bypass above).
+//
+// Test List:
+// 1. a file nested one level past MAX_WALK_DEPTH (never yielded by the
+//    walk at all) must be just as visible to the gate as one dropped by
+//    either size guard above -> --strict still exits 4, not 0
+
+fn max_walk_depth_bypass_project_fixture(test_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_max_walk_depth_bypass_{}_{}",
+        test_name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() -> i32 { 1 + 1 }").expect("write good.rs");
+    // Mirrors `FileSystemCodeReader::MAX_WALK_DEPTH` (secondaries crate,
+    // adapter-internal, not exported to the hexagon) — 128 nested
+    // directories put `heavy.rs` one level past the last directory the
+    // walker will ever descend into.
+    const ADAPTER_MAX_WALK_DEPTH: usize = 128;
+    let mut nested = dir.clone();
+    for i in 0..ADAPTER_MAX_WALK_DEPTH {
+        nested = nested.join(format!("d{i}"));
+    }
+    std::fs::create_dir_all(&nested).expect("create deeply nested dir");
+    std::fs::write(nested.join("heavy.rs"), "fn heavy() -> i32 { 1 + 1 }").expect("write heavy.rs");
+    dir
+}
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn e2e_analyze_path_strict_max_walk_depth_bypass_exits_4() {
+    let binary = binary_path();
+    let dir = max_walk_depth_bypass_project_fixture("strict_exits_4");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a subtree the walker truncated at MAX_WALK_DEPTH must be visible to the gate as an \
+         unexplored subtree, exactly like the two size-guard bypasses above — the walker \
+         cannot honestly name a file it never visited, so this must be a NAMED absence, not \
+         a silent Complete. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("arborescence") && stderr.contains("explor"),
+        "the warning must name that a subtree could not be explored, not merely a file count \
+         (nothing here was ever named as an unmeasurable FILE) — got stderr: {}",
+        stderr
+    );
+}
+
 // Dev-B F2 (review, non-blocking) — `strict_incomplete_coverage_and_breach_
 // exits_3_not_4` (main.rs, pure-mapping level) proves ONLY the return code:
 // an implementation that printed BOTH the breach and the coverage warnings

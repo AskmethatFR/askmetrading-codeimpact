@@ -959,7 +959,8 @@ fn handle_project_with_threshold_configured_and_unmeasured_files_reports_partial
     assert_eq!(
         gated.coverage(),
         GateCoverage::Partial {
-            unmeasurable_files: 2
+            unmeasurable_files: 2,
+            unexplored_subtree: false
         },
         "2 files could not be measured while a threshold was configured — the gate's own \
          coverage must name exactly that count"
@@ -1081,11 +1082,68 @@ fn handle_project_folds_a_walk_time_dropped_file_into_unmeasurable_coverage() {
     assert_eq!(
         gated.coverage(),
         GateCoverage::Partial {
-            unmeasurable_files: 1
+            unmeasurable_files: 1,
+            unexplored_subtree: false
         },
         "a file the adapter's WALK dropped (never listed, never read) must count toward the \
          gate's coverage exactly like one that was read and failed later — the gate must not \
          stay silent just because the drop happened one step earlier"
+    );
+}
+
+// Security HIGH (retry 2, #128) — a THIRD, independent bypass of the same
+// class: `MAX_WALK_DEPTH`/a permission-denied directory truncates the walk
+// WITHOUT naming any file at all (neither `files` nor `dropped_files` can
+// carry it — the walker never visited anything under the unexplored
+// subtree). `SourceFileListing::unexplored_subtree` carries this as an
+// UNQUANTIFIED bool instead. This test pins that `RunAnalysis` folds it
+// into `GateCoverage` too, independent of any real filesystem walk (the
+// adapter's own integration test, `file_system_code_reader_test.rs`,
+// proves the walker sets the flag correctly in the first place).
+//
+// Test List:
+// 1. zero dropped files, but the walk reports an unexplored subtree + a
+//    threshold configured -> Partial{unmeasurable_files: 0,
+//    unexplored_subtree: true} — proves the fold-in does not require ANY
+//    named unmeasurable file to still mark coverage incomplete
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn handle_project_folds_an_unexplored_subtree_into_coverage_even_with_zero_named_unmeasurable_files(
+) {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.mark_subtree_unexplored();
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with an unexplored subtree should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 0,
+            unexplored_subtree: true
+        },
+        "an unexplored subtree must mark coverage incomplete even when zero individual files \
+         were ever named as unmeasurable — the walker cannot honestly report a count for a \
+         subtree it never entered"
     );
 }
 

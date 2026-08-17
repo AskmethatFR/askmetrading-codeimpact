@@ -380,6 +380,11 @@ impl CodeReader for FileSystemCodeReader {
             files,
             default_excluded_count,
             dropped_files,
+            // #128 retry 2 (Security HIGH): scaffold — the walker does not
+            // yet DETECT either unexplored-subtree condition (MAX_WALK_DEPTH
+            // truncation, a directory-level access error), so this always
+            // comes back false. The paired fix wires real detection in.
+            unexplored_subtree: false,
         })
     }
 
