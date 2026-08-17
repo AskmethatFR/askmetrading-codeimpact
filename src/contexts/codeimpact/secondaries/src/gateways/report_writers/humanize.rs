@@ -478,6 +478,56 @@ mod tests {
         );
     }
 
+    // Test List (render_incomplete_coverage_warning — QA LOW/Security LOW,
+    // #128 retry 1): the function had NO direct unit test anywhere — only
+    // an e2e substring check (`stderr.contains("1 fichier")`), which the
+    // singular/plural grammar bug survived undetected.
+    // 1. Complete -> empty string
+    // 2. Partial{1} -> singular grammar ("1 fichier n'a pas pu être
+    //    mesuré", not "fichier(s) ... mesuré(s)" — the verb stayed plural
+    //    at count 1 before this fix)
+    // 3. Partial{N>1} -> plural grammar
+    // 4. Absent -> the absence message, naming no count at all
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_complete_is_empty() {
+        assert_eq!(
+            render_incomplete_coverage_warning(GateCoverage::Complete),
+            ""
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_one_unmeasurable_file_uses_singular_grammar() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 1,
+        });
+        assert!(
+            warning.contains("1 fichier n'a pas pu être mesuré"),
+            "count 1 must use singular grammar (\"n'a pas pu être mesuré\"), got: {warning}"
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_several_unmeasurable_files_uses_plural_grammar() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 3,
+        });
+        assert!(
+            warning.contains("3 fichiers n'ont pas pu être mesurés"),
+            "count > 1 must use plural grammar, got: {warning}"
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_absent_names_the_absence_not_a_count() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Absent);
+        assert!(
+            warning.contains("la mesure n'a pas pu être prise"),
+            "Absent must name the absence itself, not a fabricated count, got: {warning}"
+        );
+    }
+
     // Test List (format_dollars):
     // 1. amount < $0.0001 -> 6 decimals
     // 2. amount exactly at the $0.0001 boundary -> NOT the 6-decimal branch (4 decimals)
