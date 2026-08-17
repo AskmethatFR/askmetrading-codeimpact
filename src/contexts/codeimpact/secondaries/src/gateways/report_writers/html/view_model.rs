@@ -29,6 +29,13 @@ pub struct ReportVm {
     pub stats: Vec<StatVm>,
     pub nodes: Vec<NodeVm>,
     pub unmeasurable_files: Vec<UnmeasurableFileVm>,
+    /// Whether at least one directory subtree could never be enumerated at
+    /// all — `MAX_WALK_DEPTH` truncation or an access-denied listing (#128
+    /// retry 3, was ticket #148). Deliberately a BOOLEAN, never a count —
+    /// same reasoning as `UnmeasurableFileVm`'s sibling on the JSON
+    /// surface (`json_report_writer.rs`). Never omitted, same "false is an
+    /// honest answer" convention as `unmeasurable_files`.
+    pub unexplored_subtree: bool,
     /// Threshold-breach outcome (US8 AD-3) — never omitted, same "false is
     /// an honest answer" convention as `unmeasurable_files`.
     pub thresholds: ThresholdsVm,
@@ -265,6 +272,7 @@ pub fn build_report_vm(graph: &FileConsumptionGraph, target: &str) -> ReportVm {
         stats: build_stats(graph),
         nodes: build_tree(graph, target),
         unmeasurable_files: build_unmeasurable_files(graph),
+        unexplored_subtree: graph.unexplored_subtree(),
         thresholds: build_thresholds_vm(graph.threshold_report()),
     }
 }
