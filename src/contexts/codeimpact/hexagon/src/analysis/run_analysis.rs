@@ -298,25 +298,24 @@ impl RunAnalysis {
     /// (`default_excluded_count`, `file_filter`) never reaches this count,
     /// it is a configuration decision, not a measurement failure (out of
     /// scope item 3).
-    // #128 retry 2 (Security HIGH): `unexplored_subtree` is threaded through
-    // this signature already (every call site below passes the real,
-    // adapter-observed value) but the CONDITIONAL below is still the OLD
-    // one, deliberately — a scaffold, not the fix. This is what keeps the
-    // new tests genuinely red: the fold-in of `unexplored_subtree` into the
-    // Complete/Partial decision is the exact behavior under test.
+    // #128 retry 2 (Security HIGH): `unexplored_subtree` now genuinely
+    // participates in the Complete/Partial decision — a truncated or
+    // access-denied subtree marks coverage incomplete even when zero
+    // individual files were ever named as unmeasurable (the walker cannot
+    // honestly report a count for a subtree it never entered).
     fn derive_gate_coverage(
         thresholds: &AlertThresholds,
         unmeasurable_files: usize,
-        _unexplored_subtree: bool,
+        unexplored_subtree: bool,
     ) -> GateCoverage {
         let any_threshold_configured =
             thresholds.max_energy_kwh().is_some() || thresholds.max_co2_grams().is_some();
-        if !any_threshold_configured || unmeasurable_files == 0 {
+        if !any_threshold_configured || (unmeasurable_files == 0 && !unexplored_subtree) {
             GateCoverage::Complete
         } else {
             GateCoverage::Partial {
                 unmeasurable_files,
-                unexplored_subtree: false,
+                unexplored_subtree,
             }
         }
     }

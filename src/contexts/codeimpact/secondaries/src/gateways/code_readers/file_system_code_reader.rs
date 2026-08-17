@@ -75,6 +75,34 @@ fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override,
         .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
 }
 
+/// Whether `path` even qualifies as a measurement candidate: matches one of
+/// the registered `extensions` AND satisfies `include` (empty `include`
+/// means unrestricted). Extracted (#128 retry 2, Security MINOR finding)
+/// so the walker's `Err` arm — a walk-level access error naming a FILE,
+/// e.g. an unreadable `.gitignore` sitting right next to real source files
+/// — reuses the EXACT SAME predicate the `Ok` arm already exercises
+/// through every extension/include fixture in the integration suite,
+/// instead of re-deriving it and silently diverging (the `Err` arm used to
+/// count ANY named file as unmeasurable, including one that would never
+/// have been in scope to begin with).
+fn matches_extension_and_include(
+    path: &Path,
+    canonical_root: &Path,
+    extensions: &[&str],
+    include_set: &GlobSet,
+    include_is_empty: bool,
+) -> bool {
+    let has_registered_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| extensions.contains(&ext));
+    if !has_registered_extension {
+        return false;
+    }
+    let relative = path.strip_prefix(canonical_root).unwrap_or(path);
+    include_is_empty || include_set.is_match(relative)
+}
+
 /// Retry #1 (QA CRITICAL, reproduced): moving `exclude` wholesale to
 /// walk-time `ignore::overrides::Override` silently swapped the glob
 /// DIALECT, not just the evaluation point. Pre-#96, `exclude` matched via
@@ -231,6 +259,16 @@ impl CodeReader for FileSystemCodeReader {
         // the gate. Each push here is paired 1:1 with the `eprintln!` right
         // next to it (never a NEW drop reason, just a NAMED one).
         let mut dropped_files: Vec<(PathBuf, UnmeasurableReason)> = Vec::new();
+        // Security HIGH (#128 retry 2): an UNQUANTIFIED companion to
+        // `dropped_files` — set when the walk left at least one directory
+        // subtree unexplored, either because `MAX_WALK_DEPTH` truncated the
+        // descent or because a subtree's own listing failed outright (a
+        // permission-denied directory). Neither condition can honestly
+        // populate `dropped_files` (that would require enumerating files
+        // the walk never visited) — see `SourceFileListing::
+        // unexplored_subtree`'s doc for why this stays a bool, never a
+        // fabricated count.
+        let mut unexplored_subtree = false;
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
@@ -275,8 +313,24 @@ impl CodeReader for FileSystemCodeReader {
             }
             match entry {
                 Ok(entry) => {
-                    let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+                    let file_type = entry.file_type();
+                    let is_file = file_type.map(|t| t.is_file()).unwrap_or(false);
                     if !is_file {
+                        // Security HIGH (#128 retry 2): `WalkBuilder::
+                        // max_depth` makes the walker yield the LAST
+                        // directory entry it will ever descend into, then
+                        // stop — silently, no `Ok` entry and no `Err` for
+                        // anything underneath. A directory entry AT
+                        // `MAX_WALK_DEPTH` is therefore the one honest
+                        // signal available: "the walker will not go past
+                        // here." Checked BEFORE the default-exclude probe
+                        // below (independent facts, not mutually
+                        // exclusive: a truncated subtree can also happen
+                        // to match a default pattern).
+                        let is_dir = file_type.map(|t| t.is_dir()).unwrap_or(false);
+                        if is_dir && entry.depth() == MAX_WALK_DEPTH {
+                            unexplored_subtree = true;
+                        }
                         // #34 T2 MED-1: a DIRECTORY entry reaching here is
                         // either a normal directory the walker is about to
                         // descend into, or one whose contents were just
@@ -306,18 +360,16 @@ impl CodeReader for FileSystemCodeReader {
                         continue;
                     }
                     let path = entry.path();
-                    if !path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| extensions.contains(&ext))
-                    {
+                    if !matches_extension_and_include(
+                        path,
+                        &canonical_root,
+                        extensions,
+                        &include_set,
+                        include_is_empty,
+                    ) {
                         continue;
                     }
                     let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
-                    let keep = include_is_empty || include_set.is_match(relative);
-                    if !keep {
-                        continue;
-                    }
                     // Result-identity fallback (retry #1): any exclude
                     // pattern NOT dialect-safe for walk-time pruning still
                     // gets the pre-#96 post-walk globset check here.
@@ -364,12 +416,44 @@ impl CodeReader for FileSystemCodeReader {
                     // errored path names one real, still-existing FILE —
                     // never guess a file existed just to fill the count.
                     if let ignore::Error::WithPath { path, .. } = &e {
-                        if std::fs::metadata(path)
-                            .map(|m| m.is_file())
-                            .unwrap_or(false)
-                        {
-                            dropped_files
-                                .push((path.clone(), UnmeasurableReason::SourceUnreadable));
+                        if let Ok(meta) = std::fs::metadata(path) {
+                            if meta.is_dir() {
+                                // Security HIGH (#128 retry 2, disclosed
+                                // residual): a directory whose OWN listing
+                                // failed (permission-denied subtree) is the
+                                // same class of absence as the
+                                // `MAX_WALK_DEPTH` truncation above — the
+                                // walker could not enumerate what is
+                                // underneath, so it cannot honestly name
+                                // any file inside it either.
+                                unexplored_subtree = true;
+                            } else if meta.is_file() {
+                                // Security MINOR (#128 retry 2, finding 3):
+                                // re-apply the SAME extension/include/
+                                // exclude eligibility the `Ok` arm already
+                                // enforces before counting this file as
+                                // unmeasurable — an out-of-scope file (e.g.
+                                // an unreadable `.gitignore`, wrong
+                                // extension, or explicitly excluded) that
+                                // happens to trip a walker-level access
+                                // error must not inflate the gate's
+                                // unmeasured count.
+                                let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
+                                let is_excluded = !fallback_exclude_is_empty
+                                    && fallback_exclude_set.is_match(relative);
+                                let in_scope = !is_excluded
+                                    && matches_extension_and_include(
+                                        path,
+                                        &canonical_root,
+                                        extensions,
+                                        &include_set,
+                                        include_is_empty,
+                                    );
+                                if in_scope {
+                                    dropped_files
+                                        .push((path.clone(), UnmeasurableReason::SourceUnreadable));
+                                }
+                            }
                         }
                     }
                 }
@@ -380,11 +464,7 @@ impl CodeReader for FileSystemCodeReader {
             files,
             default_excluded_count,
             dropped_files,
-            // #128 retry 2 (Security HIGH): scaffold — the walker does not
-            // yet DETECT either unexplored-subtree condition (MAX_WALK_DEPTH
-            // truncation, a directory-level access error), so this always
-            // comes back false. The paired fix wires real detection in.
-            unexplored_subtree: false,
+            unexplored_subtree,
         })
     }
 

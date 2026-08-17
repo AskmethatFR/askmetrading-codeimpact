@@ -98,24 +98,41 @@ pub fn render_incomplete_coverage_warning(coverage: GateCoverage) -> String {
         // n'ONT pas pu être mesuré(s)") — grammatically wrong French, not
         // just informal. Proper singular/plural agreement instead of a
         // shorthand that only ever covers the noun.
-        // #128 retry 2 (Security HIGH): `unexplored_subtree` is deliberately
-        // IGNORED here still — a scaffold, not the fix. The dedicated
-        // "names an unexplored subtree, not a count" case stays red until
-        // the paired fix wires it in.
+        // #128 retry 2 (Security HIGH): `unmeasurable_files` and
+        // `unexplored_subtree` name TWO DIFFERENT absences — a count of
+        // named files vs. an unquantified "at least one subtree was never
+        // enumerated" — and must stay two separate, truthful sentences.
+        // Merging them (e.g. "N+1 fichiers") would fabricate a count for
+        // the subtree case exactly as ADR-0010 forbids.
         GateCoverage::Partial {
             unmeasurable_files,
-            unexplored_subtree: _,
+            unexplored_subtree,
         } => {
-            let (noun, verb) = if unmeasurable_files == 1 {
-                ("fichier", "n'a pas pu être mesuré")
-            } else {
-                ("fichiers", "n'ont pas pu être mesurés")
-            };
+            let mut clauses = Vec::new();
+            if unmeasurable_files > 0 {
+                let (noun, verb) = if unmeasurable_files == 1 {
+                    ("fichier", "n'a pas pu être mesuré")
+                } else {
+                    ("fichiers", "n'ont pas pu être mesurés")
+                };
+                clauses.push(format!(
+                    "{unmeasurable_files} {noun} {verb} — consultez la liste des fichiers non \
+                     mesurés dans le rapport"
+                ));
+            }
+            if unexplored_subtree {
+                clauses.push(
+                    "au moins une arborescence de fichiers n'a pas pu être explorée \
+                     entièrement (profondeur maximale atteinte ou accès refusé) — son \
+                     contenu n'est comptabilisé nulle part"
+                        .to_string(),
+                );
+            }
             format!(
                 "=== Couverture du seuil incomplète ===\n\
-                 [SEUIL NON ÉVALUABLE EN TOTALITÉ] {unmeasurable_files} {noun} {verb} — \
-                 le seuil n'a donc pas pu s'appliquer à l'ensemble du projet. Consultez la \
-                 liste des fichiers non mesurés dans le rapport."
+                 [SEUIL NON ÉVALUABLE EN TOTALITÉ] le seuil n'a donc pas pu s'appliquer à \
+                 l'ensemble du projet : {}.",
+                clauses.join(" ; ")
             )
         }
         GateCoverage::Absent => "=== Couverture du seuil incomplète ===\n\

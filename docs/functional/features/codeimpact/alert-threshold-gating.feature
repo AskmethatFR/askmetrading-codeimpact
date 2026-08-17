@@ -18,6 +18,13 @@ Feature: Threshold gating never reports success on what it did not measure
   # adapter's own walk-time cap, unreadable, or an access error). A file whose language has
   # no registered parser is never attempted at all, so it is not counted and does not by
   # itself trigger exit 4.
+  # Note (retry 2): "how many files were not measured" is not the whole story — a directory
+  # subtree the walker could never enumerate at all (walk-depth truncation, a permission-
+  # denied listing) cannot honestly contribute a file count either, because nothing under it
+  # was ever visited to count. Exit 4 also covers that case, but the report NAMES it as a
+  # separate, unquantified absence ("at least one subtree could not be explored") rather than
+  # folding it into the file count — the same "absence is not a fabricated number" discipline
+  # ADR-0010 already applies to S2 below, now applied to a subtree instead of a measurement.
   @scenario:S1
   Scenario: A partially measured project cannot report success under --strict
     Given a project where a threshold is configured and one file cannot be measured
