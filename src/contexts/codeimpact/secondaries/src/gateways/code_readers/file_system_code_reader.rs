@@ -518,3 +518,89 @@ impl CodeReader for FileSystemCodeReader {
         std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
     }
 }
+
+// `classify_walk_error_path` is tested HERE, inline, rather than only
+// through `list_source_files` (this file's usual convention for its other
+// private helpers, e.g. `is_dialect_safe_prune_pattern`) — a deliberate,
+// documented exception. The Directory/File branches ARE already covered
+// end-to-end by `file_system_code_reader_test.rs`'s
+// `permission_denied_subtree_reports_unexplored_subtree` and
+// `file_past_max_walk_depth_vanishes_and_reports_unexplored_subtree`. The
+// NEW branch this retry adds (retry 3, was ticket #149) — the re-stat
+// itself failing — is a genuine filesystem TOCTOU: empirically confirmed
+// unreproducible through `ignore::Walk` without a flaky background-thread
+// race (a tuned 3000-decoy-file race against `filter_entry`-free
+// `list_source_files` won the exact window under 50% of the time). The
+// SAME `std::fs::metadata` failure a real vanished-mid-walk path would
+// produce is trivially and deterministically reproduced here with a path
+// that was simply never on disk to begin with.
+//
+// Test List:
+// 1. a real directory -> UnexploredSubtree
+// 2. a real file -> DroppedFile
+// 3. a path that was never on disk (metadata fails, retry 3's fix) ->
+//    UnexploredSubtree, never silently unattributed
+#[cfg(test)]
+mod classify_walk_error_path_tests {
+    use super::*;
+
+    #[test]
+    fn classify_walk_error_path_of_a_directory_is_unexplored_subtree() {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_classify_dir_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let outcome = classify_walk_error_path(&dir);
+
+        assert!(matches!(outcome, WalkErrorAttribution::UnexploredSubtree));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_walk_error_path_of_a_file_is_dropped_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_classify_file_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("victim.rs");
+        std::fs::write(&file, "fn f() {}").unwrap();
+
+        let outcome = classify_walk_error_path(&file);
+
+        assert!(matches!(outcome, WalkErrorAttribution::DroppedFile));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // #128 retry 3 (Security HIGH, was ticket #149): before this fix, a
+    // re-stat that itself failed (the path named by the walker's error no
+    // longer resolves to anything — a TOCTOU) fell through BOTH
+    // `dropped_files` and `unexplored_subtree` with zero trace. A
+    // nonexistent-root fixture reproduces the exact `std::fs::metadata`
+    // failure a real vanished-mid-walk path would produce, with no race
+    // required.
+    #[test]
+    fn classify_walk_error_path_of_a_vanished_path_is_unexplored_subtree_not_silence() {
+        let path = std::env::temp_dir().join(format!(
+            "codeimpact_classify_never_existed_{}_{}/victim.rs",
+            std::process::id(),
+            line!()
+        ));
+        assert!(
+            std::fs::metadata(&path).is_err(),
+            "fixture must not exist on disk: {path:?}"
+        );
+
+        let outcome = classify_walk_error_path(&path);
+
+        assert!(
+            matches!(outcome, WalkErrorAttribution::UnexploredSubtree),
+            "a re-stat that itself fails must be folded into unexplored_subtree, never silently \
+             unattributed"
+        );
+    }
+}
