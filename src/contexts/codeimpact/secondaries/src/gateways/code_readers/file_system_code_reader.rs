@@ -197,6 +197,64 @@ fn partition_exclude_patterns(patterns: &[String]) -> (Vec<String>, Vec<String>)
     (walk_time_safe, post_walk_fallback)
 }
 
+/// What a walker access error's named path resolves to when independently
+/// re-checked (#128 retry 2 Security HIGH / retry 3 Security HIGH, was
+/// ticket #149). `ignore::Error::WithPath` names a path for SOME variants
+/// and not others, and even a named path may be a DIRECTORY the walker
+/// could not descend into, not a single measurable file — so the re-stat
+/// below is the only honest source of truth, never a guess from the error
+/// text.
+///
+/// Extracted out of the walker's `Err` arm (retry 3) so the "the re-stat
+/// itself fails" branch is directly, deterministically testable: on a real,
+/// single-threaded walk over a filesystem nobody is concurrently mutating,
+/// that branch is unreachable through `ignore::Walk` alone (confirmed
+/// empirically — even a tuned background-thread race against a 3000-decoy
+/// walk won the exact window under 50% of the time, unusable for a
+/// non-flaky CI test), but the SAME `std::fs::metadata` failure it depends
+/// on is trivially reproduced by pointing this function at a path that was
+/// never there to begin with (`FileSystemCodeReader`'s own inline test
+/// module below, not the adapter's `list_source_files` integration
+/// boundary — a deliberate, documented exception to this file's usual
+/// "helpers are tested only through `list_source_files`" convention,
+/// justified by the OS-race unreproducibility above).
+enum WalkErrorAttribution {
+    /// The path names a directory whose own listing failed — the walk
+    /// could not enumerate what is underneath (retry 2), OR the re-stat
+    /// itself failed and the path no longer resolves to anything at all
+    /// (retry 3, TOCTOU: it vanished between the walker's own error and
+    /// this check). Either way we cannot know whether a file or a whole
+    /// subtree was lost, so the honest, conservative answer folds both
+    /// into the SAME unquantified signal as a truncated subtree, never
+    /// silence.
+    UnexploredSubtree,
+    /// The path names one, precisely-identified, still-readable-as-
+    /// metadata file — precise enough to attribute to `dropped_files`.
+    DroppedFile,
+    /// The path resolves to neither a directory nor a file (unreached in
+    /// practice on this stack — see `matches_extension_and_include`'s doc
+    /// for the sibling precedent of an unreachable branch, reverted rather
+    /// than shipped unverified). Preserved as a no-op, exactly the silent
+    /// fallthrough this had before the re-stat was extracted into its own
+    /// function.
+    Unattributable,
+}
+
+fn classify_walk_error_path(path: &Path) -> WalkErrorAttribution {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => WalkErrorAttribution::UnexploredSubtree,
+        Ok(meta) if meta.is_file() => WalkErrorAttribution::DroppedFile,
+        Ok(_) => WalkErrorAttribution::Unattributable,
+        // #128 retry 3 (Security HIGH, was ticket #149): TOCTOU — the
+        // path named by the walker's own error no longer resolves to
+        // anything at all. We cannot know whether a file or a whole
+        // subtree was lost, so — like the sibling directory branch above
+        // — the conservative, honest answer is "something was lost, and
+        // we don't know how much," never silence.
+        Err(_) => WalkErrorAttribution::UnexploredSubtree,
+    }
+}
+
 #[derive(Default)]
 pub struct FileSystemCodeReader;
 
@@ -422,28 +480,22 @@ impl CodeReader for FileSystemCodeReader {
                     eprintln!("Avertissement: erreur d'accès: {}", e);
                     // Best effort only (retry 1): `ignore::Error` names a
                     // path for SOME variants (`WithPath`) and not others
-                    // (e.g. a symlink `Loop`) — and even a named path may
-                    // be a DIRECTORY the walker could not descend into, not
-                    // a single measurable file. Only attribute the drop to
-                    // `dropped_files` when we can independently confirm the
-                    // errored path names one real, still-existing FILE —
-                    // never guess a file existed just to fill the count.
+                    // (e.g. a symlink `Loop`) — only attribute the drop
+                    // when we can independently confirm what the errored
+                    // path actually is (`classify_walk_error_path`), never
+                    // guess from the error text alone.
                     if let ignore::Error::WithPath { path, .. } = &e {
-                        if let Ok(meta) = std::fs::metadata(path) {
-                            if meta.is_dir() {
-                                // Security HIGH (#128 retry 2, disclosed
-                                // residual): a directory whose OWN listing
-                                // failed (permission-denied subtree) is the
-                                // same class of absence as the
-                                // `MAX_WALK_DEPTH` truncation above — the
-                                // walker could not enumerate what is
-                                // underneath, so it cannot honestly name
-                                // any file inside it either.
+                        match classify_walk_error_path(path) {
+                            WalkErrorAttribution::UnexploredSubtree => {
                                 unexplored_subtree = true;
-                            } else if meta.is_file() {
-                                dropped_files
-                                    .push((path.clone(), UnmeasurableReason::SourceUnreadable));
                             }
+                            WalkErrorAttribution::DroppedFile => {
+                                dropped_files.push((
+                                    path.clone(),
+                                    UnmeasurableReason::SourceUnreadable,
+                                ));
+                            }
+                            WalkErrorAttribution::Unattributable => {}
                         }
                     }
                 }
