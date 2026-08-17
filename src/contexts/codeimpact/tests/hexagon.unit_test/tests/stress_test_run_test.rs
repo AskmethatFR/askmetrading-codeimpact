@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisError;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::Measurement;
 use codeimpact_hexagon::analysis::ReactiveAnalyzer;
 use codeimpact_hexagon::analysis::RunStressTest;
@@ -245,6 +246,65 @@ fn run_stress_test_without_thresholds_shows_no_breach() {
         .expect("stress test should succeed");
 
     assert!(!gated.thresholds().has_breach());
+}
+
+// US128 T3 (issue #128) — same lie as S1 (run_analysis_test.rs), a
+// different shape (S2): a stress-test run whose measurement could not be
+// taken has no unmeasured FILES at all — it has no measurement. Reporting
+// "1 unmeasured file" here would fabricate a count that does not exist,
+// the fault ADR-0032 AD-5 names: an adapter that cannot read a signal
+// propagates the absence, it never manufactures a plausible value.
+// `GateCoverage::Absent` names the absence directly.
+//
+// Test List:
+// 1. an Unmeasurable run + a configured threshold -> coverage Absent
+// 2. a MEASURED run that does not breach + a configured threshold ->
+//    coverage Complete (the run WAS measured — nothing for the gate to miss)
+
+// @scenario: alert-threshold-gating/S2
+#[test]
+fn run_stress_test_unmeasurable_run_with_threshold_configured_reports_absent_coverage() {
+    let unmeasurable_run = StressTestRun::new(
+        10,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+    let runner = TestRunnerStub::new(Ok(unmeasurable_run));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+    let thresholds = AlertThresholds::new(Some(0.0), Some(0.0)).unwrap();
+
+    let gated = use_case
+        .handle(None, &thresholds)
+        .expect("stress test should succeed even when unmeasurable");
+
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Absent,
+        "an unmeasurable run's measurement is absent — it must never be reported as a count \
+         of unmeasured files"
+    );
+}
+
+#[test]
+fn run_stress_test_measured_run_with_threshold_configured_reports_complete_coverage() {
+    let runner = TestRunnerStub::new(Ok(make_run()));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+    let thresholds = AlertThresholds::new(Some(1_000_000.0), None).unwrap();
+
+    let gated = use_case
+        .handle(None, &thresholds)
+        .expect("stress test should succeed");
+
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Complete,
+        "the run WAS measured — the gate covered everything it had to"
+    );
 }
 
 #[test]
