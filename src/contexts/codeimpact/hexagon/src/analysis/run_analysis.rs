@@ -12,6 +12,7 @@ use super::code_reader::CodeReader;
 use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
 use super::file_consumption_graph::{FileConsumptionGraph, UnmeasurableFile};
+use super::gate_coverage::GateCoverage;
 use super::gated_output::GatedOutput;
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
@@ -73,7 +74,10 @@ impl RunAnalysis {
         let metrics = Self::gate_metrics(metrics, config.thresholds());
         let report = metrics.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_console(&metrics)?;
-        Ok(GatedOutput::new((), report))
+        // A single-file target's own read either succeeds (Complete) or the
+        // use case already returns `Err` above (exit 1) — there is no
+        // partial-measurement state a single file can be in (US128, Q4).
+        Ok(GatedOutput::new((), report, GateCoverage::Complete))
     }
 
     fn handle_project(
@@ -188,10 +192,12 @@ impl RunAnalysis {
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count);
+        let unmeasurable_count = graph.unmeasurable_files().len();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
+        let coverage = Self::derive_gate_coverage(config.thresholds(), unmeasurable_count);
         self.reporter.write_project_report(&graph)?;
-        Ok(GatedOutput::new((), report))
+        Ok(GatedOutput::new((), report, coverage))
     }
 
     /// Reads every one of `files`' source text, appending an
@@ -256,6 +262,29 @@ impl RunAnalysis {
         let co2 = ecological.as_ref().map(|e| e.co2_grams());
         let report = thresholds.evaluate(energy_kwh, co2);
         graph.with_threshold_report(report)
+    }
+
+    /// Derives whether the gate that will decide `--strict`'s exit code
+    /// (US128, AD-4 amendment) covered every file it needed, or had to
+    /// decide on an incomplete view — the composition point that already
+    /// holds both facts this needs: `thresholds` (was a threshold even
+    /// configured?) and the project graph's own `unmeasurable_files().len()`
+    /// (read by the caller BEFORE `gate_project` runs). One private helper,
+    /// reused by `handle_project` (console), `handle_project_json` and
+    /// `handle_project_html` (T2) — never duplicated (cc-kiss).
+    ///
+    /// No threshold configured at all reproduces today's behavior exactly
+    /// (`Complete`, however many files went unmeasured): an ungated project
+    /// has nothing the gate could have missed. `unmeasurable_files` only
+    /// ever counts a FAILED measurement — a deliberate exclusion
+    /// (`default_excluded_count`, `file_filter`) never reaches this count,
+    /// it is a configuration decision, not a measurement failure (out of
+    /// scope item 3).
+    fn derive_gate_coverage(
+        _thresholds: &AlertThresholds,
+        _unmeasurable_files: usize,
+    ) -> GateCoverage {
+        GateCoverage::Complete
     }
 
     /// Evaluates a single file's own energy (kWh)/CO2 impact against
@@ -353,7 +382,8 @@ impl RunAnalysis {
         let json = self
             .reporter
             .write_json(&metrics, &target_str, target_type)?;
-        Ok(GatedOutput::new(json, report))
+        // Single-file target — always Complete, same rationale as `handle` (US128, Q4).
+        Ok(GatedOutput::new(json, report, GateCoverage::Complete))
     }
 
     pub fn handle_project_json(
@@ -372,7 +402,11 @@ impl RunAnalysis {
         let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let json = self.reporter.write_project_json(&graph, &target_str)?;
-        Ok(GatedOutput::new(json, report))
+        // T2 (#128) wires the real derivation here; T1 leaves this surface
+        // exactly as honest as it was before (Complete) — a stopgap, not
+        // yet the fix, that keeps this call site compiling under the new
+        // three-argument `GatedOutput::new`.
+        Ok(GatedOutput::new(json, report, GateCoverage::Complete))
     }
 
     pub fn handle_project_html(
@@ -391,7 +425,9 @@ impl RunAnalysis {
         let report = graph.threshold_report().cloned().unwrap_or_default();
         let target_str = target.path().to_string_lossy();
         let html = self.reporter.write_html(&graph, &target_str)?;
-        Ok(GatedOutput::new(html, report))
+        // T2 (#128) wires the real derivation here — same stopgap rationale
+        // as `handle_project_json` above.
+        Ok(GatedOutput::new(html, report, GateCoverage::Complete))
     }
 
     /// Walks every file under `target` matching `filter` (US31), analyzes

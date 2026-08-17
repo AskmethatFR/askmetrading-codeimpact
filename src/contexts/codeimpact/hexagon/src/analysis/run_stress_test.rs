@@ -1,6 +1,7 @@
 use super::alert_thresholds::AlertThresholds;
 use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
+use super::gate_coverage::GateCoverage;
 use super::gated_output::GatedOutput;
 use super::reactive_analyzer::ReactiveAnalyzer;
 use super::report_writer::ReportWriter;
@@ -45,7 +46,11 @@ impl RunStressTest {
             .map(|e| e.energy_joules() / EcologicalImpactEstimator::KWH_TO_JOULES);
         let co2 = ecological.map(|e| e.co2_grams());
         let report = thresholds.evaluate(energy_kwh, co2);
+        // T3 (#128) wires the real Absent-aware derivation here; T1 leaves
+        // this surface exactly as honest as it was before (Complete) — a
+        // stopgap, not yet the fix, that keeps this call site compiling
+        // under the new three-argument `GatedOutput::new`.
         self.reporter.write_stress_test(&run, &impact)?;
-        Ok(GatedOutput::new((), report))
+        Ok(GatedOutput::new((), report, GateCoverage::Complete))
     }
 }

@@ -7,6 +7,7 @@ use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::ParserRegistry;
@@ -903,6 +904,133 @@ fn handle_project_within_threshold_still_attaches_a_non_breaching_report() {
     assert!(
         !report.has_breach(),
         "the huge threshold must not be breached by a trivial project"
+    );
+}
+
+// US128 (issue #128, security-reported) — `handle_project`'s `GatedOutput`
+// now also carries `GateCoverage` (US128 AD-4 amendment): whether the gate
+// that will decide `--strict`'s exit code covered every file it needed, or
+// had to decide on an incomplete view. Before this, a file that could not
+// be measured simply dropped out of the gated aggregate sum with no trace
+// in the exit code — Security measured the consequence live: inflating one
+// file past the 1 MiB size guard turned a real threshold overrun into
+// exit 0.
+//
+// Test List (the derivation itself — `RunAnalysis::derive_gate_coverage`,
+// private, pinned only through this public use case per
+// `use-case-driven-design`):
+// 1. a threshold IS configured + 2 files could not be measured -> Partial{2}
+// 2. NO threshold configured + the SAME 2 unmeasured files -> Complete (an
+//    ungated project has nothing the gate could have missed)
+// 3. a threshold IS configured + 0 unmeasured files -> Complete
+
+#[test]
+fn handle_project_with_threshold_configured_and_unmeasured_files_reports_partial_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/bad1.rs"), "OVERSIZED".into());
+    reader.add_source(PathBuf::from("src/bad2.rs"), "OVERSIZED".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad1.rs"));
+    reader.add_source_file(PathBuf::from("src/bad2.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "OVERSIZED",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+    );
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with a mix of good/bad files should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 2
+        },
+        "2 files could not be measured while a threshold was configured — the gate's own \
+         coverage must name exactly that count"
+    );
+}
+
+#[test]
+fn handle_project_with_no_threshold_configured_and_unmeasured_files_reports_complete_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/bad1.rs"), "OVERSIZED".into());
+    reader.add_source(PathBuf::from("src/bad2.rs"), "OVERSIZED".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad1.rs"));
+    reader.add_source_file(PathBuf::from("src/bad2.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "OVERSIZED",
+        AnalysisError::Unmeasurable(UnmeasurableReason::SourceTooLarge),
+    );
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &AnalysisConfig::defaults(),
+    );
+
+    let gated = result.expect("a project with a mix of good/bad files should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Complete,
+        "no threshold configured — an ungated project has nothing the gate could have missed, \
+         however many files went unmeasured"
+    );
+}
+
+#[test]
+fn handle_project_with_threshold_configured_and_no_unmeasured_files_reports_complete_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a fully-measured project should succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Complete,
+        "every file was measured — the gate covered everything it had to"
     );
 }
 

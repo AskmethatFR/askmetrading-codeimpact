@@ -2,6 +2,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use codeimpact_hexagon::analysis::MAX_MEASURABLE_SOURCE_BYTES;
+
 fn workspace_root() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.pop();
@@ -2342,6 +2344,104 @@ fn e2e_analyze_path_strict_without_breach_exits_0() {
     assert!(
         output.status.success(),
         "no breach: --strict must still exit 0 (AC6). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+// US128 (issue #128, security-reported CRITICAL) — a project where a
+// threshold is configured but one file could not be measured (here: past
+// the 1 MiB source_guard ceiling) must not report the same exit code as a
+// project that was fully measured and genuinely clean. Before this fix,
+// the oversized file simply dropped out of the gated aggregate sum, and a
+// real overrun turned into exit 0 — Security measured this live on two
+// release binaries (`--max-kwh 0.0009 --strict` against a real 0.0013 kWh
+// overrun exited 0). `--max-kwh` here is set safely ABOVE good.rs's own
+// real energy so this test isolates the coverage cause alone, never a
+// genuine breach — the "still reports the breach when both apply" arm is
+// pinned at the pure-mapping level (`strict_incomplete_coverage_and_
+// breach_exits_3_not_4`, main.rs), and the "clean, fully-measured project"
+// arm is the existing, unmodified `e2e_analyze_path_strict_without_
+// breach_exits_0` above.
+//
+// Test List:
+// 1. strict + partial coverage + no breach -> exit 4, names the count
+// 2. the SAME partially-measured project, non-strict -> exit 0 (US8 AC3:
+//    warn, never break the build without --strict)
+
+fn partially_measured_project_fixture(test_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_partial_coverage_{}_{}",
+        test_name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() -> i32 { 1 + 1 }").expect("write good.rs");
+    let mut huge = String::new();
+    while huge.len() <= MAX_MEASURABLE_SOURCE_BYTES {
+        huge.push_str("// padding line to exceed the source_guard ceiling\n");
+    }
+    std::fs::write(dir.join("huge.rs"), huge).expect("write huge.rs");
+    dir
+}
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn e2e_analyze_path_strict_partial_coverage_no_breach_exits_4() {
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("strict_exits_4");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a project with an unmeasured file must not report the same exit code as a \
+         genuinely clean, fully-measured project under --strict. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 fichier"),
+        "the warning must name how many files were not measured (1), got stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_path_non_strict_partial_coverage_exits_0() {
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("non_strict_exits_0");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "without --strict, a partially-measured project must still exit 0 (AC3: warn, never \
+         break the build). stdout: {}, stderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
