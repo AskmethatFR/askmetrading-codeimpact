@@ -278,6 +278,57 @@ fn project_json_includes_unmeasurable_files_and_keeps_existing_fields_unchanged(
     assert_eq!(json["metrics"]["unmeasurable_files_count"], 1);
 }
 
+// #128 retry 3 (was ticket #149/#148) — before this slice, a subtree the
+// walker could never explore (MAX_WALK_DEPTH truncation, an
+// access-denied listing) was byte-identical in the JSON report to a
+// fully-measured project: `unmeasurable_files_count: 0`, `has_breach:
+// false`, nothing anywhere naming the incomplete coverage. A machine
+// reader parsing the report (not the exit code) saw a clean project.
+// `unexplored_subtree` is deliberately a BOOLEAN, never a count — the
+// walker cannot honestly enumerate what is inside a subtree it never
+// entered (same reasoning as `GateCoverage::Partial.unexplored_subtree`,
+// `FileConsumptionGraph::unexplored_subtree`).
+//
+// Test List:
+// 1. a graph with an unexplored subtree surfaces `unexplored_subtree:
+//    true` in the JSON
+// 2. a graph with nothing truncated reports `unexplored_subtree: false`
+//    — 0/false is an honest answer, same convention as
+//    `unmeasurable_files_count`/`default_excluded_files_count`
+#[test]
+fn project_json_includes_unexplored_subtree_flag() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_unexplored_subtree(true);
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unexplored_subtree"], true);
+}
+
+#[test]
+fn project_json_reports_unexplored_subtree_false_by_default() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unexplored_subtree"], false);
+}
+
 // MED-1 (#34 T2 review sweep, ADR-0010) — next to unmeasurable_files_count,
 // never skipped (0 is an honest answer, same convention).
 #[test]
@@ -342,6 +393,20 @@ fn file_json_reports_zero_unmeasurable_files() {
                 .is_empty(),
         "a single-file report has no notion of other unmeasurable files"
     );
+}
+
+// #128 retry 3 — a single file has no notion of a directory walk at all
+// (D3, #50-style), same reasoning as `unmeasurable_files`/
+// `default_excluded_files_count` above.
+#[test]
+fn file_json_reports_unexplored_subtree_false() {
+    let writer = JsonReportWriter::new();
+    let metrics = make_metrics_with_impacts();
+
+    let json_str = writer.write_json(&metrics, "test.rs", "file").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["unexplored_subtree"], false);
 }
 
 // #56 T2 — abstention (ADR-0010/ADR-0014 §4): the count is never skipped,
