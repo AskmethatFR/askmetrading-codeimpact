@@ -13,6 +13,11 @@ Feature: Threshold gating never reports success on what it did not measure
   # the exit code collapsed "nothing breached" and "nothing I managed to measure breached"
   # onto the same 0. Security measured the consequence: inflating one file past the size
   # guard drops it out of the gated sum and turns a real overrun into a success.
+  # Note (retry 1): exit 4 only covers files the tool ATTEMPTED to measure and failed —
+  # including, after this retry, a file dropped at directory-walk time (too large for the
+  # adapter's own walk-time cap, unreadable, or an access error). A file whose language has
+  # no registered parser is never attempted at all, so it is not counted and does not by
+  # itself trigger exit 4.
   @scenario:S1
   Scenario: A partially measured project cannot report success under --strict
     Given a project where a threshold is configured and one file cannot be measured

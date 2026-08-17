@@ -267,6 +267,13 @@ fn run_stress_test_without_thresholds_shows_no_breach() {
 //    measured, so `||` and `&&` agree on their outcome either way; this
 //    case, exactly one metric set on an unmeasured run, is where they
 //    diverge and only `||` reports the ticket's own contract honestly)
+// 4. an Unmeasurable run + NO threshold configured at all -> coverage
+//    Complete (Dev-B F3, review sweep: this cell was only proven by
+//    ricochet — killed by mutants at other cells, not by any test that
+//    actually exercises it. `RunAnalysis` pins the symmetric "no threshold
+//    configured" carve-out (`handle_project_with_no_threshold_configured_
+//    and_unmeasured_files_reports_complete_coverage`); `RunStressTest` had
+//    no equivalent)
 
 // @scenario: alert-threshold-gating/S2
 #[test]
@@ -340,6 +347,33 @@ fn run_stress_test_measured_run_with_threshold_configured_reports_complete_cover
         gated.coverage(),
         GateCoverage::Complete,
         "the run WAS measured — the gate covered everything it had to"
+    );
+}
+
+// @scenario: alert-threshold-gating/S2
+#[test]
+fn run_stress_test_unmeasurable_run_without_threshold_reports_complete_coverage() {
+    let unmeasurable_run = StressTestRun::new(
+        10,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+    let runner = TestRunnerStub::new(Ok(unmeasurable_run));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+
+    let gated = use_case
+        .handle(None, &AlertThresholds::none())
+        .expect("stress test should succeed even when unmeasurable");
+
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Complete,
+        "no threshold configured at all — an ungated run has nothing the gate could have \
+         missed, even though the measurement itself was never taken"
     );
 }
 

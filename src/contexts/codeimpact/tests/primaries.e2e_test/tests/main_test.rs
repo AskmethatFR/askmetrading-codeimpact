@@ -2600,6 +2600,14 @@ fn e2e_analyze_path_strict_json_partial_coverage_exits_4_and_still_writes_report
         .output()
         .expect("failed to execute binary");
 
+    // Dev-B F5 (review, non-blocking) — capture the report contents and
+    // clean up the >1 MiB fixture BEFORE any assertion can fail: the two
+    // sibling tests around this one both clean up first, this one used to
+    // clean up AFTER the assertions, leaking the fixture into temp_dir() on
+    // any failure.
+    let written = std::fs::read_to_string(&output_path).ok();
+    let _ = std::fs::remove_dir_all(&dir);
+
     assert_eq!(
         output.status.code(),
         Some(4),
@@ -2608,9 +2616,8 @@ fn e2e_analyze_path_strict_json_partial_coverage_exits_4_and_still_writes_report
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    let written = std::fs::read_to_string(&output_path)
+    let written = written
         .expect("the JSON report must still have been written despite the non-zero exit code");
-    let _ = std::fs::remove_dir_all(&dir);
     assert!(
         written.contains("huge.rs") && written.contains("unmeasurable_files_count"),
         "the exit code must not truncate the JSON report — the unmeasured file must still be \
