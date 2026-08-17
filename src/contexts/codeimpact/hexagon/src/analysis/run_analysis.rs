@@ -404,15 +404,13 @@ impl RunAnalysis {
             config.file_filter(),
             config.source_roots(),
         )?;
+        let unmeasurable_count = graph.unmeasurable_files().len();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
+        let coverage = Self::derive_gate_coverage(config.thresholds(), unmeasurable_count);
         let target_str = target.path().to_string_lossy();
         let json = self.reporter.write_project_json(&graph, &target_str)?;
-        // T2 (#128) wires the real derivation here; T1 leaves this surface
-        // exactly as honest as it was before (Complete) — a stopgap, not
-        // yet the fix, that keeps this call site compiling under the new
-        // three-argument `GatedOutput::new`.
-        Ok(GatedOutput::new(json, report, GateCoverage::Complete))
+        Ok(GatedOutput::new(json, report, coverage))
     }
 
     pub fn handle_project_html(
@@ -427,13 +425,13 @@ impl RunAnalysis {
             config.file_filter(),
             config.source_roots(),
         )?;
+        let unmeasurable_count = graph.unmeasurable_files().len();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
+        let coverage = Self::derive_gate_coverage(config.thresholds(), unmeasurable_count);
         let target_str = target.path().to_string_lossy();
         let html = self.reporter.write_html(&graph, &target_str)?;
-        // T2 (#128) wires the real derivation here — same stopgap rationale
-        // as `handle_project_json` above.
-        Ok(GatedOutput::new(html, report, GateCoverage::Complete))
+        Ok(GatedOutput::new(html, report, coverage))
     }
 
     /// Walks every file under `target` matching `filter` (US31), analyzes
