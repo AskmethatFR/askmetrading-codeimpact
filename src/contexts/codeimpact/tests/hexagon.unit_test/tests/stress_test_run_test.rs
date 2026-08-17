@@ -260,8 +260,44 @@ fn run_stress_test_without_thresholds_shows_no_breach() {
 // 1. an Unmeasurable run + a configured threshold -> coverage Absent
 // 2. a MEASURED run that does not breach + a configured threshold ->
 //    coverage Complete (the run WAS measured — nothing for the gate to miss)
+// 3. an Unmeasurable run + ONLY ONE metric configured (energy, not co2) ->
+//    coverage Absent too (cargo-mutants survivor, real --root run against
+//    ae1aa7a: `replace || with &&` in `any_threshold_configured` survived
+//    tests 1/2 above — both either configure BOTH metrics or leave the run
+//    measured, so `||` and `&&` agree on their outcome either way; this
+//    case, exactly one metric set on an unmeasured run, is where they
+//    diverge and only `||` reports the ticket's own contract honestly)
 
 // @scenario: alert-threshold-gating/S2
+#[test]
+fn run_stress_test_unmeasurable_run_with_only_one_metric_threshold_configured_reports_absent_coverage(
+) {
+    let unmeasurable_run = StressTestRun::new(
+        10,
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        Measurement::Unmeasurable(UnmeasurableReason::NoSampler),
+        1,
+        1,
+        None,
+    );
+    let runner = TestRunnerStub::new(Ok(unmeasurable_run));
+    let writer = SharedReportWriterStub::new();
+    let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
+    // Only the energy metric is configured — co2 stays None.
+    let thresholds = AlertThresholds::new(Some(1.0), None).unwrap();
+
+    let gated = use_case
+        .handle(None, &thresholds)
+        .expect("stress test should succeed even when unmeasurable");
+
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Absent,
+        "a SINGLE configured metric must still be enough to report Absent coverage on an \
+         unmeasurable run"
+    );
+}
+
 #[test]
 fn run_stress_test_unmeasurable_run_with_threshold_configured_reports_absent_coverage() {
     let unmeasurable_run = StressTestRun::new(
