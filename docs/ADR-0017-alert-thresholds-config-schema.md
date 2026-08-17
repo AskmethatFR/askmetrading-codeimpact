@@ -4,7 +4,9 @@
 > **Status:** Applied
 > **Date:** 2026-07-17
 > **Decided in:** Issue #8 (US8), mergée par PR #81 sur `feat/8-alert-thresholds`
-> **Links:** [[architecture-overview]], [[alert-thresholds]], [[ADR-0001]], [[ADR-0004]], [[ADR-0006]], [[ADR-0009]], [[ADR-0010]], [[json-report-schema]], [[html-report]], [[glossary]]
+> **Links:** [[architecture-overview]], [[alert-thresholds]], [[ADR-0001]], [[ADR-0004]], [[ADR-0006]], [[ADR-0009]], [[ADR-0010]], [[ADR-0033]], [[json-report-schema]], [[html-report]], [[glossary]]
+>
+> **Amendé par [[ADR-0033]] (#128, 2026-08-17)** — §4 ci-dessous décrivait trois codes de sortie (1 erreur, 2 clap, 3 dépassement strict). Il en existe désormais **quatre** : le code **4** nomme le cas *« `--strict`, rien de **mesuré** n'a dépassé, mais le gate n'a pas pu s'appliquer en totalité »*. `3` est inchangé et **l'emporte** sur `4`.
 
 ## Contexte
 
@@ -51,6 +53,18 @@ Le fichier de config est du **JSON** (`.codeimpact.json`), lu par serde_json dan
 
 En mode `--strict`, un dépassement fait sortir le process avec **exit code 3** — délibérément distinct de **1** (erreur d'entrée / runtime) et de **2** (code réservé par clap pour une erreur de parsing d'argument). La **décision** appartient au domaine (`ThresholdReport::has_breach`) ; `main.rs::gated_exit_code` ne fait que la **mapper** sur un code process, jamais re-dériver une comparaison. Sans `--strict`, un dépassement est rapporté mais l'exit reste 0.
 
+**Amendement #128 ([[ADR-0033]] AD-1) — un quatrième code, `4`.** Le mapping gagne une **seconde** entrée de domaine, `GateCoverage::is_complete()`, sans jamais re-dériver de comparaison (la discipline ci-dessus est conservée telle quelle) :
+
+| Exit code | Signification |
+|---|---|
+| 0 | Rien n'a dépassé **et** tout était couvert |
+| 1 | Erreur d'entrée / runtime (inchangé) |
+| 2 | Réservé clap (inchangé) |
+| 3 | Dépassement en `--strict` — **inchangé, et l'emporte sur 4** |
+| **4** | `--strict`, rien de **mesuré** n'a dépassé, mais le gate n'a **pas pu s'appliquer en totalité** |
+
+`4` se déclenche **si et seulement si** : `strict` ∧ au moins un seuil configuré ∧ couverture ≠ `Complete` ∧ aucun dépassement. Hors `--strict`, l'exit reste **0** (AC3 inchangé). Un seul message est imprimé, celui du code gagnant. Raison : la porte est lue par une CI, et une CI ne lit que le code de sortie — rabattre ce cas sur `3` aurait satisfait la lettre du critère (via le message) en perdant l'information sur le seul canal consommé. `gated_exit_code` : `primaries/src/main.rs:351-378`.
+
 **Finding épinglé (parsing CLI negative).** `--max-kwh -5` (séparé par une espace) est avalé par clap comme un flag inconnu → exit **2**, la validation VO n'est jamais atteinte. La forme qui atteint `AlertThresholds::new` (et se fait rejeter proprement en exit 1) est `--max-kwh=-5`. Documenté pour que le comportement ne soit pas pris pour un bug.
 
 `gated_exit_code` : `primaries/src/main.rs`.
@@ -86,8 +100,8 @@ Métriques gatées : **énergie (kWh) et CO2 (g) uniquement**. Le gate évalue l
 - **(+)** L'hexagone reste zéro-dep : serde_json vit derrière `ConfigReaderPort`, le domaine ne connaît qu'`AlertThresholds`.
 - **(+)** Le gate hérite de l'honnêteté d'[[ADR-0010]] : aucune métrique non mesurée ne peut faire échouer un build, à trois niveaux.
 - **(+)** Le format `.codeimpact.json` accueillera US15 (#31) sans migration cassante — schéma partagé, section réservée, tolérant.
-- **(+)** Trois codes de sortie distincts (1 erreur, 2 clap, 3 breach strict) rendent le gate scriptable en CI ([[ADR-0009]]).
-- **(−)** Le fichier de config est self-configurable par le dépôt analysé — vecteur de confiance documenté et remédié en [[ADR-0006]] §6 (opérationnel : CODEOWNERS / flags CLI explicites).
+- **(+)** Quatre codes de sortie distincts (1 erreur, 2 clap, 3 breach strict, **4 couverture incomplète** — #128, [[ADR-0033]]) rendent le gate scriptable en CI ([[ADR-0009]]).
+- **(−)** Le fichier de config est self-configurable par le dépôt analysé — vecteur de confiance documenté en [[ADR-0006]] § *Frontière de confiance*. La remédiation par flags explicites ne couvre **que les seuils** : `exclude` ([[ADR-0019]]) n'a aucun équivalent CLI ni surclassement (#145, voir [[ADR-0033]] § *Ce que `--strict` ne couvre pas*).
 - **(−)** `--max-kwh -5` (espace) est intercepté par clap avant notre validation — comportement de clap, documenté (§4), non corrigé.
 
 ## Dette connue, explicitement non traitée

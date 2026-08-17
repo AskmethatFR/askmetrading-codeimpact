@@ -5,7 +5,9 @@
 **Applied in:** US1  
 **Relations:**  
   depends-on: ["architecture-overview"]  
-  related-to: ["ADR-0015", "ADR-0017", "ADR-0019", "ADR-0020", "ADR-0023"]  
+  related-to: ["ADR-0015", "ADR-0017", "ADR-0019", "ADR-0020", "ADR-0023", "ADR-0033"]  
+
+**Wikilinks (arêtes du graphe) :** [[architecture-overview]], [[ADR-0015]], [[ADR-0017]], [[ADR-0019]], [[ADR-0020]], [[ADR-0023]], [[ADR-0033]]  
 
 ## Context
 
@@ -25,11 +27,19 @@ Le CLI lit des fichiers sur le filesystem. Risques: path traversal, fichier imme
 
 ## Frontière de confiance — `.codeimpact.json` comme gate CI dur (finding Security A04, US8)
 
-Quand `.codeimpact.json` sert de **gate CI dur** (`--strict`, exit 3, [[ADR-0017]]), le fichier est **self-configurable par le dépôt analysé** : un contributeur peut, dans la même PR, relever son propre seuil pour faire passer le build.
+Quand `.codeimpact.json` sert de **gate CI dur** (`--strict`, exit 3 ou 4, [[ADR-0017]] / [[ADR-0033]]), le fichier est **self-configurable par le dépôt analysé** : un contributeur peut, dans la même PR, relever son propre seuil pour faire passer le build.
 
-- **Rayon d'action étroit.** Le fichier n'expose que **deux champs f64 validés** (`max_energy_kwh`, `max_co2_grams`) ; aucun path traversal, aucune injection, aucune exécution possible via ce fichier (§ point 6 ci-dessus). La seule « attaque » est de desserrer son propre garde-fou.
-- **Remédiation opérationnelle, pas code.** Couvrir `.codeimpact.json` par **CODEOWNERS / branch protection**, ou faire passer la CI des flags **`--max-kwh`/`--max-co2` explicites** — qui **surclassent** le fichier par métrique ([[ADR-0017]] §5). Même schéma accepté que `.eslintrc` / `codecov.yml` : un fichier de config versionné est de confiance au niveau du contrôle d'accès au dépôt, pas au niveau du code.
-- **Résiduel accepté.** Aucune contre-mesure code n'est ajoutée : la surface est trop étroite et la remédiation opérationnelle est le pattern standard de l'écosystème.
+- **Rayon d'action initialement étroit — et élargi depuis par US15.** À l'écriture de cette section, le fichier n'exposait que **deux champs f64 validés** (`max_energy_kwh`, `max_co2_grams`) ; aucun path traversal, aucune injection, aucune exécution possible via ce fichier (§ point 6 ci-dessus), la seule « attaque » étant de desserrer son propre garde-fou. [[ADR-0019]] y a depuis ajouté `include`/`exclude` : le fichier ne règle plus seulement **le seuil**, il règle **l'ensemble mesuré**.
+- **Remédiation opérationnelle, pas code — et elle ne couvre PAS tout.** Couvrir `.codeimpact.json` par **CODEOWNERS / branch protection** reste valable et couvre l'intégralité du fichier. En revanche la remédiation par **flags explicites** est **partielle** :
+
+  | Réglage porté par le fichier | Surclassement CLI ? |
+  |---|---|
+  | `thresholds.max_energy_kwh` / `max_co2_grams` | ✅ `--max-kwh` / `--max-co2` surclassent par métrique ([[ADR-0017]] §5) — **vérifié par Security sur #128** |
+  | `exclude` (et `include`, [[ADR-0019]]) | ❌ **aucun équivalent CLI, aucun surclassement** |
+
+  **Conséquence à ne pas laisser implicite :** un dépôt hostile ne relève plus son seuil (visible en revue) — il **rétrécit l'ensemble mesuré** via `exclude`, ce qu'aucun flag ne peut annuler et dont il ne reste **aucune trace exploitable par machine** (`default_excluded_count` ne compte que le sous-ensemble **par défaut**, jamais les motifs de l'utilisateur). Cause de fond : deux niveaux de confiance distincts — motifs écrits par l'**opérateur** vs motifs écrits par le **dépôt analysé** — effondrés sur un unique `FileFilter`. Suivi en **#145** ; contexte complet en [[ADR-0033]] § *Ce que `--strict` ne couvre pas*.
+- **Résiduel accepté, pour la partie seuils uniquement.** Aucune contre-mesure code n'est ajoutée sur les deux f64 : la surface est étroite et la remédiation opérationnelle est le pattern standard de l'écosystème (`.eslintrc`, `codecov.yml`). Pour `exclude`, le résiduel n'est **pas** accepté — il est **ouvert et tracé** (#145), parce que CODEOWNERS y devient la seule défense restante alors que la documentation laissait croire que les flags suffisaient.
+- **Angle mort voisin, non couvert par CODEOWNERS non plus :** un simple **renommage de répertoire** vers un nom commençant par `.` sort du gate sans toucher `.codeimpact.json` du tout (`hidden(true)`) — **#147 (HIGH)**, préexistant (#83), voir [[ADR-0033]].
 
 ## Menace *agrégée* — consommation de ressource projet-globale (finding Security, US14-T5 #33, voir [[ADR-0023]])
 

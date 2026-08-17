@@ -2,11 +2,11 @@
 
 > **Type:** technical
 > **Status:** Applied
-> **Updated:** 2026-07-17
-> **Decided in:** Issue #8 (US8), PR #81
-> **Links:** [[architecture-overview]], [[ADR-0017]], [[ADR-0010]], [[ADR-0006]], [[json-report-schema]], [[html-report]], [[glossary]]
+> **Updated:** 2026-08-17
+> **Decided in:** Issue #8 (US8), PR #81 ; #128 (couverture du gate), PR #150
+> **Links:** [[architecture-overview]], [[ADR-0017]], [[ADR-0033]], [[ADR-0010]], [[ADR-0006]], [[ADR-0019]], [[json-report-schema]], [[html-report]], [[glossary]]
 
-État courant de la porte de seuils d'alerte. Rationale et alternatives : [[ADR-0017]].
+État courant de la porte de seuils d'alerte. Rationale et alternatives : [[ADR-0017]] (conception initiale) et [[ADR-0033]] (couverture du gate, exit 4).
 
 ## Modèle de domaine (hexagone, zéro-dep)
 
@@ -49,16 +49,35 @@
 |---|---|
 | `--max-kwh <N>` / `--max-co2 <N>` | Seuil CLI (surclasse le fichier par métrique) |
 | `--config <path>` | Chemin explicite `.codeimpact.json` |
-| `--strict` | Un dépassement → **exit 3** |
+| `--strict` | Un dépassement → **exit 3** ; une couverture incomplète sans dépassement → **exit 4** ([[ADR-0033]]) |
 
 | Exit code | Signification |
 |---|---|
-| 0 | OK (ou dépassement sans `--strict`) |
+| 0 | Rien n'a dépassé **et** tout était couvert (ou dépassement sans `--strict`) |
 | 1 | Erreur d'entrée / runtime (inclut seuil invalide `--max-kwh=-5`) |
 | 2 | Réservé clap (arg-parse ; `--max-kwh -5` séparé par espace atterrit ici) |
-| 3 | Dépassement en `--strict` |
+| 3 | Dépassement en `--strict` — **l'emporte sur 4** |
+| **4** | `--strict`, rien de **mesuré** n'a dépassé, mais le gate n'a **pas pu s'appliquer en totalité** (#128, [[ADR-0033]] AD-1) |
 
-`primaries/src/main.rs` (`gated_exit_code`, découverte auto de config).
+`4` se déclenche ssi : `strict` ∧ au moins un seuil configuré ∧ couverture ≠ `Complete` ∧ aucun dépassement. Hors `--strict`, l'exit reste 0. Un seul message est imprimé, celui du code gagnant.
+
+`primaries/src/main.rs:351-378` (`gated_exit_code`, découverte auto de config).
+
+## Couverture du gate — `GateCoverage` (#128, [[ADR-0033]])
+
+`ThresholdReport` répond à « **qu'est-ce qui a dépassé ?** » ; `GateCoverage` répond à « **sur quoi ai-je pu décider ?** ». Deux faits, deux porteurs — `AlertThresholds::evaluate` reste **intouché** (diff nul sur toute la tranche) : il n'a aucune raison de connaître les échecs de lecture de fichier.
+
+| Variant | Signification |
+|---|---|
+| `Complete` | Tout ce dont le gate avait besoin était disponible — ou aucun seuil n'est configuré (un projet non gaté n'a rien que le gate aurait pu manquer) |
+| `Partial { unmeasurable_files: usize, unexplored_subtree: bool }` | Un **compte** pour les fichiers nommés-mais-non-mesurables, un fait **non quantifié** pour au moins un sous-arbre jamais parcouru. Faits **indépendants**, cohabitant dans le même variant, rendus en **deux clauses séparées** — les fusionner fabriquerait un compte ([[ADR-0010]]) |
+| `Absent` | Il n'y avait aucun fichier sur lequel être partiel : la mesure unique du run n'a pas pu être prise (jumeau de [[ADR-0032]] AD-5) |
+
+- Défini en `hexagon/src/analysis/gate_coverage.rs:14-47`. Dérivé dans le domaine, en un point unique par use case : `run_analysis.rs:306-321` et `run_stress_test.rs:35`.
+- Porté par `GatedOutput<T>` (`hexagon/src/analysis/gated_output.rs`), dont `new` prend la couverture en **troisième argument positionnel obligatoire** — délibérément pas un builder : un builder rend le fait oubliable, et l'oubli retombe silencieusement sur `Complete`, c'est-à-dire sur le mensonge corrigé. 34 mutants en deviennent `unviable`.
+- Rendu : `humanize::render_incomplete_coverage_warning` (`secondaries/.../humanize.rs:93-145`, stderr strict, jamais de chemin brut), plus `unexplored_subtree` sur JSON (`json_report_writer.rs:80`) et HTML (`html/view_model.rs:32-38`).
+
+**Ce que la porte ne couvre pas** (énuméré, jamais masqué — [[ADR-0033]] § *Ce que `--strict` ne couvre pas*) : les chemins cachés (`hidden(true)`, **#147 HIGH**, un exit 0 strict ne prouve donc pas encore que tout a été vu), `exclude` sans trace machine (**#145**), l'assainissement console inatteignable depuis l'hexagone (**#146**).
 
 ## Câblage du gate
 
