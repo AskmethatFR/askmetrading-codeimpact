@@ -1494,6 +1494,90 @@ fn rendered_js_consumes_unmeasurable_files_from_the_data_island() {
     );
 }
 
+// #128 retry 3 (was ticket #148) — same defect as the JSON surface: an
+// unexplored subtree (MAX_WALK_DEPTH truncation, an access-denied
+// listing) was byte-identical in the HTML report's data island to a
+// fully-measured project. `unexplored_subtree` is deliberately a
+// BOOLEAN, never a count — the walker cannot honestly enumerate what is
+// inside a subtree it never entered.
+//
+// Test List:
+// 1. the data island carries `unexplored_subtree: true` when the graph
+//    has one
+// 2. a graph with nothing truncated carries `unexplored_subtree: false`
+//    — never omitted, same convention as `unmeasurable_files`
+// 3. the renderer JS actually consumes data.unexplored_subtree (not
+//    merely embedded-and-ignored)
+// 4. the rendered content names the fact in human-readable form when
+//    true, so a human reading the report (not just a machine parsing
+//    the JSON) also sees it
+
+#[test]
+fn write_html_surfaces_unexplored_subtree_flag() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]).with_unexplored_subtree(true);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""unexplored_subtree":true"#),
+        "an unexplored subtree must be surfaced in the report's data, got: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_no_unexplored_subtree_reports_false_not_omitted() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains(r#""unexplored_subtree":false"#),
+        "a project with nothing truncated must carry false, not omit the field: {}",
+        html
+    );
+}
+
+#[test]
+fn rendered_js_consumes_unexplored_subtree_from_the_data_island() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_from(vec![("a.rs", make_metrics(1, 1))]);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("data.unexplored_subtree"),
+        "the renderer JS must actually consume unexplored_subtree, not merely embed it unused \
+         in the data island: {}",
+        html
+    );
+}
+
+#[test]
+fn write_html_surfaces_unexplored_subtree_note_in_human_readable_form() {
+    let writer = HtmlReportWriter::new();
+    let graph = graph_with_files(vec![("src/good.rs", 1, 1)]).with_unexplored_subtree(true);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+
+    assert!(
+        html.contains("n'a pas pu être explorée entièrement"),
+        "the unexplored subtree must be named in human-readable form for a reader of the \
+         rendered report, not only in the raw data island, got: {}",
+        html
+    );
+}
+
 #[test]
 fn write_html_no_unmeasurable_files_yields_empty_array_no_panic() {
     let writer = HtmlReportWriter::new();
