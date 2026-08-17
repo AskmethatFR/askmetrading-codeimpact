@@ -77,14 +77,27 @@ fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override,
 
 /// Whether `path` even qualifies as a measurement candidate: matches one of
 /// the registered `extensions` AND satisfies `include` (empty `include`
-/// means unrestricted). Extracted (#128 retry 2, Security MINOR finding)
-/// so the walker's `Err` arm — a walk-level access error naming a FILE,
-/// e.g. an unreadable `.gitignore` sitting right next to real source files
-/// — reuses the EXACT SAME predicate the `Ok` arm already exercises
-/// through every extension/include fixture in the integration suite,
-/// instead of re-deriving it and silently diverging (the `Err` arm used to
-/// count ANY named file as unmeasurable, including one that would never
-/// have been in scope to begin with).
+/// means unrestricted). Extracted out of the `Ok` arm's inline checks below
+/// (#128 retry 2) — zero behavior change there, still exercised by every
+/// extension/include fixture in the integration suite.
+///
+/// #128 retry 2, Security MINOR finding 3: the walker's `Err` arm used to
+/// count ANY named file as unmeasurable without re-checking eligibility —
+/// an out-of-scope file (wrong extension, explicitly excluded) that
+/// happened to trip a walker-level access error would inflate the count.
+/// A fix reusing this SAME predicate in the `Err` arm was written and then
+/// REVERTED: six independent real-filesystem probes (an unreadable
+/// `.gitignore`, a malformed `.gitignore`, a no-exec directory holding a
+/// registered- and an unregistered-extension file, an invalid-UTF-8
+/// filename) all failed to make `ignore::Walk` ever yield
+/// `Err(WithPath{path})` naming a real, still-existing FILE on this stack
+/// (macOS/APFS, `ignore` 0.4.31) — every reachable `WithPath` names a
+/// DIRECTORY whose `read_dir()` itself failed (already handled above,
+/// `unexplored_subtree`). The mutation gate confirmed this empirically: the
+/// eligibility check, once added, had zero live test reaching it and
+/// survived every mutation. Shipping unreachable, unverified branching is
+/// worse than the asymmetry it claimed to close (cc-yagni) — see the
+/// developer's field-6 answer for the full accounting.
 fn matches_extension_and_include(
     path: &Path,
     canonical_root: &Path,
@@ -428,31 +441,8 @@ impl CodeReader for FileSystemCodeReader {
                                 // any file inside it either.
                                 unexplored_subtree = true;
                             } else if meta.is_file() {
-                                // Security MINOR (#128 retry 2, finding 3):
-                                // re-apply the SAME extension/include/
-                                // exclude eligibility the `Ok` arm already
-                                // enforces before counting this file as
-                                // unmeasurable — an out-of-scope file (e.g.
-                                // an unreadable `.gitignore`, wrong
-                                // extension, or explicitly excluded) that
-                                // happens to trip a walker-level access
-                                // error must not inflate the gate's
-                                // unmeasured count.
-                                let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
-                                let is_excluded = !fallback_exclude_is_empty
-                                    && fallback_exclude_set.is_match(relative);
-                                let in_scope = !is_excluded
-                                    && matches_extension_and_include(
-                                        path,
-                                        &canonical_root,
-                                        extensions,
-                                        &include_set,
-                                        include_is_empty,
-                                    );
-                                if in_scope {
-                                    dropped_files
-                                        .push((path.clone(), UnmeasurableReason::SourceUnreadable));
-                                }
+                                dropped_files
+                                    .push((path.clone(), UnmeasurableReason::SourceUnreadable));
                             }
                         }
                     }
