@@ -2447,6 +2447,52 @@ fn e2e_analyze_path_non_strict_partial_coverage_exits_0() {
     );
 }
 
+// US128 T2 (issue #128) — the console surface (S1, above) already exits 4
+// on a partially-measured project under --strict; this pins the SAME
+// honesty on the JSON surface, AND that the exit code does not truncate
+// the written report — a CI that reads the JSON artifact after a non-zero
+// exit must still find the complete report, not a partial write.
+#[test]
+fn e2e_analyze_path_strict_json_partial_coverage_exits_4_and_still_writes_report() {
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("json_exits_4");
+    let output_path = dir.join("report.json");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+            "-o",
+            output_path.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "the JSON surface must exit 4 on a partially-measured project under --strict too, \
+         not just console. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let written = std::fs::read_to_string(&output_path)
+        .expect("the JSON report must still have been written despite the non-zero exit code");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        written.contains("huge.rs") && written.contains("unmeasurable_files_count"),
+        "the exit code must not truncate the JSON report — the unmeasured file must still be \
+         named in full, got: {}",
+        written
+    );
+}
+
 // MED-1 (#34 T2 review sweep, Security CRITICAL) — a project where every
 // file is dropped by a standing default exclude (here: the whole fixture
 // tree lives under dist/) previously reported an empty project and

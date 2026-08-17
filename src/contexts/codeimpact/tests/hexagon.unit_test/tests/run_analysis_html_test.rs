@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
+use codeimpact_hexagon::analysis::FileFilter;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::ParserRegistry;
@@ -95,6 +98,52 @@ fn handle_project_html_empty_project_returns_error() {
             result
         ),
     }
+}
+
+// US128 T2 (issue #128) — same wiring pin as the JSON surface
+// (run_analysis_json_test.rs): `handle_project_html`'s own `GatedOutput`
+// must carry `GateCoverage` too, via the SAME `derive_gate_coverage`
+// helper (cc-kiss: one derivation, three call sites, never duplicated).
+
+#[test]
+fn handle_project_html_with_threshold_configured_and_unmeasured_files_reports_partial_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/bad.rs"), "OVERSIZED".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "OVERSIZED",
+        codeimpact_hexagon::analysis::AnalysisError::Unmeasurable(
+            UnmeasurableReason::SourceTooLarge,
+        ),
+    );
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle_project_html(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with a mix of good/bad files should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 1
+        },
+        "the HTML surface's own GatedOutput must carry the same coverage the console surface does"
+    );
 }
 
 // BLOCKER 2 (#50 QA retry 1) — build_project_graph's unmeasurable branches
