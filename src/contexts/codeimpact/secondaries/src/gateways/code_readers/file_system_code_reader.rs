@@ -340,17 +340,35 @@ impl CodeReader for FileSystemCodeReader {
                                 "Avertissement: fichier ignoré (trop volumineux): {}",
                                 path.file_name().unwrap_or_default().to_string_lossy()
                             );
+                            dropped_files
+                                .push((path.to_path_buf(), UnmeasurableReason::SourceTooLarge));
                         }
                         Err(_) => {
                             eprintln!(
                                 "Avertissement: fichier ignoré (illisible): {}",
                                 path.file_name().unwrap_or_default().to_string_lossy()
                             );
+                            dropped_files
+                                .push((path.to_path_buf(), UnmeasurableReason::SourceUnreadable));
                         }
                     }
                 }
                 Err(e) => {
                     eprintln!("Avertissement: erreur d'accès: {}", e);
+                    // Best effort only (retry 1): `ignore::Error` names a
+                    // path for SOME variants (`WithPath`) and not others
+                    // (e.g. a symlink `Loop`) — and even a named path may
+                    // be a DIRECTORY the walker could not descend into, not
+                    // a single measurable file. Only attribute the drop to
+                    // `dropped_files` when we can independently confirm the
+                    // errored path names one real, still-existing FILE —
+                    // never guess a file existed just to fill the count.
+                    if let ignore::Error::WithPath { path, .. } = &e {
+                        if std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false) {
+                            dropped_files
+                                .push((path.clone(), UnmeasurableReason::SourceUnreadable));
+                        }
+                    }
                 }
             }
         }

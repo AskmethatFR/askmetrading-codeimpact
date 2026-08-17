@@ -96,7 +96,22 @@ impl RunAnalysis {
 
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
-        let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
+        // Seeded from the files the WALK itself dropped before ever
+        // listing them (Security HIGH, #128 retry 1) — too large for the
+        // adapter's own walk-time size cap, unreadable, or a walker access
+        // error. Without this, a walk-time drop was visible only on
+        // stderr: it never became an `UnmeasurableFile`, so
+        // `derive_gate_coverage` below saw zero unmeasured files and
+        // `--strict` silently exited 0 on a project that genuinely
+        // breached.
+        let mut unmeasurable: Vec<UnmeasurableFile> = files
+            .dropped_files
+            .iter()
+            .map(|(path, reason)| UnmeasurableFile {
+                path: path.clone(),
+                reason: *reason,
+            })
+            .collect();
 
         // Pass 1: read every file's source ONCE (US16 T5) — a
         // project-global dependency resolver (the C# namespace index)
@@ -460,7 +475,18 @@ impl RunAnalysis {
 
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
-        let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
+        // Same fold-in as `handle_project` above (Security HIGH, #128 retry
+        // 1) — this is a SEPARATE per-file pass (the JSON/HTML surfaces'
+        // shared helper), so the walk-time-dropped files must be seeded
+        // here too, not just on the console call site.
+        let mut unmeasurable: Vec<UnmeasurableFile> = files
+            .dropped_files
+            .iter()
+            .map(|(path, reason)| UnmeasurableFile {
+                path: path.clone(),
+                reason: *reason,
+            })
+            .collect();
 
         let file_sources = Arc::new(self.read_all_sources(&files, &mut unmeasurable)?);
 
