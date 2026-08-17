@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use super::analysis_target::AnalysisTarget;
 use super::errors::AnalysisError;
 use super::file_filter::FileFilter;
+use super::measurement::UnmeasurableReason;
 
 /// The result of walking a directory for source files (#34 T2 MED-1,
 /// ADR-0010): alongside the file list itself, surfaces how many walk
@@ -30,10 +31,22 @@ use super::file_filter::FileFilter;
 /// file list itself (`.iter()`, `.len()`, indexing) — Deref lets those
 /// keep compiling and behaving identically, while the one new field is
 /// reached explicitly by the handful of call sites that actually need it.
+///
+/// `dropped_files` (Security HIGH, #128 retry 1): a file the walk decided
+/// NOT to include in `files` at all — too large for the adapter's own
+/// walk-time size cap, unreadable, or dropped by a walker-level access
+/// error — paired with WHY, so the use case that measures the project can
+/// fold it into `unmeasurable_files` exactly as it already does for a file
+/// that WAS read and then failed later (`RunAnalysis::read_all_sources`).
+/// Before this field existed, a walk-time drop was reported only to
+/// stderr: the file vanished from the gated sum with nothing telling the
+/// gate it had ever existed — the exact `--strict` bypass Security
+/// demonstrated by inflating one file past the walk-time cap.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceFileListing {
     pub files: Vec<PathBuf>,
     pub default_excluded_count: usize,
+    pub dropped_files: Vec<(PathBuf, UnmeasurableReason)>,
 }
 
 impl std::ops::Deref for SourceFileListing {

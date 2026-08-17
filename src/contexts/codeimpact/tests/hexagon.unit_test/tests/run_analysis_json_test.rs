@@ -372,6 +372,54 @@ fn handle_project_json_with_threshold_configured_and_unmeasured_files_reports_pa
     );
 }
 
+// Security HIGH (retry 1, #128) — `build_project_graph_with_source_roots`
+// (the JSON/HTML surfaces' shared helper) is a SEPARATE per-file pass from
+// `handle_project`'s (the console surface) — the same walk-time-dropped-file
+// fold-in must be wired on THIS call site too, or the JSON/HTML surfaces
+// stay bypassable even after the console surface is fixed (mirrors the
+// console-level `handle_project_folds_a_walk_time_dropped_file_into_
+// unmeasurable_coverage` pin, run_analysis_test.rs).
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn handle_project_json_folds_a_walk_time_dropped_file_into_unmeasurable_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_dropped_file(
+        PathBuf::from("src/huge.rs"),
+        UnmeasurableReason::SourceTooLarge,
+    );
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle_project_json(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with one walk-time-dropped file should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 1
+        },
+        "a file the adapter's WALK dropped must count toward the JSON surface's own coverage \
+         too, not just the console surface's"
+    );
+}
+
 // Security HIGH (Dev-B/Security, retry #1) — `read_all_sources` used to
 // accumulate every project file's FULL source text into one `Vec` with
 // only a per-file cap (`source_guard::MAX_MEASURABLE_SOURCE_BYTES`, 1 MB)

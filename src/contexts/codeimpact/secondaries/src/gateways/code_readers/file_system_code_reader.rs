@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use codeimpact_hexagon::analysis::SourceFileListing;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
@@ -225,6 +226,11 @@ impl CodeReader for FileSystemCodeReader {
         let mut files = Vec::new();
         let mut default_excluded_count: usize = 0;
         let mut entries_visited: usize = 0;
+        // Security HIGH (#128 retry 1): every walk-time drop below used to
+        // ONLY `eprintln!` — the adapter observed the drop and never told
+        // the gate. Each push here is paired 1:1 with the `eprintln!` right
+        // next to it (never a NEW drop reason, just a NAMED one).
+        let mut dropped_files: Vec<(PathBuf, UnmeasurableReason)> = Vec::new();
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
@@ -352,6 +358,7 @@ impl CodeReader for FileSystemCodeReader {
         Ok(SourceFileListing {
             files,
             default_excluded_count,
+            dropped_files,
         })
     }
 

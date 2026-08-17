@@ -1034,6 +1034,61 @@ fn handle_project_with_threshold_configured_and_no_unmeasured_files_reports_comp
     );
 }
 
+// Security HIGH (retry 1, #128) — a file the driven adapter's WALK decided
+// not to include in `source_files` at all (too large for its own walk-time
+// cap, unreadable, or dropped by an access error) must be folded into
+// `unmeasurable_files` exactly like one that WAS listed, read, and only
+// THEN failed (the tests around it already pin that second case).
+// `SourceFileListing::dropped_files` exists to carry this — this test pins
+// that `RunAnalysis` actually reads it, independent of any real filesystem
+// walk (that is the adapter's own integration test,
+// `file_system_code_reader_test.rs`).
+//
+// Test List:
+// 1. one dropped file (never listed, never read) + a threshold configured
+//    -> Partial{1}, same shape as a file that was read and failed later
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn handle_project_folds_a_walk_time_dropped_file_into_unmeasurable_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_dropped_file(
+        PathBuf::from("src/huge.rs"),
+        UnmeasurableReason::SourceTooLarge,
+    );
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle(
+        &make_project_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with one walk-time-dropped file should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 1
+        },
+        "a file the adapter's WALK dropped (never listed, never read) must count toward the \
+         gate's coverage exactly like one that was read and failed later — the gate must not \
+         stay silent just because the drop happened one step earlier"
+    );
+}
+
 // Review-barrier fix (Dev-B, energy-swap re-review, issue #8) — the
 // energy_joules() / KWH_TO_JOULES conversion in gate_project was not
 // pinned by any test: every prior threshold was either 0.0 (breaches on

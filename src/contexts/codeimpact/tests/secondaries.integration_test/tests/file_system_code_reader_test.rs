@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use codeimpact_hexagon::analysis::TargetType;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -1274,4 +1275,68 @@ fn default_excluded_count_is_exactly_zero_when_nothing_is_excluded_by_default() 
          0, got {}",
         listing.default_excluded_count
     );
+}
+
+// Security HIGH (retry 1, #128) — a file over `MAX_FILE_SIZE` (10 MiB) is
+// dropped from `files` at walk time, before it is ever read — that alone is
+// legitimate (it bounds RSS), but until now the drop was reported ONLY to
+// stderr (`eprintln!`), never through `SourceFileListing` itself. A caller
+// with no other channel to learn about the drop (`RunAnalysis`) could not
+// fold it into `unmeasurable_files`, and `--strict` silently exited 0 on a
+// project that genuinely breached (Security bisected this live against the
+// release binary — see `main_test.rs`'s
+// `e2e_analyze_path_strict_walk_time_size_guard_bypass_exits_4`).
+// `dropped_files` closes the channel: the SAME oversized file that is kept
+// OUT of `files` must be named IN `dropped_files`, with the reason.
+//
+// Test List:
+// 1. a file over MAX_FILE_SIZE (10 MiB) is excluded from `files` AND named
+//    in `dropped_files` with `UnmeasurableReason::SourceTooLarge`
+// (a file at/under the cap staying out of `dropped_files` is already
+// covered by every below-cap fixture elsewhere in this file — no dedicated
+// test needed for the vacuous case)
+
+#[test]
+fn oversized_file_is_named_in_dropped_files_not_just_silently_excluded() {
+    let dir = isolated_walk_dir("dropped_files_oversized");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    // MAX_FILE_SIZE (production, file_system_code_reader.rs) is 10 MiB —
+    // one byte over it must trip the guard.
+    let oversized = vec![b'a'; 10 * 1024 * 1024 + 1];
+    std::fs::write(dir.join("huge.rs"), &oversized).unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert!(
+        listing.files.iter().any(|f| f.ends_with("good.rs")),
+        "good.rs must still be listed, got {:?}",
+        listing.files
+    );
+    assert!(
+        !listing.files.iter().any(|f| f.ends_with("huge.rs")),
+        "huge.rs must NOT be in the measured file list (it is over MAX_FILE_SIZE), got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.dropped_files.len(),
+        1,
+        "the oversized file must be named in dropped_files, not silently vanish — got {:?}",
+        listing.dropped_files
+    );
+    assert!(
+        listing.dropped_files[0].0.ends_with("huge.rs"),
+        "got {:?}",
+        listing.dropped_files
+    );
+    assert_eq!(
+        listing.dropped_files[0].1,
+        UnmeasurableReason::SourceTooLarge,
+        "got {:?}",
+        listing.dropped_files
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
