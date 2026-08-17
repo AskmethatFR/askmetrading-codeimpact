@@ -364,7 +364,10 @@ impl CodeReader for FileSystemCodeReader {
                     // errored path names one real, still-existing FILE —
                     // never guess a file existed just to fill the count.
                     if let ignore::Error::WithPath { path, .. } = &e {
-                        if std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false) {
+                        if std::fs::metadata(path)
+                            .map(|m| m.is_file())
+                            .unwrap_or(false)
+                        {
                             dropped_files
                                 .push((path.clone(), UnmeasurableReason::SourceUnreadable));
                         }
