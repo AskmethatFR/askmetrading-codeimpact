@@ -19,6 +19,7 @@ use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::Fil
 use codeimpact_secondaries::gateways::config_readers::file_system_config_reader::FileSystemConfigReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
+use codeimpact_secondaries::gateways::report_writers::humanize::render_incomplete_coverage_warning;
 use codeimpact_secondaries::gateways::report_writers::humanize::render_threshold_warning;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
@@ -347,27 +348,33 @@ fn main() {
     }
 }
 
-/// Maps a `ThresholdReport` to a process exit code (US8 AD-4): the
-/// comparison itself already happened in the domain (`AlertThresholds::
-/// evaluate`) — this is a read of `has_breach()`, never a re-derived
-/// comparison. Exit 3 is reserved for a strict breach (distinct from 1 =
-/// input/runtime error, 2 = clap's own reserved arg-parse code). Prints the
-/// breach message (AD-3's shared renderer) to stderr before exiting.
-///
-/// #128 T1 (red commit): `coverage` is accepted so every call site compiles
-/// under the amended `GatedOutput` contract, but is not read here yet — the
-/// paired green commit wires the exit-4 branch.
+/// Maps a `ThresholdReport` + `GateCoverage` to a process exit code (US8
+/// AD-4, amended by US128): the comparisons themselves already happened in
+/// the domain (`AlertThresholds::evaluate`, `RunAnalysis::
+/// derive_gate_coverage`) — this reads `has_breach()` and
+/// `coverage.is_complete()`, it never re-derives either. Exit 3 (a strict
+/// breach) wins over exit 4 (strict, nothing MEASURED breached, but the
+/// gate could not apply in full): a real breach is always the more
+/// actionable signal, and only the winning code's message is printed —
+/// never both (distinct from 1 = input/runtime error, 2 = clap's own
+/// reserved arg-parse code).
 fn gated_exit_code(
     strict: bool,
     report: &codeimpact_hexagon::analysis::ThresholdReport,
-    _coverage: GateCoverage,
+    coverage: GateCoverage,
 ) -> i32 {
-    if strict && report.has_breach() {
-        eprintln!("{}", render_threshold_warning(report));
-        3
-    } else {
-        0
+    if !strict {
+        return 0;
     }
+    if report.has_breach() {
+        eprintln!("{}", render_threshold_warning(report));
+        return 3;
+    }
+    if !coverage.is_complete() {
+        eprintln!("{}", render_incomplete_coverage_warning(coverage));
+        return 4;
+    }
+    0
 }
 
 /// Writes a report (JSON or HTML) to `output_path` (ADR-0006 discipline,

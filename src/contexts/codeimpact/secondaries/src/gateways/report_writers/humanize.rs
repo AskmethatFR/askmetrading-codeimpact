@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::BreachedMetric;
 use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::ThresholdReport;
 
 /// Formats a micro-dollar amount as a display string (US7 T2 slice R).
@@ -77,6 +78,33 @@ pub fn render_threshold_warning(report: &ThresholdReport) -> String {
         ));
     }
     lines.join("\n")
+}
+
+/// Renders a human-readable warning naming why the gate that decides
+/// `--strict`'s exit code (US128, issue #128) could not apply in full —
+/// either some files went unmeasured (`Partial`) or the run's single
+/// measurement itself was never taken (`Absent`, ADR-0032 AD-5: an absence
+/// is named as an absence, never disguised as a count). Sibling of
+/// `render_threshold_warning` (AD-3) — same "one shared renderer" shape,
+/// stderr-only. Returns an empty string for `GateCoverage::Complete` —
+/// callers are expected to only print a non-empty result. Never emits a raw
+/// file path (ADR-0006/#132 discipline) — only a count, the full list
+/// already lives in the report's own `unmeasurable_files` section.
+pub fn render_incomplete_coverage_warning(coverage: GateCoverage) -> String {
+    match coverage {
+        GateCoverage::Complete => String::new(),
+        GateCoverage::Partial { unmeasurable_files } => format!(
+            "=== Couverture du seuil incomplète ===\n\
+             [SEUIL NON ÉVALUABLE EN TOTALITÉ] {} fichier(s) n'ont pas pu être mesuré(s) — \
+             le seuil n'a donc pas pu s'appliquer à l'ensemble du projet. Consultez la liste \
+             des fichiers non mesurés dans le rapport.",
+            unmeasurable_files
+        ),
+        GateCoverage::Absent => "=== Couverture du seuil incomplète ===\n\
+             [SEUIL NON ÉVALUABLE] la mesure n'a pas pu être prise — aucun résultat \
+             exploitable pour évaluer le seuil."
+            .to_string(),
+    }
 }
 
 /// Formats one threshold value (limit/actual/excess) per its metric's own

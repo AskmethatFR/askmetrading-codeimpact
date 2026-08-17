@@ -281,10 +281,16 @@ impl RunAnalysis {
     /// it is a configuration decision, not a measurement failure (out of
     /// scope item 3).
     fn derive_gate_coverage(
-        _thresholds: &AlertThresholds,
-        _unmeasurable_files: usize,
+        thresholds: &AlertThresholds,
+        unmeasurable_files: usize,
     ) -> GateCoverage {
-        GateCoverage::Complete
+        let any_threshold_configured =
+            thresholds.max_energy_kwh().is_some() || thresholds.max_co2_grams().is_some();
+        if !any_threshold_configured || unmeasurable_files == 0 {
+            GateCoverage::Complete
+        } else {
+            GateCoverage::Partial { unmeasurable_files }
+        }
     }
 
     /// Evaluates a single file's own energy (kWh)/CO2 impact against
