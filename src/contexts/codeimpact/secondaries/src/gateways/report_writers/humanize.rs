@@ -93,13 +93,24 @@ pub fn render_threshold_warning(report: &ThresholdReport) -> String {
 pub fn render_incomplete_coverage_warning(coverage: GateCoverage) -> String {
     match coverage {
         GateCoverage::Complete => String::new(),
-        GateCoverage::Partial { unmeasurable_files } => format!(
-            "=== Couverture du seuil incomplète ===\n\
-             [SEUIL NON ÉVALUABLE EN TOTALITÉ] {} fichier(s) n'ont pas pu être mesuré(s) — \
-             le seuil n'a donc pas pu s'appliquer à l'ensemble du projet. Consultez la liste \
-             des fichiers non mesurés dans le rapport.",
-            unmeasurable_files
-        ),
+        // QA LOW / Security LOW + self-flagged (#128 retry 1): the "(s)"
+        // shorthand left the VERB plural even at count 1 ("1 fichier(s)
+        // n'ONT pas pu être mesuré(s)") — grammatically wrong French, not
+        // just informal. Proper singular/plural agreement instead of a
+        // shorthand that only ever covers the noun.
+        GateCoverage::Partial { unmeasurable_files } => {
+            let (noun, verb) = if unmeasurable_files == 1 {
+                ("fichier", "n'a pas pu être mesuré")
+            } else {
+                ("fichiers", "n'ont pas pu être mesurés")
+            };
+            format!(
+                "=== Couverture du seuil incomplète ===\n\
+                 [SEUIL NON ÉVALUABLE EN TOTALITÉ] {unmeasurable_files} {noun} {verb} — \
+                 le seuil n'a donc pas pu s'appliquer à l'ensemble du projet. Consultez la \
+                 liste des fichiers non mesurés dans le rapport."
+            )
+        }
         GateCoverage::Absent => "=== Couverture du seuil incomplète ===\n\
              [SEUIL NON ÉVALUABLE] la mesure n'a pas pu être prise — aucun résultat \
              exploitable pour évaluer le seuil."
