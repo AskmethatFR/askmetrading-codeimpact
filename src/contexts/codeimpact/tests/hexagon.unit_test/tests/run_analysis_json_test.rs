@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
+use codeimpact_hexagon::analysis::AlertThresholds;
 use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
+use codeimpact_hexagon::analysis::FileFilter;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::ParsedFunction;
 use codeimpact_hexagon::analysis::ParserRegistry;
@@ -318,6 +321,105 @@ fn handle_project_json_records_unparseable_file_as_unmeasurable_and_excludes_it_
     let pm = graph.aggregated_metrics();
     assert_eq!(pm.total_files, 1, "only good.rs counts as measured");
     assert_eq!(pm.unmeasurable_files, 1);
+}
+
+// US128 T2 (issue #128) — the console surface (`handle_project`,
+// run_analysis_test.rs) already carries `GateCoverage` on its
+// `GatedOutput`; this pins the SAME wiring on the JSON surface
+// (`handle_project_json`), reusing the identical `derive_gate_coverage`
+// helper. A prior ticket on this exact call-site pair (T4.2, see the
+// dangling-edges tests above) caught a fix applied to one site and not its
+// symmetric twin — this test exists so that mistake can't repeat here.
+
+#[test]
+fn handle_project_json_with_threshold_configured_and_unmeasured_files_reports_partial_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source(PathBuf::from("src/bad.rs"), "OVERSIZED".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_source_file(PathBuf::from("src/bad.rs"));
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]).failing_when_source_contains(
+        "OVERSIZED",
+        codeimpact_hexagon::analysis::AnalysisError::Unmeasurable(
+            UnmeasurableReason::SourceTooLarge,
+        ),
+    );
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle_project_json(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with a mix of good/bad files should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 1,
+            unexplored_subtree: false
+        },
+        "the JSON surface's own GatedOutput must carry the same coverage the console surface does"
+    );
+}
+
+// Security HIGH (retry 1, #128) — `build_project_graph_with_source_roots`
+// (the JSON/HTML surfaces' shared helper) is a SEPARATE per-file pass from
+// `handle_project`'s (the console surface) — the same walk-time-dropped-file
+// fold-in must be wired on THIS call site too, or the JSON/HTML surfaces
+// stay bypassable even after the console surface is fixed (mirrors the
+// console-level `handle_project_folds_a_walk_time_dropped_file_into_
+// unmeasurable_coverage` pin, run_analysis_test.rs).
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn handle_project_json_folds_a_walk_time_dropped_file_into_unmeasurable_coverage() {
+    let mut reader = CodeReaderStub::new();
+    reader.add_source(PathBuf::from("src/good.rs"), "fn good() {}".into());
+    reader.add_source_file(PathBuf::from("src/good.rs"));
+    reader.add_dropped_file(
+        PathBuf::from("src/huge.rs"),
+        UnmeasurableReason::SourceTooLarge,
+    );
+
+    let writer = SharedReportWriterStub::new();
+    let parser = CodeParserStub::with_functions(vec![]);
+    let use_case = RunAnalysis::new(
+        Box::new(reader),
+        Box::new(writer),
+        ParserRegistry::new().register(Language::Rust, Box::new(parser)),
+    );
+    let config = AnalysisConfig::new(
+        AlertThresholds::new(Some(1000.0), None).unwrap(),
+        FileFilter::unrestricted(),
+    );
+
+    let result = use_case.handle_project_json(
+        &make_target("."),
+        &[AnalysisRule::CyclomaticComplexity],
+        &config,
+    );
+
+    let gated = result.expect("a project with one walk-time-dropped file should still succeed");
+    assert_eq!(
+        gated.coverage(),
+        GateCoverage::Partial {
+            unmeasurable_files: 1,
+            unexplored_subtree: false
+        },
+        "a file the adapter's WALK dropped must count toward the JSON surface's own coverage \
+         too, not just the console surface's"
+    );
 }
 
 // Security HIGH (Dev-B/Security, retry #1) — `read_all_sources` used to

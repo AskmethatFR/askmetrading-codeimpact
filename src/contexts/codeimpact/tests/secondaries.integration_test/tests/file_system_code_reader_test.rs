@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use codeimpact_hexagon::analysis::TargetType;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::FileSystemCodeReader;
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -1274,4 +1275,224 @@ fn default_excluded_count_is_exactly_zero_when_nothing_is_excluded_by_default() 
          0, got {}",
         listing.default_excluded_count
     );
+}
+
+// Security HIGH (retry 1, #128) — a file over `MAX_FILE_SIZE` (10 MiB) is
+// dropped from `files` at walk time, before it is ever read — that alone is
+// legitimate (it bounds RSS), but until now the drop was reported ONLY to
+// stderr (`eprintln!`), never through `SourceFileListing` itself. A caller
+// with no other channel to learn about the drop (`RunAnalysis`) could not
+// fold it into `unmeasurable_files`, and `--strict` silently exited 0 on a
+// project that genuinely breached (Security bisected this live against the
+// release binary — see `main_test.rs`'s
+// `e2e_analyze_path_strict_walk_time_size_guard_bypass_exits_4`).
+// `dropped_files` closes the channel: the SAME oversized file that is kept
+// OUT of `files` must be named IN `dropped_files`, with the reason.
+//
+// Test List:
+// 1. a file over MAX_FILE_SIZE (10 MiB) is excluded from `files` AND named
+//    in `dropped_files` with `UnmeasurableReason::SourceTooLarge`
+// (a file at/under the cap staying out of `dropped_files` is already
+// covered by every below-cap fixture elsewhere in this file — no dedicated
+// test needed for the vacuous case)
+
+#[test]
+fn oversized_file_is_named_in_dropped_files_not_just_silently_excluded() {
+    let dir = isolated_walk_dir("dropped_files_oversized");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    // MAX_FILE_SIZE (production, file_system_code_reader.rs) is 10 MiB —
+    // one byte over it must trip the guard.
+    let oversized = vec![b'a'; 10 * 1024 * 1024 + 1];
+    std::fs::write(dir.join("huge.rs"), &oversized).unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert!(
+        listing.files.iter().any(|f| f.ends_with("good.rs")),
+        "good.rs must still be listed, got {:?}",
+        listing.files
+    );
+    assert!(
+        !listing.files.iter().any(|f| f.ends_with("huge.rs")),
+        "huge.rs must NOT be in the measured file list (it is over MAX_FILE_SIZE), got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.dropped_files.len(),
+        1,
+        "the oversized file must be named in dropped_files, not silently vanish — got {:?}",
+        listing.dropped_files
+    );
+    assert!(
+        listing.dropped_files[0].0.ends_with("huge.rs"),
+        "got {:?}",
+        listing.dropped_files
+    );
+    assert_eq!(
+        listing.dropped_files[0].1,
+        UnmeasurableReason::SourceTooLarge,
+        "got {:?}",
+        listing.dropped_files
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Security HIGH (retry 2, #128) — a THIRD, independent guard of the same
+// class as the walk-time size cap above: `MAX_WALK_DEPTH` (128). Unlike a
+// file over the size cap (which the walker still YIELDS, so `dropped_files`
+// can name it precisely), `WalkBuilder::max_depth` makes the walker never
+// yield anything past the cap at all — neither an `Ok` entry nor an `Err`.
+// A file nested that deep vanishes from BOTH `files` and `dropped_files`
+// with zero trace: `dropped_files` cannot name a file the walk never
+// visited. Security demonstrated this live: a file nested past
+// MAX_WALK_DEPTH disappeared from a real `--strict` run, exit 0 on a
+// project that genuinely breached.
+//
+// The walker still yields the DIRECTORY entry it refuses to descend past —
+// `entry.depth() == MAX_WALK_DEPTH` on that directory entry is the one
+// honest signal available: "the walker will not descend here". This can
+// only be an UNQUANTIFIED `unexplored_subtree: bool`, never a file count
+// (the whole point is that nothing under it was ever enumerated).
+//
+// Test List:
+// 1. a file nested at exactly MAX_WALK_DEPTH+1 (one past the last
+//    directory the walker will descend into) is absent from `files` AND
+//    `unexplored_subtree` is `true`
+// 2. a file nested one level LESS deep (the boundary control) is present
+//    in `files` and `unexplored_subtree` stays `false` — proves the flag
+//    tracks the real boundary, not "any nested directory at all"
+
+fn nested_dir(root: &Path, depth: usize) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for i in 0..depth {
+        path = path.join(format!("d{i}"));
+    }
+    std::fs::create_dir_all(&path).expect("create nested dir");
+    path
+}
+
+#[test]
+fn file_past_max_walk_depth_vanishes_and_reports_unexplored_subtree() {
+    let dir = isolated_walk_dir("max_walk_depth_truncated");
+    // MAX_WALK_DEPTH (production, file_system_code_reader.rs) is 128 — a
+    // file nested inside 128 directories sits one level past what the
+    // walker will ever descend into.
+    let deep = nested_dir(&dir, 128);
+    std::fs::write(deep.join("heavy.rs"), "fn heavy() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed, not error, on a merely deep tree");
+
+    assert!(
+        !listing.files.iter().any(|f| f.ends_with("heavy.rs")),
+        "a file past MAX_WALK_DEPTH must never be yielded by the walk at all, got {:?}",
+        listing.files
+    );
+    assert!(
+        listing.dropped_files.is_empty(),
+        "the walker never visited this file — it cannot honestly appear in dropped_files \
+         either, got {:?}",
+        listing.dropped_files
+    );
+    assert!(
+        listing.unexplored_subtree,
+        "a subtree the walker refused to descend into must be named as unexplored, not \
+         silently reported as a complete walk"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn file_one_level_short_of_max_walk_depth_is_still_measured() {
+    let dir = isolated_walk_dir("max_walk_depth_boundary_control");
+    // One level shallower than the truncation boundary above — the
+    // control case proving `unexplored_subtree` tracks the real boundary.
+    let shallow = nested_dir(&dir, 127);
+    std::fs::write(shallow.join("shallow.rs"), "fn shallow() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert!(
+        listing.files.iter().any(|f| f.ends_with("shallow.rs")),
+        "a file one level short of MAX_WALK_DEPTH must still be measured, got {:?}",
+        listing.files
+    );
+    assert!(
+        !listing.unexplored_subtree,
+        "nothing was truncated here — unexplored_subtree must stay false"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Security HIGH (retry 2, #128), same class as above — a directory whose
+// LISTING itself fails outright (a permission-denied subtree) is the
+// second condition `unexplored_subtree` exists for: the walker yields an
+// outer `Err` naming the directory, and today that Err is only checked
+// for "is this a readable FILE" (the existing SourceUnreadable path) —
+// a directory-shaped Err fell through unrepresented. Disclosed by the
+// developer, ruled MEDIUM-alone by Security, and folded into the SAME
+// `unexplored_subtree` signal as the depth case: both are "the walk could
+// not enumerate what's under here", not a named file.
+//
+// Test List:
+// 1. a subtree whose directory listing fails (no read permission) reports
+//    `unexplored_subtree: true`, and the file inside is absent from BOTH
+//    `files` and `dropped_files` (the walker never even names it)
+
+#[cfg(unix)]
+#[test]
+fn permission_denied_subtree_reports_unexplored_subtree() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = isolated_walk_dir("permission_denied_subtree");
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    let locked = dir.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("secret.rs"), "fn secret() {}").unwrap();
+    let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+    perms.set_mode(0o000); // no read, no exec: read_dir() itself fails
+    std::fs::set_permissions(&locked, perms).unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let result = reader.list_source_files(&dir, &["rs"], &FileFilter::unrestricted());
+
+    // restore permissions before any assertion can early-return and leak
+    // an unremovable fixture
+    let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&locked, perms).unwrap();
+
+    let listing = result.expect("a permission-denied subtree must not abort the whole walk");
+    assert!(
+        listing.files.iter().any(|f| f.ends_with("good.rs")),
+        "the reachable file must still be measured, got {:?}",
+        listing.files
+    );
+    assert!(
+        !listing.files.iter().any(|f| f.ends_with("secret.rs")),
+        "a file inside an unreadable subtree can never be listed, got {:?}",
+        listing.files
+    );
+    assert!(
+        listing.dropped_files.is_empty(),
+        "the walker never named secret.rs at all — it cannot honestly appear in \
+         dropped_files, got {:?}",
+        listing.dropped_files
+    );
+    assert!(
+        listing.unexplored_subtree,
+        "a directory the walker could not even list must be named as unexplored"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

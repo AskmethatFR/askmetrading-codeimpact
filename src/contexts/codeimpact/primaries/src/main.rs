@@ -6,6 +6,7 @@ use codeimpact_hexagon::analysis::AnalysisConfig;
 use codeimpact_hexagon::analysis::AnalysisRule;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::ConfigReaderPort;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::Language;
 use codeimpact_hexagon::analysis::OutputFormat;
 use codeimpact_hexagon::analysis::ParserRegistry;
@@ -18,6 +19,7 @@ use codeimpact_secondaries::gateways::code_readers::file_system_code_reader::Fil
 use codeimpact_secondaries::gateways::config_readers::file_system_config_reader::FileSystemConfigReader;
 use codeimpact_secondaries::gateways::report_writers::console_report_writer::ConsoleReportWriter;
 use codeimpact_secondaries::gateways::report_writers::html_report_writer::HtmlReportWriter;
+use codeimpact_secondaries::gateways::report_writers::humanize::render_incomplete_coverage_warning;
 use codeimpact_secondaries::gateways::report_writers::humanize::render_threshold_warning;
 use codeimpact_secondaries::gateways::report_writers::json_report_writer::JsonReportWriter;
 use codeimpact_secondaries::gateways::test_runners::cargo_test_runner::CargoTestRunner;
@@ -215,9 +217,11 @@ fn main() {
                     let writer = ConsoleReportWriter::new();
                     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), registry);
                     match use_case.handle(&target, rules, &analysis_config) {
-                        Ok(gated) => {
-                            std::process::exit(gated_exit_code(*strict, gated.thresholds()))
-                        }
+                        Ok(gated) => std::process::exit(gated_exit_code(
+                            *strict,
+                            gated.thresholds(),
+                            gated.coverage(),
+                        )),
                         Err(e) => {
                             eprintln!("erreur: {}", e);
                             std::process::exit(1);
@@ -234,7 +238,8 @@ fn main() {
                     };
                     match result {
                         Ok(gated) => {
-                            let exit_code = gated_exit_code(*strict, gated.thresholds());
+                            let exit_code =
+                                gated_exit_code(*strict, gated.thresholds(), gated.coverage());
                             let json = gated.into_payload();
                             match output {
                                 Some(output_path) => match write_report_file(output_path, &json) {
@@ -270,7 +275,8 @@ fn main() {
                     let use_case = RunAnalysis::new(Box::new(reader), Box::new(writer), registry);
                     match use_case.handle_project_html(&target, rules, &analysis_config) {
                         Ok(gated) => {
-                            let exit_code = gated_exit_code(*strict, gated.thresholds());
+                            let exit_code =
+                                gated_exit_code(*strict, gated.thresholds(), gated.coverage());
                             let html = gated.into_payload();
                             let output_path = output
                                 .clone()
@@ -328,7 +334,11 @@ fn main() {
             let writer = ConsoleReportWriter::new();
             let use_case = RunStressTest::new(Box::new(runner), Box::new(writer));
             match use_case.handle(filter.as_deref(), &thresholds) {
-                Ok(gated) => std::process::exit(gated_exit_code(*strict, gated.thresholds())),
+                Ok(gated) => std::process::exit(gated_exit_code(
+                    *strict,
+                    gated.thresholds(),
+                    gated.coverage(),
+                )),
                 Err(e) => {
                     eprintln!("erreur: {}", e);
                     std::process::exit(1);
@@ -338,19 +348,33 @@ fn main() {
     }
 }
 
-/// Maps a `ThresholdReport` to a process exit code (US8 AD-4): the
-/// comparison itself already happened in the domain (`AlertThresholds::
-/// evaluate`) — this is a read of `has_breach()`, never a re-derived
-/// comparison. Exit 3 is reserved for a strict breach (distinct from 1 =
-/// input/runtime error, 2 = clap's own reserved arg-parse code). Prints the
-/// breach message (AD-3's shared renderer) to stderr before exiting.
-fn gated_exit_code(strict: bool, report: &codeimpact_hexagon::analysis::ThresholdReport) -> i32 {
-    if strict && report.has_breach() {
-        eprintln!("{}", render_threshold_warning(report));
-        3
-    } else {
-        0
+/// Maps a `ThresholdReport` + `GateCoverage` to a process exit code (US8
+/// AD-4, amended by US128): the comparisons themselves already happened in
+/// the domain (`AlertThresholds::evaluate`, `RunAnalysis::
+/// derive_gate_coverage`) — this reads `has_breach()` and
+/// `coverage.is_complete()`, it never re-derives either. Exit 3 (a strict
+/// breach) wins over exit 4 (strict, nothing MEASURED breached, but the
+/// gate could not apply in full): a real breach is always the more
+/// actionable signal, and only the winning code's message is printed —
+/// never both (distinct from 1 = input/runtime error, 2 = clap's own
+/// reserved arg-parse code).
+fn gated_exit_code(
+    strict: bool,
+    report: &codeimpact_hexagon::analysis::ThresholdReport,
+    coverage: GateCoverage,
+) -> i32 {
+    if !strict {
+        return 0;
     }
+    if report.has_breach() {
+        eprintln!("{}", render_threshold_warning(report));
+        return 3;
+    }
+    if !coverage.is_complete() {
+        eprintln!("{}", render_incomplete_coverage_warning(coverage));
+        return 4;
+    }
+    0
 }
 
 /// Writes a report (JSON or HTML) to `output_path` (ADR-0006 discipline,
@@ -390,6 +414,7 @@ fn write_report_file(output_path: &std::path::Path, content: &str) -> Result<(),
 mod gated_exit_code_tests {
     use super::gated_exit_code;
     use codeimpact_hexagon::analysis::AlertThresholds;
+    use codeimpact_hexagon::analysis::GateCoverage;
 
     // Test List (US8 AD-4 — the exit-code MAPPING, not the comparison
     // itself, which is already pinned in alert_thresholds_test.rs):
@@ -397,13 +422,36 @@ mod gated_exit_code_tests {
     // 2. strict + no breach -> 0
     // 3. non-strict + breach -> 0 (AC3: warn, never fail the build)
     // 4. non-strict + no breach -> 0
+    //
+    // #128 (US128) — the mapping grows a third input, `GateCoverage`:
+    // 5. strict + incomplete coverage + no breach -> 4 (the new case this
+    //    ticket exists for)
+    // 6. strict + incomplete coverage + breach -> 3, NOT 4 (a real breach
+    //    always wins — this is the discrimination arm: an implementation
+    //    that returns 4 unconditionally whenever coverage is incomplete
+    //    would pass case 5 alone but fail this one)
+    // 7. non-strict + incomplete coverage -> 0 (AC3 extends unchanged)
+    // 8. strict + Absent coverage + no breach -> 4 (the stress-test shape,
+    //    T3 — Absent must map exactly like Partial at this pure level)
+    //
+    // #128 retry 2 (Security HIGH) — `Partial` gains a SECOND, independent
+    // field (`unexplored_subtree`, a walk-depth truncation or an
+    // access-denied directory the walker could never name a file count
+    // for):
+    // 9. strict + Partial{unmeasurable_files: 0, unexplored_subtree: true}
+    //    + no breach -> 4 (a subtree can be unexplored with ZERO named
+    //    unmeasurable files — `is_complete()` already treats any `Partial`
+    //    as incomplete regardless of field values, so this is a pure
+    //    regression pin at this mapping level, not a case `gated_exit_code`
+    //    itself needs new logic for; the real fold-in decision lives in
+    //    `RunAnalysis::derive_gate_coverage`, hexagon-side)
 
     #[test]
     fn strict_breach_exits_3() {
         let report = AlertThresholds::new(Some(1.0), None)
             .unwrap()
             .evaluate(Some(5.0), None);
-        assert_eq!(gated_exit_code(true, &report), 3);
+        assert_eq!(gated_exit_code(true, &report, GateCoverage::Complete), 3);
     }
 
     #[test]
@@ -411,7 +459,7 @@ mod gated_exit_code_tests {
         let report = AlertThresholds::new(Some(10.0), None)
             .unwrap()
             .evaluate(Some(5.0), None);
-        assert_eq!(gated_exit_code(true, &report), 0);
+        assert_eq!(gated_exit_code(true, &report, GateCoverage::Complete), 0);
     }
 
     #[test]
@@ -419,13 +467,74 @@ mod gated_exit_code_tests {
         let report = AlertThresholds::new(Some(1.0), None)
             .unwrap()
             .evaluate(Some(5.0), None);
-        assert_eq!(gated_exit_code(false, &report), 0);
+        assert_eq!(gated_exit_code(false, &report, GateCoverage::Complete), 0);
     }
 
     #[test]
     fn non_strict_no_breach_exits_0() {
         let report = AlertThresholds::none().evaluate(Some(5.0), None);
-        assert_eq!(gated_exit_code(false, &report), 0);
+        assert_eq!(gated_exit_code(false, &report, GateCoverage::Complete), 0);
+    }
+
+    #[test]
+    fn strict_unexplored_subtree_alone_no_breach_exits_4() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        let coverage = GateCoverage::Partial {
+            unmeasurable_files: 0,
+            unexplored_subtree: true,
+        };
+        assert_eq!(
+            gated_exit_code(true, &report, coverage),
+            4,
+            "an unexplored subtree alone (zero NAMED unmeasurable files) must still be treated \
+             as incomplete coverage — the walker never claims a file count it never computed"
+        );
+    }
+
+    #[test]
+    fn strict_incomplete_coverage_no_breach_exits_4() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        let coverage = GateCoverage::Partial {
+            unmeasurable_files: 1,
+            unexplored_subtree: false,
+        };
+        assert_eq!(gated_exit_code(true, &report, coverage), 4);
+    }
+
+    #[test]
+    fn strict_incomplete_coverage_and_breach_exits_3_not_4() {
+        let report = AlertThresholds::new(Some(1.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        let coverage = GateCoverage::Partial {
+            unmeasurable_files: 1,
+            unexplored_subtree: false,
+        };
+        assert_eq!(gated_exit_code(true, &report, coverage), 3);
+    }
+
+    #[test]
+    fn non_strict_incomplete_coverage_exits_0() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(Some(5.0), None);
+        let coverage = GateCoverage::Partial {
+            unmeasurable_files: 1,
+            unexplored_subtree: false,
+        };
+        assert_eq!(gated_exit_code(false, &report, coverage), 0);
+    }
+
+    #[test]
+    fn strict_absent_coverage_no_breach_exits_4() {
+        let report = AlertThresholds::new(Some(10.0), None)
+            .unwrap()
+            .evaluate(None, None);
+        assert_eq!(gated_exit_code(true, &report, GateCoverage::Absent), 4);
     }
 }
 

@@ -12,6 +12,7 @@ use super::code_reader::CodeReader;
 use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
 use super::file_consumption_graph::{FileConsumptionGraph, UnmeasurableFile};
+use super::gate_coverage::GateCoverage;
 use super::gated_output::GatedOutput;
 use super::io_in_loop_warning::IoInLoopWarning;
 use super::measurement::UnmeasurableReason;
@@ -73,7 +74,10 @@ impl RunAnalysis {
         let metrics = Self::gate_metrics(metrics, config.thresholds());
         let report = metrics.threshold_report().cloned().unwrap_or_default();
         self.reporter.write_console(&metrics)?;
-        Ok(GatedOutput::new((), report))
+        // A single-file target's own read either succeeds (Complete) or the
+        // use case already returns `Err` above (exit 1) — there is no
+        // partial-measurement state a single file can be in (US128, Q4).
+        Ok(GatedOutput::new((), report, GateCoverage::Complete))
     }
 
     fn handle_project(
@@ -92,7 +96,22 @@ impl RunAnalysis {
 
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
-        let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
+        // Seeded from the files the WALK itself dropped before ever
+        // listing them (Security HIGH, #128 retry 1) — too large for the
+        // adapter's own walk-time size cap, unreadable, or a walker access
+        // error. Without this, a walk-time drop was visible only on
+        // stderr: it never became an `UnmeasurableFile`, so
+        // `derive_gate_coverage` below saw zero unmeasured files and
+        // `--strict` silently exited 0 on a project that genuinely
+        // breached.
+        let mut unmeasurable: Vec<UnmeasurableFile> = files
+            .dropped_files
+            .iter()
+            .map(|(path, reason)| UnmeasurableFile {
+                path: path.clone(),
+                reason: *reason,
+            })
+            .collect();
 
         // Pass 1: read every file's source ONCE (US16 T5) — a
         // project-global dependency resolver (the C# namespace index)
@@ -187,11 +206,16 @@ impl RunAnalysis {
         let all_deps = Self::drop_dangling_edges(&per_file, all_deps);
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
-            .with_default_excluded_count(files.default_excluded_count);
+            .with_default_excluded_count(files.default_excluded_count)
+            .with_unexplored_subtree(files.unexplored_subtree);
+        let unmeasurable_count = graph.unmeasurable_files().len();
+        let unexplored_subtree = graph.unexplored_subtree();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
+        let coverage =
+            Self::derive_gate_coverage(config.thresholds(), unmeasurable_count, unexplored_subtree);
         self.reporter.write_project_report(&graph)?;
-        Ok(GatedOutput::new((), report))
+        Ok(GatedOutput::new((), report, coverage))
     }
 
     /// Reads every one of `files`' source text, appending an
@@ -256,6 +280,44 @@ impl RunAnalysis {
         let co2 = ecological.as_ref().map(|e| e.co2_grams());
         let report = thresholds.evaluate(energy_kwh, co2);
         graph.with_threshold_report(report)
+    }
+
+    /// Derives whether the gate that will decide `--strict`'s exit code
+    /// (US128, AD-4 amendment) covered every file it needed, or had to
+    /// decide on an incomplete view — the composition point that already
+    /// holds both facts this needs: `thresholds` (was a threshold even
+    /// configured?) and the project graph's own `unmeasurable_files().len()`
+    /// (read by the caller BEFORE `gate_project` runs). One private helper,
+    /// reused by `handle_project` (console), `handle_project_json` and
+    /// `handle_project_html` (T2) — never duplicated (cc-kiss).
+    ///
+    /// No threshold configured at all reproduces today's behavior exactly
+    /// (`Complete`, however many files went unmeasured): an ungated project
+    /// has nothing the gate could have missed. `unmeasurable_files` only
+    /// ever counts a FAILED measurement — a deliberate exclusion
+    /// (`default_excluded_count`, `file_filter`) never reaches this count,
+    /// it is a configuration decision, not a measurement failure (out of
+    /// scope item 3).
+    // #128 retry 2 (Security HIGH): `unexplored_subtree` now genuinely
+    // participates in the Complete/Partial decision — a truncated or
+    // access-denied subtree marks coverage incomplete even when zero
+    // individual files were ever named as unmeasurable (the walker cannot
+    // honestly report a count for a subtree it never entered).
+    fn derive_gate_coverage(
+        thresholds: &AlertThresholds,
+        unmeasurable_files: usize,
+        unexplored_subtree: bool,
+    ) -> GateCoverage {
+        let any_threshold_configured =
+            thresholds.max_energy_kwh().is_some() || thresholds.max_co2_grams().is_some();
+        if !any_threshold_configured || (unmeasurable_files == 0 && !unexplored_subtree) {
+            GateCoverage::Complete
+        } else {
+            GateCoverage::Partial {
+                unmeasurable_files,
+                unexplored_subtree,
+            }
+        }
     }
 
     /// Evaluates a single file's own energy (kWh)/CO2 impact against
@@ -353,7 +415,8 @@ impl RunAnalysis {
         let json = self
             .reporter
             .write_json(&metrics, &target_str, target_type)?;
-        Ok(GatedOutput::new(json, report))
+        // Single-file target — always Complete, same rationale as `handle` (US128, Q4).
+        Ok(GatedOutput::new(json, report, GateCoverage::Complete))
     }
 
     pub fn handle_project_json(
@@ -368,11 +431,15 @@ impl RunAnalysis {
             config.file_filter(),
             config.source_roots(),
         )?;
+        let unmeasurable_count = graph.unmeasurable_files().len();
+        let unexplored_subtree = graph.unexplored_subtree();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
+        let coverage =
+            Self::derive_gate_coverage(config.thresholds(), unmeasurable_count, unexplored_subtree);
         let target_str = target.path().to_string_lossy();
         let json = self.reporter.write_project_json(&graph, &target_str)?;
-        Ok(GatedOutput::new(json, report))
+        Ok(GatedOutput::new(json, report, coverage))
     }
 
     pub fn handle_project_html(
@@ -387,11 +454,15 @@ impl RunAnalysis {
             config.file_filter(),
             config.source_roots(),
         )?;
+        let unmeasurable_count = graph.unmeasurable_files().len();
+        let unexplored_subtree = graph.unexplored_subtree();
         let graph = Self::gate_project(graph, config.thresholds());
         let report = graph.threshold_report().cloned().unwrap_or_default();
+        let coverage =
+            Self::derive_gate_coverage(config.thresholds(), unmeasurable_count, unexplored_subtree);
         let target_str = target.path().to_string_lossy();
         let html = self.reporter.write_html(&graph, &target_str)?;
-        Ok(GatedOutput::new(html, report))
+        Ok(GatedOutput::new(html, report, coverage))
     }
 
     /// Walks every file under `target` matching `filter` (US31), analyzes
@@ -420,7 +491,18 @@ impl RunAnalysis {
 
         let mut per_file: Vec<(PathBuf, CodeMetrics)> = Vec::new();
         let mut all_deps: Vec<super::file_consumption_graph::FileDependency> = Vec::new();
-        let mut unmeasurable: Vec<UnmeasurableFile> = Vec::new();
+        // Same fold-in as `handle_project` above (Security HIGH, #128 retry
+        // 1) — this is a SEPARATE per-file pass (the JSON/HTML surfaces'
+        // shared helper), so the walk-time-dropped files must be seeded
+        // here too, not just on the console call site.
+        let mut unmeasurable: Vec<UnmeasurableFile> = files
+            .dropped_files
+            .iter()
+            .map(|(path, reason)| UnmeasurableFile {
+                path: path.clone(),
+                reason: *reason,
+            })
+            .collect();
 
         let file_sources = Arc::new(self.read_all_sources(&files, &mut unmeasurable)?);
 
@@ -475,7 +557,8 @@ impl RunAnalysis {
         let all_deps = Self::drop_dangling_edges(&per_file, all_deps);
         Ok(FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
-            .with_default_excluded_count(files.default_excluded_count))
+            .with_default_excluded_count(files.default_excluded_count)
+            .with_unexplored_subtree(files.unexplored_subtree))
     }
 }
 

@@ -2,6 +2,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use codeimpact_hexagon::analysis::MAX_MEASURABLE_SOURCE_BYTES;
+
 fn workspace_root() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.pop();
@@ -2344,6 +2346,360 @@ fn e2e_analyze_path_strict_without_breach_exits_0() {
         "no breach: --strict must still exit 0 (AC6). stdout: {}, stderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+// US128 (issue #128, security-reported CRITICAL) — a project where a
+// threshold is configured but one file could not be measured (here: past
+// the 1 MiB source_guard ceiling) must not report the same exit code as a
+// project that was fully measured and genuinely clean. Before this fix,
+// the oversized file simply dropped out of the gated aggregate sum, and a
+// real overrun turned into exit 0 — Security measured this live on two
+// release binaries (`--max-kwh 0.0009 --strict` against a real 0.0013 kWh
+// overrun exited 0). `--max-kwh` here is set safely ABOVE good.rs's own
+// real energy so this test isolates the coverage cause alone, never a
+// genuine breach — the "still reports the breach when both apply" arm is
+// pinned at the pure-mapping level (`strict_incomplete_coverage_and_
+// breach_exits_3_not_4`, main.rs), and the "clean, fully-measured project"
+// arm is the existing, unmodified `e2e_analyze_path_strict_without_
+// breach_exits_0` above.
+//
+// Test List:
+// 1. strict + partial coverage + no breach -> exit 4, names the count
+// 2. the SAME partially-measured project, non-strict -> exit 0 (US8 AC3:
+//    warn, never break the build without --strict)
+
+fn partially_measured_project_fixture(test_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_partial_coverage_{}_{}",
+        test_name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() -> i32 { 1 + 1 }").expect("write good.rs");
+    let mut huge = String::new();
+    while huge.len() <= MAX_MEASURABLE_SOURCE_BYTES {
+        huge.push_str("// padding line to exceed the source_guard ceiling\n");
+    }
+    std::fs::write(dir.join("huge.rs"), huge).expect("write huge.rs");
+    dir
+}
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn e2e_analyze_path_strict_partial_coverage_no_breach_exits_4() {
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("strict_exits_4");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a project with an unmeasured file must not report the same exit code as a \
+         genuinely clean, fully-measured project under --strict. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 fichier"),
+        "the warning must name how many files were not measured (1), got stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn e2e_analyze_path_non_strict_partial_coverage_exits_0() {
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("non_strict_exits_0");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        output.status.success(),
+        "without --strict, a partially-measured project must still exit 0 (AC3: warn, never \
+         break the build). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+// Security HIGH (retry 1, #128) — T1 above closes the DOMAIN-level size
+// guard (`source_guard::MAX_MEASURABLE_SOURCE_BYTES`, 1 MiB): a file over
+// that ceiling is read, then refused by the parser, then correctly counted
+// as an `UnmeasurableFile`. But a SECOND, independent size guard lives one
+// layer down, at WALK TIME, inside the adapter
+// (`FileSystemCodeReader::MAX_FILE_SIZE`, 10 MiB): a file over THAT cap is
+// dropped from `list_source_files`'s result before it is ever read — it
+// never reaches the domain guard, never becomes an `UnmeasurableFile`, and
+// `derive_gate_coverage` sees zero unmeasured files: Complete, exit 0 —
+// even though the adapter itself already prints "fichier ignoré (trop
+// volumineux)" to stderr. It observed the drop and never told the gate.
+// Security bisected this live against the release binary: an 11 MiB
+// fixture (over the adapter's 10 MiB cap) exits 0 under --strict on an
+// otherwise-breaching project.
+//
+// Test List:
+// 1. a file over the ADAPTER's walk-time size cap (10 MiB, never read at
+//    all) must be just as visible to the gate as one over the DOMAIN-level
+//    guard (1 MiB, T1) -> --strict still exits 4, not 0
+
+fn walk_time_size_guard_bypass_project_fixture(test_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_walk_time_size_guard_{}_{}",
+        test_name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() -> i32 { 1 + 1 }").expect("write good.rs");
+    // Mirrors `FileSystemCodeReader::MAX_FILE_SIZE` (secondaries crate, not
+    // exported to the hexagon — it is an adapter-internal detail, not part
+    // of the driving port) — hardcoded here deliberately, one layer below
+    // `MAX_MEASURABLE_SOURCE_BYTES` (1 MiB) used by `partially_measured_
+    // project_fixture` above.
+    const ADAPTER_MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
+    let mut huge = String::new();
+    while huge.len() <= ADAPTER_MAX_FILE_SIZE {
+        huge.push_str("// padding line to exceed the adapter's walk-time size cap\n");
+    }
+    std::fs::write(dir.join("huge.rs"), huge).expect("write huge.rs");
+    dir
+}
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn e2e_analyze_path_strict_walk_time_size_guard_bypass_exits_4() {
+    let binary = binary_path();
+    let dir = walk_time_size_guard_bypass_project_fixture("strict_exits_4");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a file dropped by the ADAPTER's walk-time size cap (10 MiB) must be just as visible \
+         to the gate as one dropped by the domain-level guard (1 MiB, T1 above) — the adapter \
+         already prints that it drops the file, the gate must not stay silent about it. \
+         stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+// Security HIGH (retry 2, #128) — a THIRD, independent guard of the same
+// class: `FileSystemCodeReader::MAX_WALK_DEPTH` (128, adapter-internal, one
+// layer BELOW the two size guards above). A file nested past it is never
+// even YIELDED by the walk — unlike an oversized file (still yielded, so
+// `dropped_files` can name it precisely), nothing here is ever visited at
+// all. Before this fix, that file vanished from BOTH `files` and
+// `dropped_files` with zero trace, `GateCoverage` read `Complete`, and
+// `--strict` exited 0 on a project that genuinely breached — reproducible
+// with plain nested directories, no privileges and no conspicuously large
+// fixture required (easier to trigger than the size-guard bypass above).
+//
+// Test List:
+// 1. a file nested one level past MAX_WALK_DEPTH (never yielded by the
+//    walk at all) must be just as visible to the gate as one dropped by
+//    either size guard above -> --strict still exits 4, not 0
+
+fn max_walk_depth_bypass_project_fixture(test_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "codeimpact_e2e_max_walk_depth_bypass_{}_{}",
+        test_name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create isolated dir");
+    std::fs::write(dir.join("good.rs"), "fn good() -> i32 { 1 + 1 }").expect("write good.rs");
+    // Mirrors `FileSystemCodeReader::MAX_WALK_DEPTH` (secondaries crate,
+    // adapter-internal, not exported to the hexagon) — 128 nested
+    // directories put `heavy.rs` one level past the last directory the
+    // walker will ever descend into.
+    const ADAPTER_MAX_WALK_DEPTH: usize = 128;
+    let mut nested = dir.clone();
+    for i in 0..ADAPTER_MAX_WALK_DEPTH {
+        nested = nested.join(format!("d{i}"));
+    }
+    std::fs::create_dir_all(&nested).expect("create deeply nested dir");
+    std::fs::write(nested.join("heavy.rs"), "fn heavy() -> i32 { 1 + 1 }").expect("write heavy.rs");
+    dir
+}
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn e2e_analyze_path_strict_max_walk_depth_bypass_exits_4() {
+    let binary = binary_path();
+    let dir = max_walk_depth_bypass_project_fixture("strict_exits_4");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a subtree the walker truncated at MAX_WALK_DEPTH must be visible to the gate as an \
+         unexplored subtree, exactly like the two size-guard bypasses above — the walker \
+         cannot honestly name a file it never visited, so this must be a NAMED absence, not \
+         a silent Complete. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("arborescence") && stderr.contains("explor"),
+        "the warning must name that a subtree could not be explored, not merely a file count \
+         (nothing here was ever named as an unmeasurable FILE) — got stderr: {}",
+        stderr
+    );
+}
+
+// Dev-B F2 (review, non-blocking) — `strict_incomplete_coverage_and_breach_
+// exits_3_not_4` (main.rs, pure-mapping level) proves ONLY the return code:
+// an implementation that printed BOTH the breach and the coverage warnings
+// to stderr while still returning 3 would pass that test, and no viable
+// mutant covers it either (cargo-mutants deletes neither the `eprintln!`
+// nor the early `return`). Structurally impossible today (`gated_exit_code`
+// returns on `report.has_breach()` before ever reaching the coverage
+// branch) — so no live defect — but the "exactly one message" rule had no
+// test anywhere, e2e included. This closes both gaps in one test.
+
+// @scenario: alert-threshold-gating/S1
+#[test]
+fn e2e_analyze_path_strict_breach_and_partial_coverage_exits_3_and_prints_only_the_breach_warning()
+{
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("breach_wins_over_coverage");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--max-kwh",
+            "0",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a genuine breach on the measured portion must win over the coverage warning (exit 3, \
+         not 4). stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("SEUIL DÉPASSÉ"),
+        "the breach warning must still be printed, got stderr: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("SEUIL NON ÉVALUABLE"),
+        "only the WINNING code's message may be printed — the coverage warning must not also \
+         appear, got stderr: {}",
+        stderr
+    );
+}
+
+// US128 T2 (issue #128) — the console surface (S1, above) already exits 4
+// on a partially-measured project under --strict; this pins the SAME
+// honesty on the JSON surface, AND that the exit code does not truncate
+// the written report — a CI that reads the JSON artifact after a non-zero
+// exit must still find the complete report, not a partial write.
+#[test]
+fn e2e_analyze_path_strict_json_partial_coverage_exits_4_and_still_writes_report() {
+    let binary = binary_path();
+    let dir = partially_measured_project_fixture("json_exits_4");
+    let output_path = dir.join("report.json");
+
+    let output = Command::new(&binary)
+        .args([
+            "analyze",
+            "--path",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+            "-o",
+            output_path.to_str().unwrap(),
+            "--max-kwh",
+            "1000000",
+            "--strict",
+        ])
+        .output()
+        .expect("failed to execute binary");
+
+    // Dev-B F5 (review, non-blocking) — capture the report contents and
+    // clean up the >1 MiB fixture BEFORE any assertion can fail: the two
+    // sibling tests around this one both clean up first, this one used to
+    // clean up AFTER the assertions, leaking the fixture into temp_dir() on
+    // any failure.
+    let written = std::fs::read_to_string(&output_path).ok();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "the JSON surface must exit 4 on a partially-measured project under --strict too, \
+         not just console. stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let written = written
+        .expect("the JSON report must still have been written despite the non-zero exit code");
+    assert!(
+        written.contains("huge.rs") && written.contains("unmeasurable_files_count"),
+        "the exit code must not truncate the JSON report — the unmeasured file must still be \
+         named in full, got: {}",
+        written
     );
 }
 

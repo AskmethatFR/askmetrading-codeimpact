@@ -68,6 +68,16 @@ struct MetricsDto {
     /// ("no file failed"), unlike an omitted array which would leave the
     /// count implicit.
     unmeasurable_files_count: usize,
+    /// Whether at least one directory subtree could never be enumerated at
+    /// all — `MAX_WALK_DEPTH` truncation or an access-denied listing (#128
+    /// retry 3, was ticket #148). Deliberately a BOOLEAN, never a count:
+    /// the walker cannot honestly report how many files live inside a
+    /// subtree it never entered (same reasoning as `GateCoverage::
+    /// Partial.unexplored_subtree`). Never skipped — `false` is an honest
+    /// answer, same convention as `unmeasurable_files_count`. Always
+    /// `false` for a single-file report, which has no notion of a
+    /// directory walk at all (D3, #50-style).
+    unexplored_subtree: bool,
     /// Count of walk entries dropped by a standing `DEFAULT_EXCLUDES`
     /// pattern (#34 T2 MED-1, ADR-0010) — never skipped, same "0 is an
     /// honest answer" convention as `unmeasurable_files_count`. Always 0
@@ -451,6 +461,7 @@ pub fn serialize_metrics(
             // measure — that is a project-level concept (D3, #50).
             unmeasurable_files: vec![],
             unmeasurable_files_count: 0,
+            unexplored_subtree: false,
             default_excluded_files_count: 0,
             unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(metrics.threshold_report()),
@@ -528,6 +539,7 @@ pub fn serialize_project_metrics(
             io_in_loops,
             unmeasurable_files_count: unmeasurable_files.len(),
             unmeasurable_files,
+            unexplored_subtree: graph.unexplored_subtree(),
             default_excluded_files_count: aggregated.default_excluded_files_count,
             unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(graph.threshold_report()),

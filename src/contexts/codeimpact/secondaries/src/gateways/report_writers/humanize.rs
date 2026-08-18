@@ -1,5 +1,6 @@
 use codeimpact_hexagon::analysis::BreachedMetric;
 use codeimpact_hexagon::analysis::EcologicalImpactEstimator;
+use codeimpact_hexagon::analysis::GateCoverage;
 use codeimpact_hexagon::analysis::ThresholdReport;
 
 /// Formats a micro-dollar amount as a display string (US7 T2 slice R).
@@ -77,6 +78,68 @@ pub fn render_threshold_warning(report: &ThresholdReport) -> String {
         ));
     }
     lines.join("\n")
+}
+
+/// Renders a human-readable warning naming why the gate that decides
+/// `--strict`'s exit code (US128, issue #128) could not apply in full —
+/// either some files went unmeasured (`Partial`) or the run's single
+/// measurement itself was never taken (`Absent`, ADR-0032 AD-5: an absence
+/// is named as an absence, never disguised as a count). Sibling of
+/// `render_threshold_warning` (AD-3) — same "one shared renderer" shape,
+/// stderr-only. Returns an empty string for `GateCoverage::Complete` —
+/// callers are expected to only print a non-empty result. Never emits a raw
+/// file path (ADR-0006/#132 discipline) — only a count, the full list
+/// already lives in the report's own `unmeasurable_files` section.
+pub fn render_incomplete_coverage_warning(coverage: GateCoverage) -> String {
+    match coverage {
+        GateCoverage::Complete => String::new(),
+        // QA LOW / Security LOW + self-flagged (#128 retry 1): the "(s)"
+        // shorthand left the VERB plural even at count 1 ("1 fichier(s)
+        // n'ONT pas pu être mesuré(s)") — grammatically wrong French, not
+        // just informal. Proper singular/plural agreement instead of a
+        // shorthand that only ever covers the noun.
+        // #128 retry 2 (Security HIGH): `unmeasurable_files` and
+        // `unexplored_subtree` name TWO DIFFERENT absences — a count of
+        // named files vs. an unquantified "at least one subtree was never
+        // enumerated" — and must stay two separate, truthful sentences.
+        // Merging them (e.g. "N+1 fichiers") would fabricate a count for
+        // the subtree case exactly as ADR-0010 forbids.
+        GateCoverage::Partial {
+            unmeasurable_files,
+            unexplored_subtree,
+        } => {
+            let mut clauses = Vec::new();
+            if unmeasurable_files > 0 {
+                let (noun, verb) = if unmeasurable_files == 1 {
+                    ("fichier", "n'a pas pu être mesuré")
+                } else {
+                    ("fichiers", "n'ont pas pu être mesurés")
+                };
+                clauses.push(format!(
+                    "{unmeasurable_files} {noun} {verb} — consultez la liste des fichiers non \
+                     mesurés dans le rapport"
+                ));
+            }
+            if unexplored_subtree {
+                clauses.push(
+                    "au moins une arborescence de fichiers n'a pas pu être explorée \
+                     entièrement (profondeur maximale atteinte ou accès refusé) — son \
+                     contenu n'est comptabilisé nulle part"
+                        .to_string(),
+                );
+            }
+            format!(
+                "=== Couverture du seuil incomplète ===\n\
+                 [SEUIL NON ÉVALUABLE EN TOTALITÉ] le seuil n'a donc pas pu s'appliquer à \
+                 l'ensemble du projet : {}.",
+                clauses.join(" ; ")
+            )
+        }
+        GateCoverage::Absent => "=== Couverture du seuil incomplète ===\n\
+             [SEUIL NON ÉVALUABLE] la mesure n'a pas pu être prise — aucun résultat \
+             exploitable pour évaluer le seuil."
+            .to_string(),
+    }
 }
 
 /// Formats one threshold value (limit/actual/excess) per its metric's own
@@ -447,6 +510,104 @@ mod tests {
             !output.contains('\u{E0020}'),
             "a tag-block character must be neutralized, got: {:?}",
             output
+        );
+    }
+
+    // Test List (render_incomplete_coverage_warning — QA LOW/Security LOW,
+    // #128 retry 1): the function had NO direct unit test anywhere — only
+    // an e2e substring check (`stderr.contains("1 fichier")`), which the
+    // singular/plural grammar bug survived undetected.
+    // 1. Complete -> empty string
+    // 2. Partial{1} -> singular grammar ("1 fichier n'a pas pu être
+    //    mesuré", not "fichier(s) ... mesuré(s)" — the verb stayed plural
+    //    at count 1 before this fix)
+    // 3. Partial{N>1} -> plural grammar
+    // 4. Absent -> the absence message, naming no count at all
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_complete_is_empty() {
+        assert_eq!(
+            render_incomplete_coverage_warning(GateCoverage::Complete),
+            ""
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_one_unmeasurable_file_uses_singular_grammar() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 1,
+            unexplored_subtree: false,
+        });
+        assert!(
+            warning.contains("1 fichier n'a pas pu être mesuré"),
+            "count 1 must use singular grammar (\"n'a pas pu être mesuré\"), got: {warning}"
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_several_unmeasurable_files_uses_plural_grammar() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 3,
+            unexplored_subtree: false,
+        });
+        assert!(
+            warning.contains("3 fichiers n'ont pas pu être mesurés"),
+            "count > 1 must use plural grammar, got: {warning}"
+        );
+    }
+
+    // Security HIGH (retry 2, #128) — `unexplored_subtree` names a
+    // DIFFERENT absence than `unmeasurable_files`: "N files could not be
+    // measured" and "at least one subtree could not be explored" must stay
+    // two separate, truthful sentences — never merged into a fabricated
+    // count (ADR-0010, same discipline as `Absent` above).
+    //
+    // Test List:
+    // 1. unexplored_subtree alone (0 unmeasurable files) -> names the
+    //    subtree, never mentions a file count
+    // 2. both unmeasurable_files > 0 AND unexplored_subtree -> both
+    //    sentences present, neither one swallows the other
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_unexplored_subtree_alone_names_it_not_a_file_count() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 0,
+            unexplored_subtree: true,
+        });
+        assert!(
+            warning.contains("arborescence") && warning.contains("explor"),
+            "must name that a subtree could not be explored, got: {warning}"
+        );
+        assert!(
+            !warning.contains("0 fichier"),
+            "must never fabricate a '0 fichier(s)' count for an absence it never quantified, \
+             got: {warning}"
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_files_and_unexplored_subtree_names_both() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Partial {
+            unmeasurable_files: 2,
+            unexplored_subtree: true,
+        });
+        assert!(
+            warning.contains("2 fichiers n'ont pas pu être mesurés"),
+            "the named-files sentence must still be present, got: {warning}"
+        );
+        assert!(
+            warning.contains("arborescence") && warning.contains("explor"),
+            "the unexplored-subtree sentence must ALSO be present — neither absence may \
+             swallow the other, got: {warning}"
+        );
+    }
+
+    #[test]
+    fn render_incomplete_coverage_warning_of_absent_names_the_absence_not_a_count() {
+        let warning = render_incomplete_coverage_warning(GateCoverage::Absent);
+        assert!(
+            warning.contains("la mesure n'a pas pu être prise"),
+            "Absent must name the absence itself, not a fabricated count, got: {warning}"
         );
     }
 

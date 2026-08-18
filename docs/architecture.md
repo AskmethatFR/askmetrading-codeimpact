@@ -103,7 +103,7 @@ hexagon → rien
 
 ## Alert Thresholds (US8)
 
-Porte de domaine pure `AlertThresholds::evaluate` dans l'hexagone zéro-dep : gate l'énergie (kWh) et le CO2 (g) agrégés projet contre des seuils venus de la CLI (`--max-kwh`/`--max-co2`) et/ou d'un fichier `.codeimpact.json` (lu derrière `ConfigReaderPort`). `--strict` mappe un dépassement sur exit 3. Une métrique non mesurée (`None`) ne franchit jamais un seuil ([[ADR-0010]]). Design courant : [[alert-thresholds]] ; décision : [[ADR-0017]].
+Porte de domaine pure `AlertThresholds::evaluate` dans l'hexagone zéro-dep : gate l'énergie (kWh) et le CO2 (g) agrégés projet contre des seuils venus de la CLI (`--max-kwh`/`--max-co2`) et/ou d'un fichier `.codeimpact.json` (lu derrière `ConfigReaderPort`). `--strict` mappe un dépassement sur exit **3**. Une métrique non mesurée (`None`) ne franchit jamais un seuil ([[ADR-0010]]) — mais depuis #128 cette absence n'est plus indiscernable d'un « rien n'a dépassé » : un second VO d'hexagone, `GateCoverage` (`Complete` / `Partial` / `Absent`), voyage sur `GatedOutput<T>` et mappe sur un exit **4** dédié quand `--strict` n'a pas pu s'appliquer en totalité (`3` l'emporte sur `4`). Design courant : [[alert-thresholds]] ; décisions : [[ADR-0017]] (conception initiale) et [[ADR-0033]] (couverture du gate, quatre gardes d'adaptateur dont **#147 reste ouverte**).
 
 ## Configuration file — `AnalysisConfig` (US15)
 

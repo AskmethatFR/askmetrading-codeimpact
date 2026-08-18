@@ -5,6 +5,7 @@ use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
 use codeimpact_hexagon::analysis::FileFilter;
 use codeimpact_hexagon::analysis::SourceFileListing;
+use codeimpact_hexagon::analysis::UnmeasurableReason;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
@@ -72,6 +73,47 @@ fn build_exclude_overrides(root: &Path, patterns: &[String]) -> Result<Override,
     builder
         .build()
         .map_err(|_| AnalysisError::AnalysisFailed(ERR_INVALID_GLOB.to_string()))
+}
+
+/// Whether `path` even qualifies as a measurement candidate: matches one of
+/// the registered `extensions` AND satisfies `include` (empty `include`
+/// means unrestricted). Extracted out of the `Ok` arm's inline checks below
+/// (#128 retry 2) — zero behavior change there, still exercised by every
+/// extension/include fixture in the integration suite.
+///
+/// #128 retry 2, Security MINOR finding 3: the walker's `Err` arm used to
+/// count ANY named file as unmeasurable without re-checking eligibility —
+/// an out-of-scope file (wrong extension, explicitly excluded) that
+/// happened to trip a walker-level access error would inflate the count.
+/// A fix reusing this SAME predicate in the `Err` arm was written and then
+/// REVERTED: six independent real-filesystem probes (an unreadable
+/// `.gitignore`, a malformed `.gitignore`, a no-exec directory holding a
+/// registered- and an unregistered-extension file, an invalid-UTF-8
+/// filename) all failed to make `ignore::Walk` ever yield
+/// `Err(WithPath{path})` naming a real, still-existing FILE on this stack
+/// (macOS/APFS, `ignore` 0.4.31) — every reachable `WithPath` names a
+/// DIRECTORY whose `read_dir()` itself failed (already handled above,
+/// `unexplored_subtree`). The mutation gate confirmed this empirically: the
+/// eligibility check, once added, had zero live test reaching it and
+/// survived every mutation. Shipping unreachable, unverified branching is
+/// worse than the asymmetry it claimed to close (cc-yagni) — see the
+/// developer's field-6 answer for the full accounting.
+fn matches_extension_and_include(
+    path: &Path,
+    canonical_root: &Path,
+    extensions: &[&str],
+    include_set: &GlobSet,
+    include_is_empty: bool,
+) -> bool {
+    let has_registered_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| extensions.contains(&ext));
+    if !has_registered_extension {
+        return false;
+    }
+    let relative = path.strip_prefix(canonical_root).unwrap_or(path);
+    include_is_empty || include_set.is_match(relative)
 }
 
 /// Retry #1 (QA CRITICAL, reproduced): moving `exclude` wholesale to
@@ -155,6 +197,64 @@ fn partition_exclude_patterns(patterns: &[String]) -> (Vec<String>, Vec<String>)
     (walk_time_safe, post_walk_fallback)
 }
 
+/// What a walker access error's named path resolves to when independently
+/// re-checked (#128 retry 2 Security HIGH / retry 3 Security HIGH, was
+/// ticket #149). `ignore::Error::WithPath` names a path for SOME variants
+/// and not others, and even a named path may be a DIRECTORY the walker
+/// could not descend into, not a single measurable file — so the re-stat
+/// below is the only honest source of truth, never a guess from the error
+/// text.
+///
+/// Extracted out of the walker's `Err` arm (retry 3) so the "the re-stat
+/// itself fails" branch is directly, deterministically testable: on a real,
+/// single-threaded walk over a filesystem nobody is concurrently mutating,
+/// that branch is unreachable through `ignore::Walk` alone (confirmed
+/// empirically — even a tuned background-thread race against a 3000-decoy
+/// walk won the exact window under 50% of the time, unusable for a
+/// non-flaky CI test), but the SAME `std::fs::metadata` failure it depends
+/// on is trivially reproduced by pointing this function at a path that was
+/// never there to begin with (`FileSystemCodeReader`'s own inline test
+/// module below, not the adapter's `list_source_files` integration
+/// boundary — a deliberate, documented exception to this file's usual
+/// "helpers are tested only through `list_source_files`" convention,
+/// justified by the OS-race unreproducibility above).
+enum WalkErrorAttribution {
+    /// The path names a directory whose own listing failed — the walk
+    /// could not enumerate what is underneath (retry 2), OR the re-stat
+    /// itself failed and the path no longer resolves to anything at all
+    /// (retry 3, TOCTOU: it vanished between the walker's own error and
+    /// this check). Either way we cannot know whether a file or a whole
+    /// subtree was lost, so the honest, conservative answer folds both
+    /// into the SAME unquantified signal as a truncated subtree, never
+    /// silence.
+    UnexploredSubtree,
+    /// The path names one, precisely-identified, still-readable-as-
+    /// metadata file — precise enough to attribute to `dropped_files`.
+    DroppedFile,
+    /// The path resolves to neither a directory nor a file (unreached in
+    /// practice on this stack — see `matches_extension_and_include`'s doc
+    /// for the sibling precedent of an unreachable branch, reverted rather
+    /// than shipped unverified). Preserved as a no-op, exactly the silent
+    /// fallthrough this had before the re-stat was extracted into its own
+    /// function.
+    Unattributable,
+}
+
+fn classify_walk_error_path(path: &Path) -> WalkErrorAttribution {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => WalkErrorAttribution::UnexploredSubtree,
+        Ok(meta) if meta.is_file() => WalkErrorAttribution::DroppedFile,
+        Ok(_) => WalkErrorAttribution::Unattributable,
+        // #128 retry 3 (Security HIGH, was ticket #149): TOCTOU — the
+        // path named by the walker's own error no longer resolves to
+        // anything at all. We cannot know whether a file or a whole
+        // subtree was lost, so — like the sibling directory branch above
+        // — the conservative, honest answer is "something was lost, and
+        // we don't know how much," never silence.
+        Err(_) => WalkErrorAttribution::UnexploredSubtree,
+    }
+}
+
 #[derive(Default)]
 pub struct FileSystemCodeReader;
 
@@ -225,6 +325,21 @@ impl CodeReader for FileSystemCodeReader {
         let mut files = Vec::new();
         let mut default_excluded_count: usize = 0;
         let mut entries_visited: usize = 0;
+        // Security HIGH (#128 retry 1): every walk-time drop below used to
+        // ONLY `eprintln!` — the adapter observed the drop and never told
+        // the gate. Each push here is paired 1:1 with the `eprintln!` right
+        // next to it (never a NEW drop reason, just a NAMED one).
+        let mut dropped_files: Vec<(PathBuf, UnmeasurableReason)> = Vec::new();
+        // Security HIGH (#128 retry 2): an UNQUANTIFIED companion to
+        // `dropped_files` — set when the walk left at least one directory
+        // subtree unexplored, either because `MAX_WALK_DEPTH` truncated the
+        // descent or because a subtree's own listing failed outright (a
+        // permission-denied directory). Neither condition can honestly
+        // populate `dropped_files` (that would require enumerating files
+        // the walk never visited) — see `SourceFileListing::
+        // unexplored_subtree`'s doc for why this stays a bool, never a
+        // fabricated count.
+        let mut unexplored_subtree = false;
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
@@ -269,8 +384,24 @@ impl CodeReader for FileSystemCodeReader {
             }
             match entry {
                 Ok(entry) => {
-                    let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+                    let file_type = entry.file_type();
+                    let is_file = file_type.map(|t| t.is_file()).unwrap_or(false);
                     if !is_file {
+                        // Security HIGH (#128 retry 2): `WalkBuilder::
+                        // max_depth` makes the walker yield the LAST
+                        // directory entry it will ever descend into, then
+                        // stop — silently, no `Ok` entry and no `Err` for
+                        // anything underneath. A directory entry AT
+                        // `MAX_WALK_DEPTH` is therefore the one honest
+                        // signal available: "the walker will not go past
+                        // here." Checked BEFORE the default-exclude probe
+                        // below (independent facts, not mutually
+                        // exclusive: a truncated subtree can also happen
+                        // to match a default pattern).
+                        let is_dir = file_type.map(|t| t.is_dir()).unwrap_or(false);
+                        if is_dir && entry.depth() == MAX_WALK_DEPTH {
+                            unexplored_subtree = true;
+                        }
                         // #34 T2 MED-1: a DIRECTORY entry reaching here is
                         // either a normal directory the walker is about to
                         // descend into, or one whose contents were just
@@ -300,18 +431,16 @@ impl CodeReader for FileSystemCodeReader {
                         continue;
                     }
                     let path = entry.path();
-                    if !path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| extensions.contains(&ext))
-                    {
+                    if !matches_extension_and_include(
+                        path,
+                        &canonical_root,
+                        extensions,
+                        &include_set,
+                        include_is_empty,
+                    ) {
                         continue;
                     }
                     let relative = path.strip_prefix(&canonical_root).unwrap_or(path);
-                    let keep = include_is_empty || include_set.is_match(relative);
-                    if !keep {
-                        continue;
-                    }
                     // Result-identity fallback (retry #1): any exclude
                     // pattern NOT dialect-safe for walk-time pruning still
                     // gets the pre-#96 post-walk globset check here.
@@ -334,17 +463,39 @@ impl CodeReader for FileSystemCodeReader {
                                 "Avertissement: fichier ignoré (trop volumineux): {}",
                                 path.file_name().unwrap_or_default().to_string_lossy()
                             );
+                            dropped_files
+                                .push((path.to_path_buf(), UnmeasurableReason::SourceTooLarge));
                         }
                         Err(_) => {
                             eprintln!(
                                 "Avertissement: fichier ignoré (illisible): {}",
                                 path.file_name().unwrap_or_default().to_string_lossy()
                             );
+                            dropped_files
+                                .push((path.to_path_buf(), UnmeasurableReason::SourceUnreadable));
                         }
                     }
                 }
                 Err(e) => {
                     eprintln!("Avertissement: erreur d'accès: {}", e);
+                    // Best effort only (retry 1): `ignore::Error` names a
+                    // path for SOME variants (`WithPath`) and not others
+                    // (e.g. a symlink `Loop`) — only attribute the drop
+                    // when we can independently confirm what the errored
+                    // path actually is (`classify_walk_error_path`), never
+                    // guess from the error text alone.
+                    if let ignore::Error::WithPath { path, .. } = &e {
+                        match classify_walk_error_path(path) {
+                            WalkErrorAttribution::UnexploredSubtree => {
+                                unexplored_subtree = true;
+                            }
+                            WalkErrorAttribution::DroppedFile => {
+                                dropped_files
+                                    .push((path.clone(), UnmeasurableReason::SourceUnreadable));
+                            }
+                            WalkErrorAttribution::Unattributable => {}
+                        }
+                    }
                 }
             }
         }
@@ -352,6 +503,8 @@ impl CodeReader for FileSystemCodeReader {
         Ok(SourceFileListing {
             files,
             default_excluded_count,
+            dropped_files,
+            unexplored_subtree,
         })
     }
 
@@ -361,5 +514,133 @@ impl CodeReader for FileSystemCodeReader {
     /// representation-mismatch class of bug, fixed the same way there).
     fn canonical_root(&self, dir: &Path) -> PathBuf {
         std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+    }
+}
+
+// `classify_walk_error_path` is tested HERE, inline, rather than only
+// through `list_source_files` (this file's usual convention for its other
+// private helpers, e.g. `is_dialect_safe_prune_pattern`) — a deliberate,
+// documented exception. The Directory/File branches ARE already covered
+// end-to-end by `file_system_code_reader_test.rs`'s
+// `permission_denied_subtree_reports_unexplored_subtree` and
+// `file_past_max_walk_depth_vanishes_and_reports_unexplored_subtree`. The
+// NEW branch this retry adds (retry 3, was ticket #149) — the re-stat
+// itself failing — is a genuine filesystem TOCTOU: empirically confirmed
+// unreproducible through `ignore::Walk` without a flaky background-thread
+// race (a tuned 3000-decoy-file race against `filter_entry`-free
+// `list_source_files` won the exact window under 50% of the time). The
+// SAME `std::fs::metadata` failure a real vanished-mid-walk path would
+// produce is trivially and deterministically reproduced here with a path
+// that was simply never on disk to begin with.
+//
+// Test List:
+// 1. a real directory -> UnexploredSubtree
+// 2. a real file -> DroppedFile
+// 3. a path that was never on disk (metadata fails, retry 3's fix) ->
+//    UnexploredSubtree, never silently unattributed
+#[cfg(test)]
+mod classify_walk_error_path_tests {
+    use super::*;
+
+    #[test]
+    fn classify_walk_error_path_of_a_directory_is_unexplored_subtree() {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_classify_dir_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let outcome = classify_walk_error_path(&dir);
+
+        assert!(matches!(outcome, WalkErrorAttribution::UnexploredSubtree));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_walk_error_path_of_a_file_is_dropped_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_classify_file_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("victim.rs");
+        std::fs::write(&file, "fn f() {}").unwrap();
+
+        let outcome = classify_walk_error_path(&file);
+
+        assert!(matches!(outcome, WalkErrorAttribution::DroppedFile));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Mutation gate survivor (#128 retry 3, cargo-mutants): `Ok(meta) if
+    // meta.is_file()`'s guard mutated to `true` survived — the `is_dir()`
+    // guard above already short-circuits both the real-directory and
+    // real-file cases, so the ONLY path where that guard's actual value
+    // matters is `Ok(meta)` naming neither a directory nor a regular
+    // file. A FIFO (named pipe) is the portable, dependency-free way to
+    // construct exactly that: `std::fs::metadata` resolves it (`Ok`), but
+    // `is_dir()` and `is_file()` are both `false`.
+    #[cfg(unix)]
+    #[test]
+    fn classify_walk_error_path_of_a_fifo_is_unattributable() {
+        let dir = std::env::temp_dir().join(format!(
+            "codeimpact_classify_fifo_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("neither_dir_nor_file");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo must be available on this platform to run this test");
+        assert!(
+            status.success(),
+            "mkfifo must succeed to set up the fixture"
+        );
+        let meta = std::fs::metadata(&fifo).expect("a FIFO must be re-statable");
+        assert!(
+            !meta.is_dir() && !meta.is_file(),
+            "fixture precondition: a FIFO must be neither a directory nor a regular file"
+        );
+
+        let outcome = classify_walk_error_path(&fifo);
+
+        assert!(
+            matches!(outcome, WalkErrorAttribution::Unattributable),
+            "a path that is neither a directory nor a file must stay unattributed, exactly the \
+             silent fallthrough this had before the re-stat was extracted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // #128 retry 3 (Security HIGH, was ticket #149): before this fix, a
+    // re-stat that itself failed (the path named by the walker's error no
+    // longer resolves to anything — a TOCTOU) fell through BOTH
+    // `dropped_files` and `unexplored_subtree` with zero trace. A
+    // nonexistent-root fixture reproduces the exact `std::fs::metadata`
+    // failure a real vanished-mid-walk path would produce, with no race
+    // required.
+    #[test]
+    fn classify_walk_error_path_of_a_vanished_path_is_unexplored_subtree_not_silence() {
+        let path = std::env::temp_dir().join(format!(
+            "codeimpact_classify_never_existed_{}_{}/victim.rs",
+            std::process::id(),
+            line!()
+        ));
+        assert!(
+            std::fs::metadata(&path).is_err(),
+            "fixture must not exist on disk: {path:?}"
+        );
+
+        let outcome = classify_walk_error_path(&path);
+
+        assert!(
+            matches!(outcome, WalkErrorAttribution::UnexploredSubtree),
+            "a re-stat that itself fails must be folded into unexplored_subtree, never silently \
+             unattributed"
+        );
     }
 }

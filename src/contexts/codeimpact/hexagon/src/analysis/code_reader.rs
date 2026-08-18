@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use super::analysis_target::AnalysisTarget;
 use super::errors::AnalysisError;
 use super::file_filter::FileFilter;
+use super::measurement::UnmeasurableReason;
 
 /// The result of walking a directory for source files (#34 T2 MED-1,
 /// ADR-0010): alongside the file list itself, surfaces how many walk
@@ -30,10 +31,36 @@ use super::file_filter::FileFilter;
 /// file list itself (`.iter()`, `.len()`, indexing) — Deref lets those
 /// keep compiling and behaving identically, while the one new field is
 /// reached explicitly by the handful of call sites that actually need it.
+///
+/// `dropped_files` (Security HIGH, #128 retry 1): a file the walk decided
+/// NOT to include in `files` at all — too large for the adapter's own
+/// walk-time size cap, unreadable, or dropped by a walker-level access
+/// error — paired with WHY, so the use case that measures the project can
+/// fold it into `unmeasurable_files` exactly as it already does for a file
+/// that WAS read and then failed later (`RunAnalysis::read_all_sources`).
+/// Before this field existed, a walk-time drop was reported only to
+/// stderr: the file vanished from the gated sum with nothing telling the
+/// gate it had ever existed — the exact `--strict` bypass Security
+/// demonstrated by inflating one file past the walk-time cap.
+///
+/// `unexplored_subtree` (Security HIGH, #128 retry 2): unlike
+/// `dropped_files` — which names an exact FILE the walk actually visited —
+/// this names an absence the walker could never observe a file COUNT for:
+/// a directory the walker truncated at `MAX_WALK_DEPTH` before descending
+/// into it, or a directory whose listing failed outright (a
+/// permission-denied subtree). Neither case can honestly populate
+/// `dropped_files` (that would require enumerating files the walk never
+/// visited), so this stays an UNQUANTIFIED boolean — "at least one subtree
+/// was not explored," never a fabricated count. Security demonstrated the
+/// consequence: a file nested past `MAX_WALK_DEPTH` vanished from BOTH
+/// `files` and `dropped_files`, `GateCoverage` read `Complete`, and
+/// `--strict` exited 0 on a project that genuinely breached.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceFileListing {
     pub files: Vec<PathBuf>,
     pub default_excluded_count: usize,
+    pub dropped_files: Vec<(PathBuf, UnmeasurableReason)>,
+    pub unexplored_subtree: bool,
 }
 
 impl std::ops::Deref for SourceFileListing {

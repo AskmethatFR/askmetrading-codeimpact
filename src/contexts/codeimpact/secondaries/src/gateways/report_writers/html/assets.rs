@@ -340,19 +340,41 @@ pub const JS: &str = r#"
   }
 
   function renderUnmeasurable() {
-    if (!data.unmeasurable_files || data.unmeasurable_files.length === 0) return null;
+    var hasFiles = data.unmeasurable_files && data.unmeasurable_files.length > 0;
+    var hasUnexplored = !!data.unexplored_subtree;
+    if (!hasFiles && !hasUnexplored) return null;
     var section = el("div", "section blueprint unmeasurable-section");
     section.appendChild(
-      el("div", "section-heading", "Fichiers non mesurés · " + data.unmeasurable_files.length)
+      el(
+        "div",
+        "section-heading",
+        "Fichiers non mesurés · " + (hasFiles ? data.unmeasurable_files.length : 0)
+      )
     );
     var list = el("div", "unmeasurable-list");
-    data.unmeasurable_files.forEach(function (f) {
-      var row = el("div", "unmeasurable-row");
-      row.appendChild(el("span", "tag sev-warning", "NON MESURÉ"));
-      row.appendChild(el("span", "unmeasurable-path", f.path));
-      row.appendChild(el("span", "unmeasurable-reason", f.reason));
-      list.appendChild(row);
-    });
+    if (hasFiles) {
+      data.unmeasurable_files.forEach(function (f) {
+        var row = el("div", "unmeasurable-row");
+        row.appendChild(el("span", "tag sev-warning", "NON MESURÉ"));
+        row.appendChild(el("span", "unmeasurable-path", f.path));
+        row.appendChild(el("span", "unmeasurable-reason", f.reason));
+        list.appendChild(row);
+      });
+    }
+    if (hasUnexplored) {
+      var subtreeRow = el("div", "unmeasurable-row");
+      subtreeRow.appendChild(el("span", "tag sev-warning", "NON EXPLORÉ"));
+      subtreeRow.appendChild(
+        el(
+          "span",
+          "unmeasurable-reason",
+          "au moins une arborescence de fichiers n'a pas pu être explorée entièrement " +
+            "(profondeur maximale atteinte ou accès refusé) — son contenu n'est comptabilisé " +
+            "nulle part"
+        )
+      );
+      list.appendChild(subtreeRow);
+    }
     section.appendChild(list);
     return section;
   }
