@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
+use codeimpact_hexagon::analysis::sanitize_console_text;
 use codeimpact_hexagon::analysis::AnalysisError;
 use codeimpact_hexagon::analysis::AnalysisTarget;
 use codeimpact_hexagon::analysis::CodeReader;
@@ -321,9 +324,35 @@ impl CodeReader for FileSystemCodeReader {
             .collect();
         let default_exclude_set = build_glob_set(&default_exclude_patterns)?;
         let default_exclude_is_empty = default_exclude_patterns.is_empty();
+        // #147 (Volet B): the analyzed repo's OWN exclude patterns —
+        // `filter.exclude()` is the union of user patterns + standing
+        // defaults, so the user subset is the union minus the exact-string
+        // default subset (same convention as
+        // `FileFilter::default_exclude_patterns()`). Distinct count so a CI
+        // has a field to branch on (ADR-0006's remediation overrides
+        // thresholds, never the measured set). Split into the walk-time-safe
+        // subset (the ONLY patterns that can prune a DIRECTORY during
+        // descent — the dir probe below must be faithful to that, a
+        // fallback-only pattern like `generated/*` would false-positive a
+        // `<dir>/__probe__` match) and the full set (post-walk FILE
+        // fallback, where any user pattern can drop a precise file).
+        let user_exclude_patterns: Vec<String> = filter
+            .exclude()
+            .iter()
+            .filter(|p| !default_exclude_patterns.contains(*p))
+            .cloned()
+            .collect();
+        let user_exclude_set = build_glob_set(&user_exclude_patterns)?;
+        let (user_walk_time_exclude, _user_fallback) =
+            partition_exclude_patterns(&user_exclude_patterns);
+        let user_walk_time_exclude_set = build_glob_set(&user_walk_time_exclude)?;
 
         let mut files = Vec::new();
         let mut default_excluded_count: usize = 0;
+        // #147 (Volet B): counts the analyzed repo's OWN exclude patterns
+        // (the union minus DEFAULT_EXCLUDES) — see
+        // `SourceFileListing::user_excluded_count`.
+        let mut user_excluded_count: usize = 0;
         let mut entries_visited: usize = 0;
         // Security HIGH (#128 retry 1): every walk-time drop below used to
         // ONLY `eprintln!` — the adapter observed the drop and never told
@@ -340,10 +369,49 @@ impl CodeReader for FileSystemCodeReader {
         // unexplored_subtree`'s doc for why this stays a bool, never a
         // fabricated count.
         let mut unexplored_subtree = false;
+        // #147 (Volet A): the crate's `hidden(true)` filter would silently
+        // drop every `.`-prefixed entry before the consumer ever saw it —
+        // the file vanished from the gated sum with no count on any
+        // surface, coverage read `Complete`, `--strict` exited 0 on a
+        // project that genuinely breached (Security demo on #128: `.heavy/`
+        // vs `heavy/`). The skip stays (`.git/`, `.venv/` must not enter
+        // the analysis) but the filter is turned OFF and re-applied HERE,
+        // where the drop is countable: `filter_entry` runs after the
+        // crate's own hidden/ignore checks (walk.rs `skip_entry`), so an
+        // entry reaching it was NOT dropped for any other reason — counting
+        // it here never double-counts a gitignore/override drop. The
+        // closure prunes a hidden DIRECTORY before descent (one entry,
+        // whatever lives inside). Deliberate, doc'd corner: a gitignore
+        // WHITELIST of a hidden path (`!.heavy/`) no longer re-includes it
+        // — hiddenness now wins over the whitelist, the honesty signal
+        // takes precedence (the crate's own hidden check also applied only
+        // when `m.is_none()`, so this only differs for a
+        // whitelisted-then-hidden path, which previously reached the
+        // measured set with no trace at all).
+        let hidden_count = Arc::new(AtomicUsize::new(0));
+        let hidden_count_in_filter = Arc::clone(&hidden_count);
         let walker = WalkBuilder::new(&canonical_root)
             .follow_links(false)
             .max_depth(Some(MAX_WALK_DEPTH))
-            .hidden(true)
+            .hidden(false)
+            .filter_entry(move |entry| {
+                // Every `.`-prefixed entry (dir or file) is counted and
+                // skipped — same scope as the crate's own `hidden(true)`
+                // check (`is_hidden_entry`, which applies to ANY entry
+                // regardless of extension), so the count answers exactly
+                // "how many walk entries did hiddenness drop". A hidden
+                // DIRECTORY is pruned before descent (one entry, whatever
+                // lives inside). No depth guard here: the crate's own
+                // `skip_entry` returns `false` for the depth-0 root
+                // BEFORE this predicate ever runs (walk.rs), so the root
+                // can never be a counted drop — a `depth() > 0` guard
+                // would be dead code (mutation gate, #147).
+                if entry.file_name().to_string_lossy().starts_with('.') {
+                    hidden_count_in_filter.fetch_add(1, Ordering::Relaxed);
+                    return false;
+                }
+                true
+            })
             .overrides(exclude_overrides)
             // `ignore`'s WalkBuilder exposes FOUR independent ignore-source
             // toggles (git_ignore/.gitignore, git_exclude/.git/info/exclude,
@@ -426,6 +494,14 @@ impl CodeReader for FileSystemCodeReader {
                             let probe = relative.join("__codeimpact_default_excluded_probe__");
                             if default_exclude_set.is_match(&probe) {
                                 default_excluded_count += 1;
+                            } else if user_walk_time_exclude_set.is_match(&probe) {
+                                // #147 (Volet B): the same pruned-subtree
+                                // probe, attributed to the analyzed repo's
+                                // OWN pattern instead of a standing default.
+                                // No empty-guard: a GlobSet with zero
+                                // patterns matches nothing, so the guard was
+                                // an equivalent-branch (mutation gate, #147).
+                                user_excluded_count += 1;
                             }
                         }
                         continue;
@@ -451,6 +527,13 @@ impl CodeReader for FileSystemCodeReader {
                         // path ALSO matches the default-only subset.
                         if !default_exclude_is_empty && default_exclude_set.is_match(relative) {
                             default_excluded_count += 1;
+                        } else if user_exclude_set.is_match(relative) {
+                            // #147 (Volet B): same precise-file attribution
+                            // for the analyzed repo's OWN pattern. No
+                            // empty-guard: a GlobSet with zero patterns
+                            // matches nothing, so the guard was an
+                            // equivalent-branch (mutation gate, #147).
+                            user_excluded_count += 1;
                         }
                         continue;
                     }
@@ -461,7 +544,9 @@ impl CodeReader for FileSystemCodeReader {
                         Ok(_) => {
                             eprintln!(
                                 "Avertissement: fichier ignoré (trop volumineux): {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
+                                sanitize_console_text(
+                                    &path.file_name().unwrap_or_default().to_string_lossy()
+                                )
                             );
                             dropped_files
                                 .push((path.to_path_buf(), UnmeasurableReason::SourceTooLarge));
@@ -469,7 +554,9 @@ impl CodeReader for FileSystemCodeReader {
                         Err(_) => {
                             eprintln!(
                                 "Avertissement: fichier ignoré (illisible): {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
+                                sanitize_console_text(
+                                    &path.file_name().unwrap_or_default().to_string_lossy()
+                                )
                             );
                             dropped_files
                                 .push((path.to_path_buf(), UnmeasurableReason::SourceUnreadable));
@@ -503,6 +590,12 @@ impl CodeReader for FileSystemCodeReader {
         Ok(SourceFileListing {
             files,
             default_excluded_count,
+            user_excluded_count,
+            // #147 (Volet A): read AFTER the walk — the counter lives in the
+            // walker's own `filter_entry` closure (possibly worker threads),
+            // accumulated there because skipped entries are never yielded to
+            // this loop.
+            hidden_excluded_count: hidden_count.load(Ordering::Relaxed),
             dropped_files,
             unexplored_subtree,
         })

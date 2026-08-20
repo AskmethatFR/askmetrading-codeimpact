@@ -86,6 +86,22 @@ struct MetricsDto {
     /// `SourceFileListing::default_excluded_count` for the exact
     /// entries-vs-files semantics.
     default_excluded_files_count: usize,
+    /// Count of walk entries dropped by the analyzed repository's OWN
+    /// exclude patterns (#147, Volet B — MEDIUM): the twin of
+    /// `default_excluded_files_count` for the user subset of `exclude()`.
+    /// Never skipped, same "0 is an honest answer" convention — before it,
+    /// a `.codeimpact.json` `exclude` shrank the measured set with no
+    /// machine-readable trace (ADR-0006's remediation overrides
+    /// thresholds, never the measured set). Always 0 for a single-file
+    /// report (D3).
+    user_excluded_files_count: usize,
+    /// Count of walk entries dropped for a `.`-prefixed name (#147, Volet
+    /// A — HIGH): `.git/`, `.venv/`, a hostile `.heavy/`. Never skipped,
+    /// same convention — the skip is deliberate, the count is the trace
+    /// that was missing (before it, coverage read `Complete` and `--strict`
+    /// exited 0 on a project that genuinely breached). Always 0 for a
+    /// single-file report (D3).
+    hidden_excluded_files_count: usize,
     /// Loop-nested calls whose receiver could not be classified at all
     /// (#56 T2, `IoClassification::Unknown`) — an aggregate signal only
     /// (ADR-0010/ADR-0014 §4). `None` (T3 #33) exactly when `io_in_loops`
@@ -463,6 +479,8 @@ pub fn serialize_metrics(
             unmeasurable_files_count: 0,
             unexplored_subtree: false,
             default_excluded_files_count: 0,
+            user_excluded_files_count: 0,
+            hidden_excluded_files_count: 0,
             unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(metrics.threshold_report()),
             metric_support: metric_support_dto(metrics.capabilities()),
@@ -541,6 +559,8 @@ pub fn serialize_project_metrics(
             unmeasurable_files,
             unexplored_subtree: graph.unexplored_subtree(),
             default_excluded_files_count: aggregated.default_excluded_files_count,
+            user_excluded_files_count: aggregated.user_excluded_files_count,
+            hidden_excluded_files_count: aggregated.hidden_excluded_files_count,
             unclassifiable_io_in_loops_count,
             thresholds: threshold_dto(graph.threshold_report()),
             metric_support: metric_support_dto_from_aggregate(&aggregated.metric_support),

@@ -3098,3 +3098,46 @@ fn e2e_analyze_path_traversal_include_pattern_is_rejected() {
         stderr
     );
 }
+
+// #147 (Volet C, LOW): a hostile FILE NAME must not leak a raw ANSI escape
+// into stderr. `run_analysis` prints "impossible d'analyser <name>" when a
+// walked file fails to parse — before this fix the name went out raw, so a
+// `\x1b[8m z.rs` (conceal attribute) left an active SGR attribute that hid
+// the very next line (Security demo on #128: the `[SEUIL NON ÉVALUABLE EN
+// TOTALITÉ]` coverage warning became invisible). Sanitized names render as
+// `\u{1b}`, visible and forensic.
+#[test]
+fn e2e_hostile_file_name_does_not_leak_raw_ansi_into_stderr() {
+    let binary = binary_path();
+    let dir = isolated_us31_dir("hostile_name");
+    // A good file keeps the project non-empty (MED-1 zero-measured-files
+    // guard) so the walk proceeds and the per-file warning fires.
+    std::fs::write(dir.join("good.rs"), "fn good() {}").unwrap();
+    let hostile = dir.join("\u{1b}[8m hidden.rs");
+    std::fs::write(&hostile, "not valid rust {{{").unwrap();
+
+    let output = Command::new(&binary)
+        .args(["analyze", "--path", dir.to_str().unwrap()])
+        .output()
+        .expect("failed to execute binary");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a project with one hostile unparseable file is a partial scan, not \
+         a hard error — exit 0 (no threshold configured). stderr: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "a raw ESC byte from the hostile file name reached stderr: {:?}",
+        stderr
+    );
+    assert!(
+        stderr.contains("\\u{1b}"),
+        "the hostile name must render as the sanitized \\u{{1b}} marker: {}",
+        stderr
+    );
+}

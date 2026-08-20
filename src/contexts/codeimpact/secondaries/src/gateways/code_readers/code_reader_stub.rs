@@ -73,6 +73,8 @@ impl CodeReader for CodeReaderStub {
         Ok(SourceFileListing {
             files: self.source_files.clone(),
             default_excluded_count: 0,
+            user_excluded_count: 0,
+            hidden_excluded_count: 0,
             dropped_files: self.dropped_files.clone(),
             unexplored_subtree: self.unexplored_subtree,
         })

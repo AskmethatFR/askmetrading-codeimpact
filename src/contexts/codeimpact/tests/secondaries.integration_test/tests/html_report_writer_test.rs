@@ -331,12 +331,13 @@ fn zero_function_file_renders_level_none_and_js_maps_it_to_its_own_class() {
     );
 }
 
-// ── #46/#49 T2: build_stats() is a pure render — 10-tile aggregated stat
-// grid (#56 T2 added Unclassifiable), everything sourced from ProjectMetrics
-// (zero local calculation) ──
+// ── #46/#49 T2: build_stats() is a pure render — 13-tile aggregated stat
+// grid (#56 T2 added Unclassifiable; #147 adds the three excluded-count
+// tiles: Excluded config / Excluded default / Hidden entries) — everything
+// sourced from ProjectMetrics (zero local calculation) ──
 //
 // Test List (T2):
-// 1. exactly 9 stat tiles are emitted, Direct Σ is the SUM of files'
+// 1. exactly 13 stat tiles are emitted, Direct Σ is the SUM of files'
 //    cyclomatic complexity (a max/first-file bug must fail this)
 // 2. the Warnings tile counts ComplexityWarning ONLY — critical sub counts
 //    critical-severity warnings ONLY. IoInLoopWarning has no severity (it
@@ -355,6 +356,8 @@ fn zero_function_file_renders_level_none_and_js_maps_it_to_its_own_class() {
 // 8. (#89 S1) a Rust-only project (no capabilities attached) keeps every
 //    tile's support "supported" and every value/sub unchanged — regression
 //    pin for wiring StatVm.support.
+// 9. (#147) the three excluded-count tiles render their exact counts and
+//    are never omitted (0 is an honest answer).
 
 fn extract_data_island(html: &str) -> serde_json::Value {
     let start_marker = r#"<script id="ci-data" type="application/json">"#;
@@ -385,8 +388,9 @@ fn stat_grid_has_nine_tiles_with_aggregated_values() {
     // instead — that field only exists on StatVm.
     assert_eq!(
         html.matches("\"sub\":").count(),
-        10,
-        "expected exactly 10 stat tiles (#56 T2 adds Unclassifiable): {}",
+        13,
+        "expected exactly 13 stat tiles (#56 T2 adds Unclassifiable, #147 \
+         adds Excluded config / Excluded default / Hidden entries): {}",
         html
     );
     assert!(
@@ -394,6 +398,39 @@ fn stat_grid_has_nine_tiles_with_aggregated_values() {
         "Direct \u{3a3} must be the SUM of files' cyclomatic complexity (5+3=8), not a max/first-file value: {}",
         html
     );
+}
+
+// #147 (Volet A + B): the three excluded-count tiles must render their
+// exact counts and never be omitted — a zero count is an honest answer
+// (same convention as the console/JSON writers).
+#[test]
+fn stat_grid_renders_the_three_excluded_count_tiles() {
+    let writer = HtmlReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_default_excluded_count(4)
+        .with_user_excluded_count(2)
+        .with_hidden_excluded_count(3);
+
+    let html = writer
+        .write_html(&graph, "proj")
+        .expect("write_html should succeed");
+    let data = extract_data_island(&html);
+
+    let stats = data["stats"].as_array().expect("stats array");
+    let tile = |label: &str| {
+        stats
+            .iter()
+            .find(|s| s["label"] == label)
+            .unwrap_or_else(|| panic!("missing stat tile {label}"))
+    };
+    assert_eq!(tile("Excluded config")["value"], "2");
+    assert_eq!(tile("Excluded default")["value"], "4");
+    assert_eq!(tile("Hidden entries")["value"], "3");
 }
 
 #[test]
@@ -517,8 +554,9 @@ fn stat_tiles_rust_only_project_stay_supported_and_unchanged() {
 
     assert_eq!(
         stats.len(),
-        10,
-        "no tile was added or removed by wiring metric_support: {}",
+        13,
+        "no tile was added or removed by wiring metric_support (#147 adds \
+         the three excluded-count tiles): {}",
         html
     );
     for tile in stats {

@@ -349,6 +349,81 @@ fn project_json_includes_default_excluded_files_count() {
     assert_eq!(json["metrics"]["default_excluded_files_count"], 7);
 }
 
+// #147 (Volet B, MEDIUM): the analyzed repo's OWN exclude patterns get
+// their own JSON field — a CI parsing the report can branch on it (before,
+// `.codeimpact.json`'s `exclude` shrank the measured set with zero machine
+// trace). Never skipped, same "0 is an honest answer" convention.
+#[test]
+fn project_json_includes_user_excluded_files_count() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_user_excluded_count(2);
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["user_excluded_files_count"], 2);
+}
+
+#[test]
+fn project_json_reports_zero_user_excluded_files_by_default() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["user_excluded_files_count"], 0);
+}
+
+// #147 (Volet A, HIGH): the count of `.`-prefixed walk entries skipped by
+// the adapter — the trace that was missing (before it, coverage read
+// Complete and --strict exited 0 on a project that genuinely breached).
+#[test]
+fn project_json_includes_hidden_excluded_files_count() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_hidden_excluded_count(3);
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["hidden_excluded_files_count"], 3);
+}
+
+#[test]
+fn project_json_reports_zero_hidden_excluded_files_by_default() {
+    let writer = JsonReportWriter::new();
+    let files = vec![(
+        PathBuf::from("a.rs"),
+        CodeMetrics::with_call_graph(5, 8, 0, vec![], vec![]),
+    )];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+
+    let result = writer.write_project_json(&graph, "proj");
+    let json_str = result.expect("write_project_json should succeed");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(json["metrics"]["hidden_excluded_files_count"], 0);
+}
+
 #[test]
 fn project_json_reports_zero_default_excluded_files_by_default() {
     let writer = JsonReportWriter::new();
