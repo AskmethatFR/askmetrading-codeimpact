@@ -1277,6 +1277,251 @@ fn default_excluded_count_is_exactly_zero_when_nothing_is_excluded_by_default() 
     );
 }
 
+// #147 (Volet A, HIGH — Security demonstrated on #128): `WalkBuilder::
+// hidden(true)` silently dropped every `.`-prefixed entry — the file was
+// never measured, never in `unmeasurable_files`, never in
+// `default_excluded_count`, coverage read `Complete`, and `--strict`
+// exited 0 on a project that genuinely breached (`heavy/` → exit 3,
+// `.heavy/` → exit 0 silent). The skip itself is deliberate (`.git/`,
+// `.venv/` must not enter the analysis) — what was missing was the
+// trace. `SourceFileListing::hidden_excluded_count` closes it.
+//
+// Test List (Volet A):
+// 1. a hidden DIRECTORY (`.heavy/`) counts as exactly ONE entry (pruned
+//    before descent) however many files it contains — and those files
+//    never enter the measured set
+// 2. a hidden FILE (`.hidden.rs`) counts individually, once
+// 3. a hidden walk ROOT (the analyzed dir itself is `.`-named) is never
+//    counted — the depth-0 entry is the fixture, not a drop
+// 4. a hidden entry with an UNREGISTERED extension (`.env`) is counted
+//    too — same scope as the crate's own `hidden(true)` check, which
+//    applies to ANY entry regardless of extension (the drop reason IS
+//    hiddenness, not the extension)
+// 5. no hidden entries -> count is exactly 0
+// @scenario: typescript-javascript-analysis/S7
+
+#[test]
+fn hidden_entries_are_counted_and_kept_out_of_the_measured_set() {
+    let dir = isolated_walk_dir("hidden_excluded_count");
+    // (1) a hidden directory holding REGISTERED-extension files — must
+    // count as ONE entry and its contents must never be measured.
+    std::fs::create_dir_all(dir.join(".heavy")).unwrap();
+    for i in 0..3 {
+        std::fs::write(dir.join(".heavy").join(format!("f{i}.rs")), "fn f() {}").unwrap();
+    }
+    // (2) a hidden FILE with a registered extension — counted individually.
+    std::fs::write(dir.join(".hidden.rs"), "fn hidden() {}").unwrap();
+    // (4) a hidden FILE with an UNREGISTERED extension — still counted:
+    // hiddenness is the drop reason (the crate's own hidden check runs
+    // before any extension logic).
+    std::fs::write(dir.join(".env"), "KEY=value").unwrap();
+    // A visible file must survive and be the ONLY measured one.
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.files.len(),
+        1,
+        "only keep.rs should be measured, got {:?}",
+        listing.files
+    );
+    assert!(
+        listing.files.iter().any(|f| f.ends_with("keep.rs")),
+        "keep.rs must be measured, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.hidden_excluded_count, 3,
+        "expected exactly 3 (.heavy/ pruned as ONE entry + .hidden.rs \
+         counted individually + .env counted individually — hiddenness is \
+         the drop reason whatever the extension), got {}",
+        listing.hidden_excluded_count
+    );
+}
+
+#[test]
+fn hidden_walk_root_is_not_counted_as_hidden() {
+    let parent = isolated_walk_dir("hidden_root");
+    // The analyzed directory itself is `.`-named — the depth-0 entry is
+    // the fixture the operator pointed the tool at, not a silent drop.
+    let dir = parent.join(".project");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.files.len(),
+        1,
+        "the hidden-named ROOT must still be walked, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.hidden_excluded_count, 0,
+        "a hidden-named root is the fixture, not a drop, got {}",
+        listing.hidden_excluded_count
+    );
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+#[test]
+fn hidden_excluded_count_is_exactly_zero_when_nothing_is_hidden() {
+    let dir = isolated_walk_dir("hidden_excluded_count_zero");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.hidden_excluded_count, 0,
+        "nothing in this fixture is hidden, count must be exactly 0, got {}",
+        listing.hidden_excluded_count
+    );
+}
+
+// #147 (Volet B, MEDIUM): `.codeimpact.json`'s `exclude` shrank the
+// measured set with zero machine trace — `default_excluded_count` only
+// counts the standing DEFAULT_EXCLUDES subset, so a CI had no field to
+// branch on and ADR-0006's documented remediation (`--max-kwh` /
+// `--max-co2` override thresholds) had no equivalent for the measured
+// SET. `SourceFileListing::user_excluded_count` closes it.
+//
+// Test List (Volet B):
+// 1. a user fallback FILE pattern (`**/d.rs`, never walk-time-safe) is
+//    counted individually — one file, one increment — while
+//    default_excluded_count stays 0
+// 2. a user walk-time-safe DIRECTORY pattern (`generated/**`) counts as
+//    exactly ONE entry (the pruned directory itself)
+// 3. a user pattern byte-identical to a standing default
+//    (`node_modules/**`) is attributed to DEFAULT_EXCLUDES, not the user
+//    count — same exact-string convention as
+//    `FileFilter::default_exclude_patterns()`
+// 4. no user excludes -> count is exactly 0
+// @scenario: typescript-javascript-analysis/S7
+
+#[test]
+fn user_excluded_count_reflects_user_file_patterns_not_defaults() {
+    let dir = isolated_walk_dir("user_excluded_count_file");
+    std::fs::write(dir.join("a.rs"), "fn a() {}").unwrap();
+    std::fs::write(dir.join("b.rs"), "fn b() {}").unwrap();
+    std::fs::write(dir.join("d.rs"), "fn d() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["**/d.rs".to_string()], false).unwrap();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.files.len(),
+        2,
+        "a.rs and b.rs should survive, d.rs must be excluded, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.user_excluded_count, 1,
+        "**/d.rs is the user's own (non-default) pattern — d.rs must be \
+         attributed to the user count, got {}",
+        listing.user_excluded_count
+    );
+    assert_eq!(
+        listing.default_excluded_count, 0,
+        "no standing default matched here, got {}",
+        listing.default_excluded_count
+    );
+}
+
+#[test]
+fn user_excluded_count_counts_a_pruned_directory_as_one_entry() {
+    let dir = isolated_walk_dir("user_excluded_count_dir");
+    // `generated/**` is dialect-safe (exact shape <literal>/**), so it
+    // PRUNES the subtree at walk time — the directory entry counts as
+    // ONE regardless of how many files live inside.
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    for i in 0..4 {
+        std::fs::write(dir.join("generated").join(format!("f{i}.rs")), "fn f() {}").unwrap();
+    }
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["generated/**".to_string()], false).unwrap();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.files.len(),
+        1,
+        "only keep.rs should survive, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.user_excluded_count, 1,
+        "generated/ pruned at walk time must count as exactly ONE entry, \
+         got {}",
+        listing.user_excluded_count
+    );
+    assert_eq!(
+        listing.default_excluded_count, 0,
+        "generated/ is not a standing default, got {}",
+        listing.default_excluded_count
+    );
+}
+
+#[test]
+fn user_pattern_identical_to_a_default_is_attributed_to_the_default_count() {
+    let dir = isolated_walk_dir("user_excluded_count_default_twin");
+    std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+    std::fs::write(dir.join("node_modules").join("f.js"), "var x=1;").unwrap();
+    std::fs::write(dir.join("keep.js"), "var keep=1;").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let filter = FileFilter::new(vec![], vec!["node_modules/**".to_string()], false).unwrap();
+    let listing = reader
+        .list_source_files(&dir, &["js"], &filter)
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.default_excluded_count, 1,
+        "a user pattern byte-identical to a standing default is attributed \
+         to the DEFAULT count (exact-string convention of \
+         FileFilter::default_exclude_patterns()), got {}",
+        listing.default_excluded_count
+    );
+    assert_eq!(
+        listing.user_excluded_count, 0,
+        "the same pattern must not be double-counted, got {}",
+        listing.user_excluded_count
+    );
+}
+
+#[test]
+fn user_excluded_count_is_exactly_zero_without_user_excludes() {
+    let dir = isolated_walk_dir("user_excluded_count_zero");
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &FileFilter::unrestricted())
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.user_excluded_count, 0,
+        "no user exclude patterns, count must be exactly 0, got {}",
+        listing.user_excluded_count
+    );
+}
+
 // Security HIGH (retry 1, #128) — a file over `MAX_FILE_SIZE` (10 MiB) is
 // dropped from `files` at walk time, before it is ever read — that alone is
 // legitimate (it bounds RSS), but until now the drop was reported ONLY to

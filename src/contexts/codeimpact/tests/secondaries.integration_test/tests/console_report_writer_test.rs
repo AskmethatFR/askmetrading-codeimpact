@@ -170,6 +170,78 @@ fn write_project_report_shows_zero_default_excluded_count_by_default() {
     );
 }
 
+// #147 (Volet B, MEDIUM): the analyzed repo's OWN exclude patterns get
+// their own console line — a CI reading the console can see the measured
+// set shrink even when no standing default fires. Never skipped, same "0
+// is an honest answer" convention as the default line.
+#[test]
+fn write_project_report_shows_user_excluded_count() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_user_excluded_count(2);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Fichiers exclus par configuration: 2"),
+        "expected the exact user-excluded count in the summary, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_shows_zero_user_excluded_count_by_default() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Fichiers exclus par configuration: 0"),
+        "zero must still be printed (never skipped), got: {}",
+        output
+    );
+}
+
+// #147 (Volet A, HIGH): `.`-prefixed walk entries (`.git/`, `.venv/`, a
+// hostile `.heavy/`) are skipped by design but were previously silent —
+// this line is the trace that was missing (before it, coverage read
+// Complete and --strict exited 0 on a project that genuinely breached).
+#[test]
+fn write_project_report_shows_hidden_excluded_count() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![])
+        .unwrap()
+        .with_hidden_excluded_count(3);
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Fichiers cachés exclus: 3"),
+        "expected the exact hidden count in the summary, got: {}",
+        output
+    );
+}
+
+#[test]
+fn write_project_report_shows_zero_hidden_excluded_count_by_default() {
+    let writer = ConsoleReportWriter::new();
+    let files = vec![(path("a.rs"), CodeMetrics::new(5))];
+    let graph = FileConsumptionGraph::build(&files, vec![]).unwrap();
+    let mut buf = Vec::new();
+    writer.write_project_report_to(&mut buf, &graph);
+    let output = String::from_utf8(buf).unwrap();
+    assert!(
+        output.contains("Fichiers cachés exclus: 0"),
+        "zero must still be printed (never skipped), got: {}",
+        output
+    );
+}
+
 #[test]
 fn write_console_with_io_in_loops() {
     let writer = ConsoleReportWriter::new();
