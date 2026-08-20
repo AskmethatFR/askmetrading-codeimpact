@@ -343,11 +343,9 @@ impl CodeReader for FileSystemCodeReader {
             .cloned()
             .collect();
         let user_exclude_set = build_glob_set(&user_exclude_patterns)?;
-        let user_exclude_is_empty = user_exclude_patterns.is_empty();
         let (user_walk_time_exclude, _user_fallback) =
             partition_exclude_patterns(&user_exclude_patterns);
         let user_walk_time_exclude_set = build_glob_set(&user_walk_time_exclude)?;
-        let user_walk_time_exclude_is_empty = user_walk_time_exclude.is_empty();
 
         let mut files = Vec::new();
         let mut default_excluded_count: usize = 0;
@@ -403,8 +401,12 @@ impl CodeReader for FileSystemCodeReader {
                 // regardless of extension), so the count answers exactly
                 // "how many walk entries did hiddenness drop". A hidden
                 // DIRECTORY is pruned before descent (one entry, whatever
-                // lives inside); the depth-0 root is never a drop.
-                if entry.depth() > 0 && entry.file_name().to_string_lossy().starts_with('.') {
+                // lives inside). No depth guard here: the crate's own
+                // `skip_entry` returns `false` for the depth-0 root
+                // BEFORE this predicate ever runs (walk.rs), so the root
+                // can never be a counted drop — a `depth() > 0` guard
+                // would be dead code (mutation gate, #147).
+                if entry.file_name().to_string_lossy().starts_with('.') {
                     hidden_count_in_filter.fetch_add(1, Ordering::Relaxed);
                     return false;
                 }
@@ -492,12 +494,13 @@ impl CodeReader for FileSystemCodeReader {
                             let probe = relative.join("__codeimpact_default_excluded_probe__");
                             if default_exclude_set.is_match(&probe) {
                                 default_excluded_count += 1;
-                            } else if !user_walk_time_exclude_is_empty
-                                && user_walk_time_exclude_set.is_match(&probe)
-                            {
+                            } else if user_walk_time_exclude_set.is_match(&probe) {
                                 // #147 (Volet B): the same pruned-subtree
                                 // probe, attributed to the analyzed repo's
                                 // OWN pattern instead of a standing default.
+                                // No empty-guard: a GlobSet with zero
+                                // patterns matches nothing, so the guard was
+                                // an equivalent-branch (mutation gate, #147).
                                 user_excluded_count += 1;
                             }
                         }
@@ -524,9 +527,12 @@ impl CodeReader for FileSystemCodeReader {
                         // path ALSO matches the default-only subset.
                         if !default_exclude_is_empty && default_exclude_set.is_match(relative) {
                             default_excluded_count += 1;
-                        } else if !user_exclude_is_empty && user_exclude_set.is_match(relative) {
+                        } else if user_exclude_set.is_match(relative) {
                             // #147 (Volet B): same precise-file attribution
-                            // for the analyzed repo's OWN pattern.
+                            // for the analyzed repo's OWN pattern. No
+                            // empty-guard: a GlobSet with zero patterns
+                            // matches nothing, so the guard was an
+                            // equivalent-branch (mutation gate, #147).
                             user_excluded_count += 1;
                         }
                         continue;
