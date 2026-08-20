@@ -55,10 +55,39 @@ use super::measurement::UnmeasurableReason;
 /// consequence: a file nested past `MAX_WALK_DEPTH` vanished from BOTH
 /// `files` and `dropped_files`, `GateCoverage` read `Complete`, and
 /// `--strict` exited 0 on a project that genuinely breached.
+/// `user_excluded_count` (#147, Volet B — MEDIUM): the twin of
+/// `default_excluded_count` for patterns the ANALYZED REPOSITORY wrote in
+/// `.codeimpact.json` (`FileFilter::exclude()`'s user subset, i.e. the
+/// union minus the standing `DEFAULT_EXCLUDES`). Same entries-vs-files
+/// semantics, same "reported, never gating" treatment as the default
+/// count. Before this field existed, an `exclude` in `.codeimpact.json`
+/// shrank the measured set with zero machine trace — no count, no JSON
+/// field, no console line — defeating ADR-0006's documented remediation
+/// (`--max-kwh`/`--max-co2` override thresholds, but nothing overrides
+/// `exclude`): the count gives a CI a field to branch on.
+///
+/// `hidden_excluded_count` (#147, Volet A — HIGH): the count of walk
+/// entries the adapter skipped because their name starts with `.`
+/// (`.git/`, `.venv/`, a hostile `.heavy/`). Before this field existed,
+/// `WalkBuilder::hidden(true)` dropped them silently: never in `files`,
+/// never in `dropped_files`, never in either excluded count — coverage
+/// read `Complete` and `--strict` exited 0 on a project that genuinely
+/// breached (Security demonstrated: `heavy/` → exit 3, `.heavy/` → exit 0
+/// silent). Same "count of pruned walk entries, never a fabricated file
+/// count" semantics as the other two counts: a `.`-prefixed DIRECTORY is
+/// pruned before descent, so it counts as ONE entry however many files
+/// live inside it. The skip itself is deliberate (`.git/`, `.venv/` must
+/// not enter the analysis) — what was missing was the trace, and the
+/// invariant ADR-0006 now states: every walk entry the adapter discards
+/// either reaches the domain as a named file/count or the gate cannot
+/// claim `Complete`; these counts ARE the domain reaching for the
+/// non-nameable drops.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceFileListing {
     pub files: Vec<PathBuf>,
     pub default_excluded_count: usize,
+    pub user_excluded_count: usize,
+    pub hidden_excluded_count: usize,
     pub dropped_files: Vec<(PathBuf, UnmeasurableReason)>,
     pub unexplored_subtree: bool,
 }

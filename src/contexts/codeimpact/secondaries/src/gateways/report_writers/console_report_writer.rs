@@ -435,6 +435,27 @@ impl ConsoleReportWriter {
             aggregated.default_excluded_files_count
         )
         .unwrap();
+        // #147 (Volet B, MEDIUM): the analyzed repo's OWN exclude patterns
+        // get their own line — a CI reading the console can now see the
+        // measured set shrink even when no standing default fired. Never
+        // skipped, same "0 is an honest answer" convention as the default
+        // line above.
+        writeln!(
+            writer,
+            "Fichiers exclus par configuration: {}",
+            aggregated.user_excluded_files_count
+        )
+        .unwrap();
+        // #147 (Volet A, HIGH): `.`-prefixed walk entries (`.git/`,
+        // `.venv/`, a hostile `.heavy/`) are skipped by design but were
+        // previously silent — this line is the trace that was missing.
+        // Never skipped, same convention.
+        writeln!(
+            writer,
+            "Fichiers cachés exclus: {}",
+            aggregated.hidden_excluded_files_count
+        )
+        .unwrap();
         // #132 T3 (AD-6, dependency-graph-integrity/S2): the edge count is
         // never shown without stating what the graph cannot see — same
         // "[dégradé: <reason>]" append the per-file transitive-complexity

@@ -9,6 +9,7 @@ use super::code_location::CodeLocation;
 use super::code_metrics::CodeMetrics;
 use super::code_parser::{CodeParser, DependencyContext};
 use super::code_reader::CodeReader;
+use super::console_sanitize::sanitize_console_text;
 use super::ecological_impact::EcologicalImpactEstimator;
 use super::errors::AnalysisError;
 use super::file_consumption_graph::{FileConsumptionGraph, UnmeasurableFile};
@@ -150,9 +151,17 @@ impl RunAnalysis {
                     per_file.push((file.clone(), metrics));
                 }
                 Err(e) => {
+                    // #147 (Volet C, LOW): the file name is analyzed-repo
+                    // input — a raw ANSI sequence in it would leave an
+                    // active SGR attribute that can hide the coverage
+                    // warning printed next (Security demo on #128 with
+                    // `\x1b[8m z.rs`). Sanitized before reaching stderr,
+                    // same discipline as the console report writer (S6).
                     eprintln!(
                         "Avertissement: impossible d'analyser {}: {}",
-                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        sanitize_console_text(
+                            &file.file_name().unwrap_or_default().to_string_lossy()
+                        ),
                         e
                     );
                     let reason = match e {
@@ -181,7 +190,9 @@ impl RunAnalysis {
                 Err(e) => {
                     eprintln!(
                         "Avertissement: impossible de parser les dépendances de {}: {}",
-                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        sanitize_console_text(
+                            &file.file_name().unwrap_or_default().to_string_lossy()
+                        ),
                         e
                     );
                 }
@@ -207,6 +218,8 @@ impl RunAnalysis {
         let graph = FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count)
+            .with_user_excluded_count(files.user_excluded_count)
+            .with_hidden_excluded_count(files.hidden_excluded_count)
             .with_unexplored_subtree(files.unexplored_subtree);
         let unmeasurable_count = graph.unmeasurable_files().len();
         let unexplored_subtree = graph.unexplored_subtree();
@@ -247,7 +260,9 @@ impl RunAnalysis {
                 Err(e) => {
                     eprintln!(
                         "Avertissement: impossible de lire {}: {}",
-                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        sanitize_console_text(
+                            &file.file_name().unwrap_or_default().to_string_lossy()
+                        ),
                         e
                     );
                     unmeasurable.push(UnmeasurableFile {
@@ -295,9 +310,12 @@ impl RunAnalysis {
     /// (`Complete`, however many files went unmeasured): an ungated project
     /// has nothing the gate could have missed. `unmeasurable_files` only
     /// ever counts a FAILED measurement — a deliberate exclusion
-    /// (`default_excluded_count`, `file_filter`) never reaches this count,
-    /// it is a configuration decision, not a measurement failure (out of
-    /// scope item 3).
+    /// (`default_excluded_count`, `user_excluded_count`,
+    /// `hidden_excluded_count`, `file_filter`) never reaches this count,
+    /// it is a configuration/standing decision, not a measurement failure
+    /// (out of scope item 3) — the counts are REPORTED on all three
+    /// surfaces (ADR-0006's invariant: a discarded entry reaches the
+    /// domain as a named file or a named count), they do not gate.
     // #128 retry 2 (Security HIGH): `unexplored_subtree` now genuinely
     // participates in the Complete/Partial decision — a truncated or
     // access-denied subtree marks coverage incomplete even when zero
@@ -558,6 +576,8 @@ impl RunAnalysis {
         Ok(FileConsumptionGraph::build(&per_file, all_deps)?
             .with_unmeasurable_files(unmeasurable)
             .with_default_excluded_count(files.default_excluded_count)
+            .with_user_excluded_count(files.user_excluded_count)
+            .with_hidden_excluded_count(files.hidden_excluded_count)
             .with_unexplored_subtree(files.unexplored_subtree))
     }
 }

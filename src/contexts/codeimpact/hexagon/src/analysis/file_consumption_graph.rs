@@ -53,6 +53,16 @@ pub struct FileConsumptionGraph {
     /// ever attached one — a stub-backed `CodeReader` in a unit test,
     /// say).
     default_excluded_count: usize,
+    /// Count of walk entries dropped by the analyzed repository's OWN
+    /// exclude patterns (#147, Volet B) — see
+    /// `SourceFileListing::user_excluded_count` for the exact
+    /// entries-vs-files semantics and why the count must exist separately
+    /// from `default_excluded_count` (a CI field to branch on).
+    user_excluded_count: usize,
+    /// Count of walk entries dropped for a `.`-prefixed name (#147, Volet
+    /// A) — see `SourceFileListing::hidden_excluded_count` for the exact
+    /// semantics (the skip stays; only the trace was missing).
+    hidden_excluded_count: usize,
     /// Whether the walk left at least one directory subtree unexplored
     /// (#128 retry 2) — see `SourceFileListing::unexplored_subtree` for the
     /// exact two conditions. Unlike `default_excluded_count`, this DOES get
@@ -132,6 +142,8 @@ impl FileConsumptionGraph {
             unmeasurable_files: Vec::new(),
             threshold_report: None,
             default_excluded_count: 0,
+            user_excluded_count: 0,
+            hidden_excluded_count: 0,
             unexplored_subtree: false,
         })
     }
@@ -161,6 +173,25 @@ impl FileConsumptionGraph {
     /// survived, because nothing ever called it).
     pub fn with_default_excluded_count(mut self, count: usize) -> Self {
         self.default_excluded_count = count;
+        self
+    }
+
+    /// Attaches the count of walk entries the analyzed repository's OWN
+    /// exclude patterns dropped (#147, Volet B) — builder style, mirroring
+    /// `with_default_excluded_count`. No standalone getter, same reasoning
+    /// as `with_default_excluded_count`'s doc (the value is fully exposed
+    /// via `aggregated_metrics().user_excluded_files_count`; a second
+    /// accessor had no calling use case).
+    pub fn with_user_excluded_count(mut self, count: usize) -> Self {
+        self.user_excluded_count = count;
+        self
+    }
+
+    /// Attaches the count of walk entries dropped for a `.`-prefixed name
+    /// (#147, Volet A) — builder style, mirroring
+    /// `with_default_excluded_count`. No standalone getter, same reasoning.
+    pub fn with_hidden_excluded_count(mut self, count: usize) -> Self {
+        self.hidden_excluded_count = count;
         self
     }
 
@@ -294,6 +325,8 @@ impl FileConsumptionGraph {
             total_ecological_impact,
             unmeasurable_files: self.unmeasurable_files.len(),
             default_excluded_files_count: self.default_excluded_count,
+            user_excluded_files_count: self.user_excluded_count,
+            hidden_excluded_files_count: self.hidden_excluded_count,
             median_file_cyclomatic_complexity: median_cyclomatic_complexity(&self.per_file_metrics),
             metric_support: AggregateMetricSupport::fold(
                 self.per_file_metrics.values().map(|m| m.capabilities()),
@@ -510,6 +543,22 @@ pub struct ProjectMetrics {
     /// pruned directory counts as ONE entry regardless of how many files
     /// live inside it.
     pub default_excluded_files_count: usize,
+    /// Count of walk entries dropped by the analyzed repository's OWN
+    /// exclude patterns (#147, Volet B — MEDIUM, from #145): the twin of
+    /// `default_excluded_files_count` for the user subset of `exclude()`.
+    /// Same COUNT OF PRUNED WALK ENTRIES semantics. Exists so a CI has a
+    /// field to branch on — before it, `.codeimpact.json`'s `exclude`
+    /// shrank the measured set with zero machine trace and ADR-0006's
+    /// documented remediation (CLI threshold overrides) had no equivalent
+    /// for the measured SET.
+    pub user_excluded_files_count: usize,
+    /// Count of walk entries dropped for a `.`-prefixed name (#147, Volet
+    /// A — HIGH): `.git/`, `.venv/`, a hostile `.heavy/`. The skip is
+    /// deliberate; the count is the trace that was missing — before it,
+    /// coverage read `Complete` and `--strict` exited 0 on a project that
+    /// genuinely breached. Same COUNT OF PRUNED WALK ENTRIES semantics:
+    /// a `.`-prefixed directory pruned before descent counts as ONE entry.
+    pub hidden_excluded_files_count: usize,
     /// Median of MEASURED files' `cyclomatic_complexity()` — the number
     /// `complexity_level()` judges, not `total_cyclomatic_complexity`. The
     /// total is off the per-file scale `complexity_level_for` was

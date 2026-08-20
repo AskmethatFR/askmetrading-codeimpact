@@ -861,6 +861,39 @@ fn build_stats(graph: &FileConsumptionGraph) -> Vec<StatVm> {
             // support badge of its own.
             support: "supported".to_string(),
         },
+        // #147 (Volet B): the analyzed repo's OWN exclude patterns get
+        // their own tile — the measured set can shrink via
+        // `.codeimpact.json` `exclude` with no standing default firing,
+        // and the operator must see it (ADR-0006's remediation overrides
+        // thresholds, never the measured set). Nominal support, like Files.
+        StatVm {
+            label: "Excluded config".to_string(),
+            value: aggregated.user_excluded_files_count.to_string(),
+            sub: "entries".to_string(),
+            support: "supported".to_string(),
+        },
+        // Standing DEFAULT_EXCLUDES drops (node_modules/, dist/, target/,
+        // a minified file) — the HTML twin of the console/JSON
+        // `default_excluded_files_count` (#34 T2 MED-1, ADR-0010; #147
+        // sweeps it onto the third surface so the invariant "every count
+        // reaches the operator on all three surfaces" holds uniformly).
+        StatVm {
+            label: "Excluded default".to_string(),
+            value: aggregated.default_excluded_files_count.to_string(),
+            sub: "entries".to_string(),
+            support: "supported".to_string(),
+        },
+        // #147 (Volet A): `.`-prefixed walk entries (`.git/`, `.venv/`, a
+        // hostile `.heavy/`) are skipped by design but were previously
+        // silent on every surface — this tile is the trace that was
+        // missing (before it, coverage read Complete and --strict exited 0
+        // on a project that genuinely breached).
+        StatVm {
+            label: "Hidden entries".to_string(),
+            value: aggregated.hidden_excluded_files_count.to_string(),
+            sub: "skipped".to_string(),
+            support: "supported".to_string(),
+        },
         capability_stat_vm(
             "Direct \u{3a3}",
             aggregated.total_cyclomatic_complexity.to_string(),
