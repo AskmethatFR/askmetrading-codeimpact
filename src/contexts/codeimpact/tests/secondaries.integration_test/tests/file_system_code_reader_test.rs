@@ -1478,6 +1478,41 @@ fn user_excluded_count_counts_a_pruned_directory_as_one_entry() {
     );
 }
 
+// #147 (Volet B): the DIR probe must only fire for patterns that could
+// actually have pruned the directory at walk time — the walk-time-safe
+// subset. A fallback-only pattern like `generated/*` never prunes the
+// dir (it stays on the post-walk globset), so the dir entry must NOT be
+// counted; the files inside ARE counted individually, once each.
+#[test]
+fn user_fallback_only_pattern_does_not_false_positive_the_dir_probe() {
+    let dir = isolated_walk_dir("user_excluded_count_fallback_probe");
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("generated").join("a.rs"), "fn a() {}").unwrap();
+    std::fs::write(dir.join("generated").join("b.rs"), "fn b() {}").unwrap();
+    std::fs::write(dir.join("keep.rs"), "fn keep() {}").unwrap();
+
+    let reader = FileSystemCodeReader::new();
+    // `generated/*` is NOT dialect-safe (a single `*` never crosses `/` in
+    // the gitignore dialect), so it lives on the post-walk fallback.
+    let filter = FileFilter::new(vec![], vec!["generated/*".to_string()], false).unwrap();
+    let listing = reader
+        .list_source_files(&dir, &["rs"], &filter)
+        .expect("walk should succeed");
+
+    assert_eq!(
+        listing.files.len(),
+        1,
+        "only keep.rs should survive, got {:?}",
+        listing.files
+    );
+    assert_eq!(
+        listing.user_excluded_count, 2,
+        "the two excluded FILES count individually; the generated/ dir \
+         entry must NOT be counted (it was never pruned at walk time), got {}",
+        listing.user_excluded_count
+    );
+}
+
 #[test]
 fn user_pattern_identical_to_a_default_is_attributed_to_the_default_count() {
     let dir = isolated_walk_dir("user_excluded_count_default_twin");
