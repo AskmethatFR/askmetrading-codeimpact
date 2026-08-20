@@ -1343,6 +1343,7 @@ fn hidden_entries_are_counted_and_kept_out_of_the_measured_set() {
     );
 }
 
+// @scenario: typescript-javascript-analysis/S7
 #[test]
 fn hidden_walk_root_is_not_counted_as_hidden() {
     let parent = isolated_walk_dir("hidden_root");
@@ -1371,6 +1372,7 @@ fn hidden_walk_root_is_not_counted_as_hidden() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+// @scenario: typescript-javascript-analysis/S7
 #[test]
 fn hidden_excluded_count_is_exactly_zero_when_nothing_is_hidden() {
     let dir = isolated_walk_dir("hidden_excluded_count_zero");
@@ -1441,6 +1443,7 @@ fn user_excluded_count_reflects_user_file_patterns_not_defaults() {
     );
 }
 
+// @scenario: typescript-javascript-analysis/S7
 #[test]
 fn user_excluded_count_counts_a_pruned_directory_as_one_entry() {
     let dir = isolated_walk_dir("user_excluded_count_dir");
@@ -1483,6 +1486,7 @@ fn user_excluded_count_counts_a_pruned_directory_as_one_entry() {
 // subset. A fallback-only pattern like `generated/*` never prunes the
 // dir (it stays on the post-walk globset), so the dir entry must NOT be
 // counted; the files inside ARE counted individually, once each.
+// @scenario: typescript-javascript-analysis/S7
 #[test]
 fn user_fallback_only_pattern_does_not_false_positive_the_dir_probe() {
     let dir = isolated_walk_dir("user_excluded_count_fallback_probe");
@@ -1513,6 +1517,7 @@ fn user_fallback_only_pattern_does_not_false_positive_the_dir_probe() {
     );
 }
 
+// @scenario: typescript-javascript-analysis/S7
 #[test]
 fn user_pattern_identical_to_a_default_is_attributed_to_the_default_count() {
     let dir = isolated_walk_dir("user_excluded_count_default_twin");
@@ -1540,6 +1545,7 @@ fn user_pattern_identical_to_a_default_is_attributed_to_the_default_count() {
     );
 }
 
+// @scenario: typescript-javascript-analysis/S7
 #[test]
 fn user_excluded_count_is_exactly_zero_without_user_excludes() {
     let dir = isolated_walk_dir("user_excluded_count_zero");

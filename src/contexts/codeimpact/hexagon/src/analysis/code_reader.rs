@@ -66,22 +66,8 @@ use super::measurement::UnmeasurableReason;
 /// (`--max-kwh`/`--max-co2` override thresholds, but nothing overrides
 /// `exclude`): the count gives a CI a field to branch on.
 ///
-/// `hidden_excluded_count` (#147, Volet A — HIGH): the count of walk
-/// entries the adapter skipped because their name starts with `.`
-/// (`.git/`, `.venv/`, a hostile `.heavy/`). Before this field existed,
-/// `WalkBuilder::hidden(true)` dropped them silently: never in `files`,
-/// never in `dropped_files`, never in either excluded count — coverage
-/// read `Complete` and `--strict` exited 0 on a project that genuinely
-/// breached (Security demonstrated: `heavy/` → exit 3, `.heavy/` → exit 0
-/// silent). Same "count of pruned walk entries, never a fabricated file
-/// count" semantics as the other two counts: a `.`-prefixed DIRECTORY is
-/// pruned before descent, so it counts as ONE entry however many files
-/// live inside it. The skip itself is deliberate (`.git/`, `.venv/` must
-/// not enter the analysis) — what was missing was the trace, and the
-/// invariant ADR-0006 now states: every walk entry the adapter discards
-/// either reaches the domain as a named file/count or the gate cannot
-/// claim `Complete`; these counts ARE the domain reaching for the
-/// non-nameable drops.
+/// `hidden_excluded_count` (#147, Volet A — HIGH): hidden-entry count,
+/// never a fabricated file count — see ADR-0006 for the invariant.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceFileListing {
     pub files: Vec<PathBuf>,
